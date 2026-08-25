@@ -1,0 +1,39 @@
+#ifndef GD32E50X_LIBOPT_H
+#define GD32E50X_LIBOPT_H
+
+/* Auto-generated from config/aDrv_config.cmake.  Do not edit. */
+
+/* Required by system_gd32e50x.c and the always-enabled basic chip support. */
+#include "gd32e50x_misc.h"
+#include "gd32e50x_rcu.h"
+#include "gd32e50x_fmc.h"
+#include "gd32e50x_pmu.h"
+#include "gd32e50x_dbg.h"
+
+#cmakedefine01 ADRV_MODULE_GPIO
+#cmakedefine01 ADRV_MODULE_USART
+#cmakedefine01 ADRV_MODULE_DMA
+#cmakedefine01 ADRV_MODULE_SPI
+#cmakedefine01 ADRV_MODULE_QSPI
+
+#if ADRV_MODULE_GPIO
+#include "gd32e50x_gpio.h"
+#endif
+
+#if ADRV_MODULE_USART
+#include "gd32e50x_usart.h"
+#endif
+
+#if ADRV_MODULE_DMA
+#include "gd32e50x_dma.h"
+#endif
+
+#if ADRV_MODULE_SPI
+#include "gd32e50x_spi.h"
+#endif
+
+#if ADRV_MODULE_QSPI
+#include "gd32e50x_sqpi.h"
+#endif
+
+#endif /* GD32E50X_LIBOPT_H */

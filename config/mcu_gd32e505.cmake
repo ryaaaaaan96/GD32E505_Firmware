@@ -1,7 +1,5 @@
 # GD32E505 芯片配置。platform 层只消费这些变量，不保存产品参数。
 set(MCU_DEVICE GD32E505)
-set(MCU_DEVICE_DIR GD32E50x)
-set(MCU_SERIES_LOWER gd32e50x)
 set(MCU_PORT gd32e505)
 set(MCU_PUBLIC_DEFINITIONS
     GD32E50X

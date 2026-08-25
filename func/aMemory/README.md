@@ -1,6 +1,6 @@
 # aMemory（FAL）
 
-本模块与 Demo 保持相同职责：只向 FlashDB 提供硬件无关的 FAL 设备和分区接口，
+本模块只向 FlashDB 提供硬件无关的 FAL 设备和分区接口，
 不负责初始化 Flash25Q，也不持有板级引脚配置。
 
 当前分区：
