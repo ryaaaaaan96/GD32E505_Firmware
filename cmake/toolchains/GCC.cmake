@@ -1,0 +1,35 @@
+set(CMAKE_SYSTEM_NAME Generic)
+set(CMAKE_SYSTEM_PROCESSOR "${MCU_CPU}")
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+set(ARM_GCC_ROOT "" CACHE PATH "Arm GNU Toolchain installation root")
+set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
+    ARM_GCC_ROOT MCU_CPU MCU_FPU MCU_FLOAT_ABI)
+if(ARM_GCC_ROOT)
+    set(_ARM_GCC_BIN "${ARM_GCC_ROOT}/bin")
+    foreach(_tool gcc objcopy size)
+        if(NOT EXISTS "${_ARM_GCC_BIN}/arm-none-eabi-${_tool}")
+            message(FATAL_ERROR
+                "ARM_GCC_ROOT is invalid: missing "
+                "${_ARM_GCC_BIN}/arm-none-eabi-${_tool}")
+        endif()
+    endforeach()
+    set(CMAKE_C_COMPILER "${_ARM_GCC_BIN}/arm-none-eabi-gcc")
+    set(CMAKE_ASM_COMPILER "${_ARM_GCC_BIN}/arm-none-eabi-gcc")
+    set(CMAKE_OBJCOPY "${_ARM_GCC_BIN}/arm-none-eabi-objcopy")
+    set(CMAKE_SIZE "${_ARM_GCC_BIN}/arm-none-eabi-size")
+else()
+    find_program(CMAKE_C_COMPILER arm-none-eabi-gcc REQUIRED)
+    find_program(CMAKE_ASM_COMPILER arm-none-eabi-gcc REQUIRED)
+    find_program(CMAKE_OBJCOPY arm-none-eabi-objcopy REQUIRED)
+    find_program(CMAKE_SIZE arm-none-eabi-size REQUIRED)
+endif()
+
+set(MCU_FLAGS "-mcpu=${MCU_CPU} -mthumb")
+if(MCU_FPU)
+    string(APPEND MCU_FLAGS " -mfpu=${MCU_FPU} -mfloat-abi=${MCU_FLOAT_ABI}")
+endif()
+set(CMAKE_C_FLAGS_INIT "${MCU_FLAGS}")
+set(CMAKE_ASM_FLAGS_INIT "${MCU_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS_INIT
+    "${MCU_FLAGS} --specs=nano.specs --specs=nosys.specs -Wl,--gc-sections")

@@ -1,0 +1,3 @@
+add_subdirectory(aDev_Flash25q)
+add_subdirectory(aDev_usart)
+add_subdirectory(aDev_RS485)

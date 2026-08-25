@@ -1,0 +1,24 @@
+# GD32E505 芯片配置。platform 层只消费这些变量，不保存产品参数。
+set(MCU_DEVICE GD32E505)
+set(MCU_DEVICE_DIR GD32E50x)
+set(MCU_SERIES_LOWER gd32e50x)
+set(MCU_PORT gd32e505)
+set(MCU_PUBLIC_DEFINITIONS
+    GD32E50X
+    GD32E50X_CL
+)
+
+# Arm GCC 与 FreeRTOS port 配置。
+set(MCU_CPU cortex-m33)
+set(MCU_FPU fpv5-sp-d16)
+set(MCU_FLOAT_ABI hard)
+set(MCU_CORE_CLOCK_HZ 180000000)
+set(FREERTOS_PORT GCC/ARM_CM33_NTZ/non_secure)
+
+# aDrv 对外报告的芯片能力。
+set(MCU_GPIO_PORT_COUNT 7)
+set(MCU_USART_COUNT 6)
+set(MCU_ADC_COUNT 3)
+set(MCU_SPI_COUNT 3)
+set(MCU_DMA_CHANNEL_COUNT 14)
+set(MCU_QSPI_COUNT 1)
