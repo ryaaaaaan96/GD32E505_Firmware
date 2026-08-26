@@ -5,41 +5,38 @@
 #include "aDrv_gpio.h"
 
 typedef struct {
-    aDevConfig_Usart_t usart_config;
+    aDevUsartConfig_t usart_config;
     aDrvGpioPin_t de_pin;
     aDrvGpioPin_t re_pin;
     aDrvGpioLevel_t transmit_level;
-    uint32_t timeout_ms;
-} aDevConfig_RS485_t;
+} aDevRS485Config_t;
 
 typedef struct {
-    aDevHandle_Usart_t usart_handle;
+    aDevUsartHandle_t usart_handle;
     aDrvGpioPin_t de_pin;
     aDrvGpioPin_t re_pin;
     aDrvGpioLevel_t transmit_level;
-    uint32_t timeout_ms;
     uint8_t initialized;
-} aDevHandle_RS485_t;
+} aDevRS485Handle_t;
 
 typedef struct {
     uint32_t baudrate;
     aDrvUsartStopBits_t stopbits;
     aDrvUsartParity_t parity;
-    uint32_t timeout_ms;
-} aDevRS485Config_t;
+} aDevRS485LineConfig_t;
 
-void aDevRS485ConfigStructInit(aDevConfig_RS485_t *config);
-void aDevRS485HandleStructInit(aDevHandle_RS485_t *handle);
-aStatus_t aDevRS485Init(const aDevConfig_RS485_t *config,
-                        aDevHandle_RS485_t *handle);
-aStatus_t aDevRS485DeInit(aDevHandle_RS485_t *handle);
-int32_t aDevRS485Read(aDevHandle_RS485_t *handle, void *buffer,
-                      uint16_t size);
-int32_t aDevRS485Write(aDevHandle_RS485_t *handle, const void *buffer,
-                       uint16_t size);
-aStatus_t aDevRS485SetConfig(aDevHandle_RS485_t *handle,
-                             const aDevRS485Config_t *config);
-aStatus_t aDevRS485GetConfig(const aDevHandle_RS485_t *handle,
-                             aDevRS485Config_t *config);
+void aDevRS485ConfigStructInit(aDevRS485Config_t *config);
+void aDevRS485HandleStructInit(aDevRS485Handle_t *handle);
+aStatus_t aDevRS485Init(const aDevRS485Config_t *config,
+                        aDevRS485Handle_t *handle);
+aStatus_t aDevRS485DeInit(aDevRS485Handle_t *handle);
+aSSize_t aDevRS485Read(aDevRS485Handle_t *handle, void *buffer,
+                       size_t buffer_size, aTimeout_t timeout);
+aSSize_t aDevRS485Write(aDevRS485Handle_t *handle, const void *data,
+                        size_t data_size, aTimeout_t timeout);
+aStatus_t aDevRS485SetLineConfig(aDevRS485Handle_t *handle,
+                                 const aDevRS485LineConfig_t *config);
+aStatus_t aDevRS485GetLineConfig(const aDevRS485Handle_t *handle,
+                                 aDevRS485LineConfig_t *config);
 
 #endif

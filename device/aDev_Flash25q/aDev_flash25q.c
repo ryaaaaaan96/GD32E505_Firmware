@@ -1,5 +1,7 @@
 #include "aDev_flash25q.h"
 
+#include "aOS.h"
+
 #define FLASH_CMD_READ 0x03U
 #define FLASH_CMD_FAST_READ 0x0BU
 #define FLASH_CMD_PAGE_PROGRAM 0x02U
@@ -10,52 +12,83 @@
 #define FLASH_SECTOR_SIZE 4096U
 #define FLASH_PAGE_SIZE 256U
 #define FLASH_BUSY_MASK 0x01U
-#define FLASH_OPERATION_TIMEOUT_MS 5000U
-#define FLASH_CHIP_ERASE_TIMEOUT_MS 120000U
 
 static aDevFlash25qHandle_t *s_flash_devices[ADEV_FLASH25Q_DEVICE_COUNT];
 
 static aStatus_t issue_command(aDevFlash25qHandle_t *handle,
-                                  uint32_t instruction, uint32_t address,
-                                  uint32_t length, uint32_t functional_mode,
-                                  uint32_t dummy_cycles, bool has_address)
+                               uint32_t instruction, uint32_t address,
+                               uint32_t length, uint32_t functional_mode,
+                               uint32_t dummy_cycles, bool has_address)
 {
     aDrvQspiCmd_t command = {0};
     command.Instruction = instruction;
     command.InstructionMode = ADRV_QSPI_INST_1_LINE;
     command.Address = address;
     command.AddressSize = 24U;
-    command.AddressMode = has_address ? ADRV_QSPI_ADDR_1_LINE : ADRV_QSPI_ADDR_NONE;
-    command.DataMode = length == 0U ? ADRV_QSPI_DATA_NONE : ADRV_QSPI_DATA_1_LINE;
+    command.AddressMode =
+        has_address ? ADRV_QSPI_ADDR_1_LINE : ADRV_QSPI_ADDR_NONE;
+    command.DataMode =
+        length == 0U ? ADRV_QSPI_DATA_NONE : ADRV_QSPI_DATA_1_LINE;
     command.NbData = length;
     command.DummyCycles = dummy_cycles;
     command.FunctionalMode = functional_mode;
     return aDrvQspiCommand(&handle->qspi, &command);
 }
 
-static aStatus_t write_enable(aDevFlash25qHandle_t *handle)
+static aStatus_t wait_command_complete(aDevFlash25qHandle_t *handle,
+                                       const aTimepoint_t *end)
 {
-    return issue_command(handle, FLASH_CMD_WRITE_ENABLE, 0U, 0U,
-                         ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, false);
+    for (;;) {
+        bool complete;
+        const aStatus_t status = aDrvQspiIsCommandComplete(
+            &handle->qspi, &complete);
+
+        if (status != A_STATUS_OK) {
+            return status;
+        }
+        if (complete) {
+            return A_STATUS_OK;
+        }
+        if (aTimepointExpired(end, aOSGetUptimeMs())) {
+            return A_STATUS_TIMEOUT;
+        }
+        aOSYield();
+    }
 }
 
-static aStatus_t wait_ready(aDevFlash25qHandle_t *handle, uint32_t timeout_ms)
+static aStatus_t write_enable(aDevFlash25qHandle_t *handle,
+                              const aTimepoint_t *end)
 {
-    for (uint32_t elapsed_ms = 0U; elapsed_ms <= timeout_ms; ++elapsed_ms) {
+    const aStatus_t status = issue_command(
+        handle, FLASH_CMD_WRITE_ENABLE, 0U, 0U,
+        ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, false);
+
+    return status == A_STATUS_OK ? wait_command_complete(handle, end)
+                                 : status;
+}
+
+static aStatus_t wait_ready(aDevFlash25qHandle_t *handle,
+                            const aTimepoint_t *end)
+{
+    for (;;) {
         uint8_t status_register = 0U;
-        aStatus_t status = issue_command(handle, FLASH_CMD_READ_STATUS,
-                                            0U, 1U,
-                                            ADRV_QSPI_FMODE_INDIRECT_READ,
-                                            0U, false);
+        aStatus_t status = issue_command(
+            handle, FLASH_CMD_READ_STATUS, 0U, 1U,
+            ADRV_QSPI_FMODE_INDIRECT_READ, 0U, false);
         if (status == A_STATUS_OK) {
             status = aDrvQspiReceive(&handle->qspi, &status_register, 1U);
         }
-        if (status != A_STATUS_OK) return status;
-        if ((status_register & FLASH_BUSY_MASK) == 0U) return A_STATUS_OK;
-        if (elapsed_ms == timeout_ms) break;
-        aDrvDelayMs(1U);
+        if (status != A_STATUS_OK) {
+            return status;
+        }
+        if ((status_register & FLASH_BUSY_MASK) == 0U) {
+            return A_STATUS_OK;
+        }
+        if (aTimepointExpired(end, aOSGetUptimeMs())) {
+            return A_STATUS_TIMEOUT;
+        }
+        aOSDelayMs(1U);
     }
-    return A_STATUS_TIMEOUT;
 }
 
 void aDevFlash25qConfigStructInit(aDevFlash25qConfig_t *config)
@@ -125,27 +158,37 @@ aStatus_t aDevFlash25qRead(aDevFlash25qHandle_t *handle, uint32_t address,
 }
 
 aStatus_t aDevFlash25qWrite(aDevFlash25qHandle_t *handle, uint32_t address,
-                               const uint8_t *data, uint32_t size)
+                            const uint8_t *data, uint32_t size,
+                            aTimeout_t timeout)
 {
+    aTimepoint_t end;
+
     if ((handle == NULL) || (data == NULL) || (size == 0U)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (!aTimeoutIsValid(timeout)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (handle->init_ok == 0U) return A_STATUS_NOT_READY;
     if ((address > handle->size) || (size > (handle->size - address))) {
         return A_STATUS_INVALID_PARAM;
     }
+    end = aTimepointCalc(timeout, aOSGetUptimeMs());
+
     uint32_t written = 0U;
     while (written < size) {
         uint32_t chunk = FLASH_PAGE_SIZE - ((address + written) % FLASH_PAGE_SIZE);
         if (chunk > (size - written)) chunk = size - written;
-        aStatus_t status = write_enable(handle);
+        aStatus_t status = write_enable(handle, &end);
         if (status == A_STATUS_OK) {
             status = issue_command(handle, FLASH_CMD_PAGE_PROGRAM, address + written,
                                    chunk, ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U,
                                    true);
         }
         if (status == A_STATUS_OK) status = aDrvQspiTransmit(&handle->qspi, &data[written], chunk);
-        if (status == A_STATUS_OK) status = wait_ready(handle, FLASH_OPERATION_TIMEOUT_MS);
+        if (status == A_STATUS_OK) {
+            status = wait_ready(handle, &end);
+        }
         if (status != A_STATUS_OK) return status;
         written += chunk;
     }
@@ -153,41 +196,61 @@ aStatus_t aDevFlash25qWrite(aDevFlash25qHandle_t *handle, uint32_t address,
 }
 
 aStatus_t aDevFlash25qErase(aDevFlash25qHandle_t *handle, uint32_t address,
-                               uint32_t size)
+                            uint32_t size, aTimeout_t timeout)
 {
+    aTimepoint_t end;
+
     if ((handle == NULL) || (size == 0U) ||
         ((address % FLASH_SECTOR_SIZE) != 0U) ||
         ((size % FLASH_SECTOR_SIZE) != 0U)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (!aTimeoutIsValid(timeout)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (handle->init_ok == 0U) return A_STATUS_NOT_READY;
     if ((address > handle->size) || (size > (handle->size - address))) {
         return A_STATUS_INVALID_PARAM;
     }
+    end = aTimepointCalc(timeout, aOSGetUptimeMs());
+
     for (uint32_t offset = 0U; offset < size; offset += FLASH_SECTOR_SIZE) {
-        aStatus_t status = write_enable(handle);
+        aStatus_t status = write_enable(handle, &end);
         if (status == A_STATUS_OK) {
             status = issue_command(handle, FLASH_CMD_SECTOR_ERASE,
                                    address + offset, 0U,
                                    ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, true);
         }
-        if (status == A_STATUS_OK) status = wait_ready(handle, FLASH_OPERATION_TIMEOUT_MS);
+        if (status == A_STATUS_OK) {
+            status = wait_ready(handle, &end);
+        }
         if (status != A_STATUS_OK) return status;
     }
     return A_STATUS_OK;
 }
 
-aStatus_t aDevFlash25qChipErase(aDevFlash25qHandle_t *handle)
+aStatus_t aDevFlash25qChipErase(aDevFlash25qHandle_t *handle,
+                                aTimeout_t timeout)
 {
-    if (handle == NULL) return A_STATUS_INVALID_PARAM;
-    if (handle->init_ok == 0U) return A_STATUS_NOT_READY;
-    aStatus_t status = write_enable(handle);
+    aTimepoint_t end;
+
+    if ((handle == NULL) || !aTimeoutIsValid(timeout)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (handle->init_ok == 0U) {
+        return A_STATUS_NOT_READY;
+    }
+
+    end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    aStatus_t status = write_enable(handle, &end);
     if (status == A_STATUS_OK) {
         status = issue_command(handle, FLASH_CMD_CHIP_ERASE, 0U, 0U,
                                ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, false);
     }
-    return status == A_STATUS_OK ?
-           wait_ready(handle, FLASH_CHIP_ERASE_TIMEOUT_MS) : status;
+    if (status == A_STATUS_OK) {
+        status = wait_command_complete(handle, &end);
+    }
+    return status == A_STATUS_OK ? wait_ready(handle, &end) : status;
 }
 
 uint32_t aDevFlash25qGetSize(const aDevFlash25qHandle_t *handle)

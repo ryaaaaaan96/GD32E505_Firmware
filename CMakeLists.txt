@@ -10,7 +10,12 @@ aclass_select(
     TOOLCHAIN GCC
 )
 
-project(${FIRMWARE_NAME} VERSION ${FIRMWARE_VERSION} LANGUAGES C ASM)
+project(
+    ${FIRMWARE_NAME}
+    VERSION ${FIRMWARE_VERSION}
+    LANGUAGES C ASM
+)
+
 aclass_initialize()
 
 add_subdirectory(platform)

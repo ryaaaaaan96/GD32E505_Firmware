@@ -1,105 +1,203 @@
 #include "aDev_usart.h"
-#include "aLib.h"
+
 #include "aOS.h"
 
-#define ADEV_USART_RETRY_DELAY_MS 1U
-
-void aDevUsartConfigStructInit(aDevConfig_Usart_t *config)
+static aErrno_t status_to_errno(aStatus_t status)
 {
-    if (config != NULL) aDrvUsartConfigStructInit(&config->drv_config);
+    switch (status) {
+    case A_STATUS_INVALID_PARAM:
+        return A_EINVAL;
+    case A_STATUS_BUSY:
+        return A_EAGAIN;
+    case A_STATUS_TIMEOUT:
+        return A_ETIMEDOUT;
+    case A_STATUS_NOT_READY:
+        return A_ENODEV;
+    case A_STATUS_UNSUPPORTED:
+        return A_ENOTSUP;
+    case A_STATUS_OK:
+        return A_ERRNO_NONE;
+    case A_STATUS_ERROR:
+    case A_STATUS_NO_MEMORY:
+    default:
+        return A_EIO;
+    }
 }
 
-void aDevUsartHandleStructInit(aDevHandle_Usart_t *handle)
+static aSSize_t fail_with_status(aStatus_t status)
 {
-    if (handle != NULL) aDrvUsartHandleStructInit(&handle->drv_handle);
+    aOSSetErrno(status_to_errno(status));
+    return -1;
 }
 
-aStatus_t aDevUsartInit(const aDevConfig_Usart_t *config,
-                        aDevHandle_Usart_t *handle)
+static aSSize_t fail_when_wait_expires(aTimeout_t timeout)
 {
-    if ((config == NULL) || (handle == NULL)) return A_STATUS_INVALID_PARAM;
+    aOSSetErrno(timeout.milliseconds == 0U ? A_EAGAIN : A_ETIMEDOUT);
+    return -1;
+}
+
+void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
+{
+    if (config != NULL) {
+        aDrvUsartConfigStructInit(&config->drv_config);
+    }
+}
+
+void aDevUsartHandleStructInit(aDevUsartHandle_t *handle)
+{
+    if (handle != NULL) {
+        aDrvUsartHandleStructInit(&handle->drv_handle);
+    }
+}
+
+aStatus_t aDevUsartInit(const aDevUsartConfig_t *config,
+                        aDevUsartHandle_t *handle)
+{
+    if ((config == NULL) || (handle == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
     return aDrvUsartInitStatic(&config->drv_config, &handle->drv_handle);
 }
 
-aStatus_t aDevUsartDeInit(aDevHandle_Usart_t *handle)
+aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
 {
-    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (handle == NULL) {
+        return A_STATUS_INVALID_PARAM;
+    }
     return aDrvUsartDeInitStatic(&handle->drv_handle);
 }
 
-int32_t aDevUsartRead(aDevHandle_Usart_t *handle, void *buffer,
-                      uint16_t size, uint32_t timeout_ms)
+aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
+                       size_t buffer_size, aTimeout_t timeout)
 {
-    if ((handle == NULL) || (buffer == NULL) || (size == 0U)) {
-        return A_STATUS_INVALID_PARAM;
+    aTimepoint_t end;
+    size_t count = 0U;
+
+    if ((handle == NULL) || !aTimeoutIsValid(timeout) ||
+        (buffer_size > (size_t)PTRDIFF_MAX) ||
+        ((buffer == NULL) && (buffer_size != 0U))) {
+        return fail_with_status(A_STATUS_INVALID_PARAM);
     }
-    uint16_t count = 0U;
-    const uint32_t start = aOSGetTickMs();
-    while (count < size) {
-        const int32_t received = aDrvUsartReadByte(
+    if (buffer_size == 0U) {
+        return 0;
+    }
+
+    end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    while (count < buffer_size) {
+        const aStatus_t status = aDrvUsartTryReadByte(
             &handle->drv_handle, (uint8_t *)buffer + count);
-        if (received < 0) return received;
-        if (received > 0) {
-            count = (uint16_t)(count + (uint16_t)received);
+
+        if (status == A_STATUS_OK) {
+            ++count;
             continue;
         }
-        if ((timeout_ms != ALIB_WAIT_FOREVER) &&
-            ((uint32_t)(aOSGetTickMs() - start) >= timeout_ms)) break;
-        aOSDelayMs(ADEV_USART_RETRY_DELAY_MS);
+        if (status != A_STATUS_BUSY) {
+            return count != 0U ? (aSSize_t)count : fail_with_status(status);
+        }
+        if (aTimepointExpired(&end, aOSGetUptimeMs())) {
+            return count != 0U ? (aSSize_t)count
+                               : fail_when_wait_expires(timeout);
+        }
+        aOSYield();
     }
-    return (int32_t)count;
+
+    return (aSSize_t)count;
 }
 
-int32_t aDevUsartWrite(aDevHandle_Usart_t *handle, const void *buffer,
-                       uint16_t size, uint32_t timeout_ms)
+aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
+                        size_t data_size, aTimeout_t timeout)
 {
-    if ((handle == NULL) || (buffer == NULL) || (size == 0U)) {
+    aTimepoint_t end;
+    size_t count = 0U;
+
+    if ((handle == NULL) || !aTimeoutIsValid(timeout) ||
+        (data_size > (size_t)PTRDIFF_MAX) ||
+        ((data == NULL) && (data_size != 0U))) {
+        return fail_with_status(A_STATUS_INVALID_PARAM);
+    }
+    if (data_size == 0U) {
+        return 0;
+    }
+
+    end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    while (count < data_size) {
+        const aStatus_t status = aDrvUsartTryWriteByte(
+            &handle->drv_handle, ((const uint8_t *)data)[count]);
+
+        if (status == A_STATUS_OK) {
+            ++count;
+            continue;
+        }
+        if (status != A_STATUS_BUSY) {
+            return count != 0U ? (aSSize_t)count : fail_with_status(status);
+        }
+        if (aTimepointExpired(&end, aOSGetUptimeMs())) {
+            return count != 0U ? (aSSize_t)count
+                               : fail_when_wait_expires(timeout);
+        }
+        aOSYield();
+    }
+
+    return (aSSize_t)count;
+}
+
+aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
+                                         aTimeout_t timeout)
+{
+    aTimepoint_t end;
+
+    if ((handle == NULL) || !aTimeoutIsValid(timeout)) {
         return A_STATUS_INVALID_PARAM;
     }
-    uint16_t count = 0U;
-    const uint32_t start = aOSGetTickMs();
-    while (count < size) {
-        const int32_t sent = aDrvUsartWriteByte(
-            &handle->drv_handle, (const uint8_t *)buffer + count);
-        if (sent < 0) return sent;
-        if (sent > 0) {
-            count = (uint16_t)(count + (uint16_t)sent);
-            continue;
+
+    end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    for (;;) {
+        bool complete;
+        const aStatus_t status = aDrvUsartIsTransmitComplete(
+            &handle->drv_handle, &complete);
+
+        if (status != A_STATUS_OK) {
+            return status;
         }
-        if ((timeout_ms != ALIB_WAIT_FOREVER) &&
-            ((uint32_t)(aOSGetTickMs() - start) >= timeout_ms)) break;
-        aOSDelayMs(ADEV_USART_RETRY_DELAY_MS);
+        if (complete) {
+            return A_STATUS_OK;
+        }
+        if (aTimepointExpired(&end, aOSGetUptimeMs())) {
+            return timeout.milliseconds == 0U ? A_STATUS_BUSY
+                                              : A_STATUS_TIMEOUT;
+        }
+        aOSYield();
     }
-    return (int32_t)count;
 }
 
-aStatus_t aDevUsartWaitTransmitComplete(aDevHandle_Usart_t *handle,
-                                         uint32_t timeout_ms)
-{
-    if (handle == NULL) return A_STATUS_INVALID_PARAM;
-    return aDrvUsartWaitTransmitComplete(&handle->drv_handle, timeout_ms);
-}
-
-aStatus_t aDevUsartRegisterCallback(aDevHandle_Usart_t *handle,
+aStatus_t aDevUsartRegisterCallback(aDevUsartHandle_t *handle,
                                      const aDrvUsartExtiConfig_t *config)
 {
-    if ((handle == NULL) || (config == NULL)) return A_STATUS_INVALID_PARAM;
+    if ((handle == NULL) || (config == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
     return aDrvUsartRegisterCallback(&handle->drv_handle, config);
 }
 
-aStatus_t aDevUsartUnregisterCallback(aDevHandle_Usart_t *handle,
+aStatus_t aDevUsartUnregisterCallback(aDevUsartHandle_t *handle,
                                        aDrvUsartExti_t type)
 {
-    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (handle == NULL) {
+        return A_STATUS_INVALID_PARAM;
+    }
     return aDrvUsartUnregisterCallback(&handle->drv_handle, type);
 }
 
-void aDevUsartEnableInterrupt(aDevHandle_Usart_t *handle)
+void aDevUsartEnableInterrupt(aDevUsartHandle_t *handle)
 {
-    if (handle != NULL) aDrvUsartEnableInterrupt(&handle->drv_handle);
+    if (handle != NULL) {
+        aDrvUsartEnableInterrupt(&handle->drv_handle);
+    }
 }
 
-void aDevUsartDisableInterrupt(aDevHandle_Usart_t *handle)
+void aDevUsartDisableInterrupt(aDevUsartHandle_t *handle)
 {
-    if (handle != NULL) aDrvUsartDisableInterrupt(&handle->drv_handle);
+    if (handle != NULL) {
+        aDrvUsartDisableInterrupt(&handle->drv_handle);
+    }
 }

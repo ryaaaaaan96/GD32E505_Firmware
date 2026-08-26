@@ -32,4 +32,4 @@ endif()
 set(CMAKE_C_FLAGS_INIT "${MCU_FLAGS}")
 set(CMAKE_ASM_FLAGS_INIT "${MCU_FLAGS}")
 set(CMAKE_EXE_LINKER_FLAGS_INIT
-    "${MCU_FLAGS} --specs=nano.specs --specs=nosys.specs -Wl,--gc-sections")
+    "${MCU_FLAGS} --specs=nano.specs --specs=nosys.specs -Wl,--gc-sections,-z,noexecstack")

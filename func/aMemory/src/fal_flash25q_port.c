@@ -6,6 +6,7 @@
 #define FLASH_DEVICE_INDEX 0U
 #define FLASH_DEVICE_NAME "flash25"
 #define FLASH_BLOCK_SIZE 4096U
+#define FLASH_OPERATION_TIMEOUT A_TIMEOUT_MS(5000U)
 
 #define PART_PARAM_OFFSET 0x00100000U
 #define PART_PARAM_SIZE   0x00020000U
@@ -110,7 +111,8 @@ int fal_partition_write(const struct fal_partition *part, uint32_t address,
         return -1;
     }
     return aDevFlash25qWrite(handle, part->offset + address, buffer,
-                             (uint32_t)size) == A_STATUS_OK ? 0 : -1;
+                             (uint32_t)size,
+                             FLASH_OPERATION_TIMEOUT) == A_STATUS_OK ? 0 : -1;
 }
 
 int fal_partition_erase(const struct fal_partition *part, uint32_t address,
@@ -122,5 +124,6 @@ int fal_partition_erase(const struct fal_partition *part, uint32_t address,
         return -1;
     }
     return aDevFlash25qErase(handle, part->offset + address,
-                             (uint32_t)size) == A_STATUS_OK ? 0 : -1;
+                             (uint32_t)size,
+                             FLASH_OPERATION_TIMEOUT) == A_STATUS_OK ? 0 : -1;
 }

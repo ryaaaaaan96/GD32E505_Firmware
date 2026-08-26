@@ -5,19 +5,16 @@
 | 位置 | 职责 |
 |---|---|
 | 根 `CMakeLists.txt` | 选择固件名、版本、MCU、链接脚本和工具链；加入各层 |
-| `cmake/Aclass.cmake` | 解析选择项、校验文件、设置公共编译规范和生成固件产物 |
+| `cmake/Aclass.cmake` | 解析选择项、校验配置、设置公共编译规范和固件产物 |
 | `cmake/toolchains/GCC.cmake` | 查找 Arm GCC，设置 CPU/FPU、链接器和 binutils |
-| `config/mcu_gd32e505.cmake` | 保存芯片事实、厂商宏、aDrv/FreeRTOS port 和能力 |
-| `config/aDrv_config.cmake` | 选择项目启用的硬件无关 aDrv 模块 |
-| `config/freeRTOS_config.cmake` | 保存 FreeRTOS 可配置参数 |
-| `platform/aCore/CMakeLists.txt` | 导出通用 CMSIS Core include |
-| `platform/aDrv/CMakeLists.txt` | 加载所选 port，构建硬件无关 aDrv target |
-| `platform/aDrv/port/gd32e505/CMakeLists.txt` | 选择 GD32 Device/system、SPL 和 port 源码 |
-| `app/CMakeLists.txt` | 创建最终 ELF，链接所需层并生成固件产物 |
+| `config/mcu_gd32e505.cmake` | CPU/FPU、主频、厂商宏、startup variant 和 FreeRTOS port |
+| `config/aDrv_config.cmake` | 选择项目启用的 aDrv 模块 |
+| `config/freeRTOS_config.cmake` | FreeRTOS 配置参数 |
+| `platform/aCore/CMakeLists.txt` | 导出 CMSIS Core，并按工具链构建运行库适配 |
+| `platform/aDrv/CMakeLists.txt` | 生成 libopt 并构建 GD32 vendor 与 aDrv target |
+| `app/CMakeLists.txt` | 创建最终 ELF、链接所需层并生成固件产物 |
 
 ## 工程选择
-
-根目录使用统一入口：
 
 ```cmake
 aclass_select(
@@ -35,18 +32,18 @@ aclass_initialize()
 名称解析规则：
 
 ```text
-MCU gd32e505                 -> config/mcu_gd32e505.cmake
-TOOLCHAIN GCC                -> cmake/toolchains/GCC.cmake
-LINKER_SCRIPT <name>.ld      -> 工程根目录/<name>.ld
+MCU gd32e505            -> config/mcu_gd32e505.cmake
+TOOLCHAIN GCC           -> cmake/toolchains/GCC.cmake
+LINKER_SCRIPT name.ld   -> 工程根目录/name.ld
 ```
 
-链接脚本属于具体项目。CPU/FPU、芯片主频、厂商宏、外设数量和 FreeRTOS port 属于
-MCU profile。FreeRTOS 功能开关属于 `config/`。各层 CMake 只消费这些配置。
+链接脚本属于项目。CPU/FPU、主频、厂商宏和 FreeRTOS port 属于 MCU profile。
+驱动模块使能属于 `config/aDrv_config.cmake`；外设实例、引脚和运行参数属于 app。
 
 ## target 关系
 
 ```text
-aCore (INTERFACE)
+aCore (OBJECT: CMSIS include + GCC runtime)
    ^
    |
 aDrv_gd32e505_vendor (STATIC)
@@ -55,53 +52,30 @@ aDrv_gd32e505_vendor (STATIC)
 aDrv (STATIC) -> aLib
 ```
 
-`aDrv_gd32e505_vendor` 包含 GD32 CMSIS Device/system，并从仓库内的完整 SPL
-中选择实际启用的源码。
-它向 aDrv port 提供厂商 include 与 `GD32E50X`、`GD32E50X_CL` 定义，但 aDrv
-通过 PRIVATE 依赖阻止这些使用要求传播到上层。
-
-通用 `platform/aDrv/CMakeLists.txt` 不列出 GD32 文件，只根据 `MCU_PORT` 加载：
-
-```text
-platform/aDrv/port/<MCU_PORT>/CMakeLists.txt
-```
-
-新芯片 port 需要向父级提供：
-
-- `ADRV_PORT_SOURCES`：该芯片的 aDrv 实现源码；
-- `ADRV_PORT_VENDOR_TARGET`：封装芯片 SDK 的 target。
+`aDrv_gd32e505_vendor` 包含 GD32 CMSIS Device/system，并从完整 SPL 中按模块选择
+源码。aDrv 对 vendor target 使用 PRIVATE 依赖，公共接口不会向 device、func 或
+app 暴露厂商 include 和宏。aDrv 根据 `MCU_STARTUP_VARIANT` 加入所选工具链的
+startup；aCore 使用 OBJECT target，确保 newlib 在库扫描前获得项目 syscall。
 
 ## aDrv 配置生成
 
-`platform/aDrv/config/aDrv_defaults.cmake` 声明所有 `ADRV_MODULE_*` 默认值，
-`config/aDrv_config.cmake` 使用 `para_set()` 选择本项目启用的模块。GD32 port
-读取最终值后执行三项同步操作：
+`platform/aDrv/config/aDrv_defaults.cmake` 声明默认值，项目配置使用
+`para_set()` 选择模块。aDrv CMake 对同一组最终值执行：
 
 ```text
 ADRV_MODULE_* 配置
-├── configure_file -> generated/aDrv/gd32e505/gd32e50x_libopt.h
+├── configure_file -> generated/aDrv/gd32e50x_libopt.h
 ├── 选择 GD32E50x_standard_peripheral/Source/*.c
-└── 选择 aDrv_*_gd32e505.c
+└── 选择 src/aDrv_*.c
 ```
 
-生成目录位于官方 SPL include 路径之前。官方 SPL 目录不保存工程生成文件，
-因此始终与 V1.7.0 原始目录一致。
+生成文件只位于构建目录，官方 SPL 目录始终保持原貌。USART、SPI、QSPI 依赖
+GPIO，非法组合在 CMake 配置阶段直接报错。
 
-## 公共规范
+## 公共规范与状态
 
-`aclass_initialize()` 统一设置：
+`aclass_initialize()` 统一设置 C11、`compile_commands.json`、Debug/Release
+选项、告警规则及 ELF/HEX/BIN/MAP 产物。工具链文件只处理编译器和目标架构。
 
-- C11；
-- `compile_commands.json`；
-- Debug/Release 编译选项；
-- 告警规则；
-- ELF、HEX、BIN、MAP 输出目录和生成规则。
-
-工具链文件只处理编译器与目标架构参数，不保存产品引脚、外设实例或应用配置。
-
-## 当前验证状态
-
-- GCC 路径、MCU profile 和链接脚本解析通过。
-- Debug 和 Release CMake 配置通过。
-- `aDrv_gd32e505_vendor` 在 Arm GCC 15.3 下编译通过。
-- 完整固件仍需要 GD32 GCC startup、aCore 时间接口和 GCC runtime 适配。
+当前 MCU profile、链接脚本和 GCC 15.3 解析通过。GD32E50X_CL GCC startup、
+newlib syscall/sysmem、全部 aDrv 模块和最终 ELF/HEX/BIN 均已完成构建验证。

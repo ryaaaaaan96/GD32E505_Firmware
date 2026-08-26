@@ -12,9 +12,10 @@
 #define APP_RUN_LED_PIN ADRV_PIN(ADRV_GPIO_PORT_A, 8)
 #define APP_CONSOLE_TX_PIN ADRV_PIN(ADRV_GPIO_PORT_A, 9)
 #define APP_CONSOLE_RX_PIN ADRV_PIN(ADRV_GPIO_PORT_A, 10)
-#define APP_CONSOLE_TIMEOUT_MS 100U
+#define APP_CONSOLE_TIMEOUT A_TIMEOUT_MS(100U)
+#define APP_SHELL_READ_TIMEOUT A_TIMEOUT_MS(20U)
 
-static aDevHandle_Usart_t s_console;
+static aDevUsartHandle_t s_console;
 static aShellHandle_t s_shell;
 
 static void appFatal(void)
@@ -23,9 +24,9 @@ static void appFatal(void)
     }
 }
 
-static int32_t appConsoleWrite(const void *data, uint16_t size)
+static aSSize_t appConsoleWrite(const void *data, size_t size)
 {
-    return aDevUsartWrite(&s_console, data, size, APP_CONSOLE_TIMEOUT_MS);
+    return aDevUsartWrite(&s_console, data, size, APP_CONSOLE_TIMEOUT);
 }
 
 static void appConsolePrintf(const char *format, ...)
@@ -38,18 +39,19 @@ static void appConsolePrintf(const char *format, ...)
     if (count <= 0) return;
     const size_t length = (size_t)count < sizeof(buffer) ?
                           (size_t)count : sizeof(buffer) - 1U;
-    (void)appConsoleWrite(buffer, (uint16_t)length);
+    (void)appConsoleWrite(buffer, length);
 }
 
 static int16_t appShellWrite(char *data, uint16_t size)
 {
-    const int32_t result = appConsoleWrite(data, size);
+    const aSSize_t result = appConsoleWrite(data, size);
     return result < 0 ? (int16_t)-1 : (int16_t)result;
 }
 
 static int16_t appShellRead(char *data, uint16_t size)
 {
-    const int32_t result = aDevUsartRead(&s_console, data, size, 20U);
+    const aSSize_t result = aDevUsartRead(
+        &s_console, data, size, APP_SHELL_READ_TIMEOUT);
     return result < 0 ? (int16_t)-1 : (int16_t)result;
 }
 
@@ -65,7 +67,7 @@ static aStatus_t appGpioInit(void)
 
 static aStatus_t appConsoleInit(void)
 {
-    aDevConfig_Usart_t config;
+    aDevUsartConfig_t config;
     aDevUsartConfigStructInit(&config);
     config.drv_config.id = ADRV_USART_1;
     config.drv_config.tx_pin = APP_CONSOLE_TX_PIN;
@@ -105,9 +107,7 @@ static int appShellInit(void)
 static void appTestTask(void *argument)
 {
     (void)argument;
-    const aDrvCapabilities_t *capabilities = aDrvGetCapabilities();
-    appConsolePrintf("\r\nAClass IO firmware: %s ready\r\n",
-                     capabilities->mcu_name);
+    appConsolePrintf("\r\nAClass IO firmware ready\r\n");
 
     appReport("USART device", 1);
     appReport("GPIO LED", 1);
@@ -127,7 +127,7 @@ static void appTestTask(void *argument)
 int main(void)
 {
     if (aDrvInit() != A_STATUS_OK) appFatal();
-    aOSInit();
+    if (aOSInit() != A_STATUS_OK) appFatal();
     if (appGpioInit() != A_STATUS_OK) appFatal();
     if (appConsoleInit() != A_STATUS_OK) appFatal();
     if (aOSCreateTask(appTestTask, "app_test", 1024U, NULL,

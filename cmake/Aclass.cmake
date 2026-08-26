@@ -65,7 +65,7 @@ macro(aclass_select)
     include("${MCU_CONFIG}")
 
     foreach(required
-            MCU_DEVICE MCU_PORT
+            MCU_DEVICE
             MCU_CPU MCU_CORE_CLOCK_HZ FREERTOS_PORT)
         if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
             message(FATAL_ERROR
