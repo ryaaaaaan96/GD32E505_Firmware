@@ -8,6 +8,7 @@ typedef enum {
     ADEV_USART_MODE_POLLING,
     ADEV_USART_MODE_DMA_TX,
     ADEV_USART_MODE_INTERRUPT_IDLE,
+    ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE,
 } aDevUsartMode_t;
 
 typedef struct {
@@ -16,6 +17,8 @@ typedef struct {
     uint8_t interrupt_priority;
     uint8_t *rx_buffer;
     size_t rx_buffer_size;
+    uint8_t *rx_dma_buffer;
+    size_t rx_dma_buffer_size;
     uint8_t *tx_buffer;
     size_t tx_buffer_size;
 } aDevUsartConfig_t;
@@ -25,6 +28,8 @@ typedef struct {
     aDevUsartMode_t mode;
     uint8_t *rx_buffer;
     size_t rx_buffer_size;
+    uint8_t *rx_dma_buffer;
+    size_t rx_dma_buffer_size;
     volatile size_t rx_head;
     volatile size_t rx_tail;
     volatile size_t rx_count;

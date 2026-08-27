@@ -15,7 +15,8 @@
 
 每个驱动模块独立实现。USART 进一步拆成基础轮询、可选 IRQ 和可选 Async-DMA
 源码；未启用能力时使用不依赖 DMA/IRQ 的 stub 保持公共接口稳定。DMA 通道和
-外设请求映射只存在于 `aDrv_usart_async.c`，不会暴露给 device 或 app。
+外设请求映射只存在于 `aDrv_usart_async.c`，不会暴露给 device 或 app。当前
+GD32 实现同时封装 USART0/USART5 的 TX 与 RX DMA 通道。
 
 ARM/IAR startup 保持官方原文件。GCC 构建根据 MCU profile 的
 `MCU_STARTUP_VARIANT` 选择 `Source/GCC/startup_<variant>.S`；GD32E505 当前选择

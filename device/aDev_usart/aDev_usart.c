@@ -92,6 +92,36 @@ static void irq_idle(void *argument)
     ++handle->idle_event_count;
 }
 
+static void dma_rx_idle(void *argument)
+{
+    aDevUsartHandle_t *handle = argument;
+    size_t received = 0U;
+    size_t index;
+
+    if (aDrvUsartAsyncRxStop(&handle->drv_handle, &received) !=
+        A_STATUS_OK) {
+        handle->rx_overflow = 1U;
+        return;
+    }
+
+    for (index = 0U; index < received; ++index) {
+        if (handle->rx_count >= handle->rx_buffer_size) {
+            handle->rx_overflow = 1U;
+            break;
+        }
+        handle->rx_buffer[handle->rx_head] = handle->rx_dma_buffer[index];
+        handle->rx_head = (handle->rx_head + 1U) % handle->rx_buffer_size;
+        ++handle->rx_count;
+    }
+    ++handle->idle_event_count;
+
+    if (aDrvUsartAsyncRxStart(&handle->drv_handle,
+                              handle->rx_dma_buffer,
+                              handle->rx_dma_buffer_size) != A_STATUS_OK) {
+        handle->rx_overflow = 1U;
+    }
+}
+
 static aStatus_t register_irq_callback(aDevUsartHandle_t *handle,
                                        aDrvUsartExti_t trigger,
                                        aDrvInterruptCallback_t callback,
@@ -150,6 +180,49 @@ static aStatus_t dma_mode_init(aDevUsartHandle_t *handle,
                : A_STATUS_UNSUPPORTED;
 }
 
+static aStatus_t buffered_tx_dma_rx_init(
+    aDevUsartHandle_t *handle, const aDevUsartConfig_t *config)
+{
+    aStatus_t status;
+
+    if (!aDrvUsartInterruptIsSupported() ||
+        !aDrvUsartAsyncRxIsSupported(&handle->drv_handle)) {
+        return A_STATUS_UNSUPPORTED;
+    }
+    if ((config->rx_buffer == NULL) || (config->rx_buffer_size < 2U) ||
+        (config->rx_dma_buffer == NULL) ||
+        (config->rx_dma_buffer_size < 2U) ||
+        (config->tx_buffer == NULL) || (config->tx_buffer_size < 2U)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+
+    handle->rx_buffer = config->rx_buffer;
+    handle->rx_buffer_size = config->rx_buffer_size;
+    handle->rx_dma_buffer = config->rx_dma_buffer;
+    handle->rx_dma_buffer_size = config->rx_dma_buffer_size;
+    handle->tx_buffer = config->tx_buffer;
+    handle->tx_buffer_size = config->tx_buffer_size;
+
+    status = register_irq_callback(handle, ADRV_USART_EXTI_TXE,
+                                   irq_transmit,
+                                   config->interrupt_priority, false);
+    if (status == A_STATUS_OK) {
+        status = register_irq_callback(handle, ADRV_USART_EXTI_IDLE,
+                                       dma_rx_idle,
+                                       config->interrupt_priority, false);
+    }
+    if (status == A_STATUS_OK) {
+        status = aDrvUsartAsyncRxStart(&handle->drv_handle,
+                                       handle->rx_dma_buffer,
+                                       handle->rx_dma_buffer_size);
+    }
+    if (status == A_STATUS_OK) {
+        status = aDrvUsartSetInterruptEnabled(
+            &handle->drv_handle, ADRV_USART_EXTI_IDLE, true);
+    }
+    return status;
+}
+
 void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
 {
     if (config == NULL) {
@@ -161,6 +234,8 @@ void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
     config->interrupt_priority = 5U;
     config->rx_buffer = NULL;
     config->rx_buffer_size = 0U;
+    config->rx_dma_buffer = NULL;
+    config->rx_dma_buffer_size = 0U;
     config->tx_buffer = NULL;
     config->tx_buffer_size = 0U;
 }
@@ -175,6 +250,8 @@ void aDevUsartHandleStructInit(aDevUsartHandle_t *handle)
     handle->mode = ADEV_USART_MODE_POLLING;
     handle->rx_buffer = NULL;
     handle->rx_buffer_size = 0U;
+    handle->rx_dma_buffer = NULL;
+    handle->rx_dma_buffer_size = 0U;
     handle->rx_head = 0U;
     handle->rx_tail = 0U;
     handle->rx_count = 0U;
@@ -193,7 +270,7 @@ aStatus_t aDevUsartInit(const aDevUsartConfig_t *config,
     aStatus_t status;
 
     if ((config == NULL) || (handle == NULL) ||
-        (config->mode > ADEV_USART_MODE_INTERRUPT_IDLE)) {
+        (config->mode > ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE)) {
         return A_STATUS_INVALID_PARAM;
     }
 
@@ -207,6 +284,9 @@ aStatus_t aDevUsartInit(const aDevUsartConfig_t *config,
         status = dma_mode_init(handle, config);
     } else if (config->mode == ADEV_USART_MODE_INTERRUPT_IDLE) {
         status = interrupt_mode_init(handle, config);
+    } else if (config->mode ==
+               ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE) {
+        status = buffered_tx_dma_rx_init(handle, config);
     }
 
     if (status != A_STATUS_OK) {
@@ -223,6 +303,9 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
 
     if (handle->mode == ADEV_USART_MODE_DMA_TX) {
         (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
+    } else if (handle->mode ==
+               ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE) {
+        (void)aDrvUsartAsyncRxAbort(&handle->drv_handle);
     }
     return aDrvUsartDeInitStatic(&handle->drv_handle);
 }
@@ -289,7 +372,9 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
         return 0;
     }
 
-    return handle->mode == ADEV_USART_MODE_INTERRUPT_IDLE
+    return (handle->mode == ADEV_USART_MODE_INTERRUPT_IDLE) ||
+                   (handle->mode ==
+                    ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE)
                ? interrupt_read(handle, buffer, buffer_size, timeout)
                : polling_read(handle, buffer, buffer_size, timeout);
 }
@@ -404,6 +489,7 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
     case ADEV_USART_MODE_DMA_TX:
         return dma_write(handle, data, data_size, timeout);
     case ADEV_USART_MODE_INTERRUPT_IDLE:
+    case ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE:
         return interrupt_write(handle, data, data_size, timeout);
     case ADEV_USART_MODE_POLLING:
     default:
@@ -429,7 +515,9 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
         if (status != A_STATUS_OK) {
             return status;
         }
-        if (complete && (handle->mode != ADEV_USART_MODE_INTERRUPT_IDLE ||
+        if (complete &&
+            ((handle->mode != ADEV_USART_MODE_INTERRUPT_IDLE &&
+              handle->mode != ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE) ||
                          handle->tx_count == 0U)) {
             return A_STATUS_OK;
         }

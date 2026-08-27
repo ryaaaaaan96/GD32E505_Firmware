@@ -30,3 +30,32 @@ aStatus_t aDrvUsartAsyncTxAbort(aDrvUsartHandle_t *handle)
     (void)handle;
     return A_STATUS_UNSUPPORTED;
 }
+
+bool aDrvUsartAsyncRxIsSupported(const aDrvUsartHandle_t *handle)
+{
+    (void)handle;
+    return false;
+}
+
+aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
+                                void *buffer, size_t size)
+{
+    (void)handle;
+    (void)buffer;
+    (void)size;
+    return A_STATUS_UNSUPPORTED;
+}
+
+aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
+                               size_t *received)
+{
+    (void)handle;
+    (void)received;
+    return A_STATUS_UNSUPPORTED;
+}
+
+aStatus_t aDrvUsartAsyncRxAbort(aDrvUsartHandle_t *handle)
+{
+    (void)handle;
+    return A_STATUS_UNSUPPORTED;
+}

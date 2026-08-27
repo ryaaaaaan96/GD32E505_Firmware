@@ -49,7 +49,7 @@ platform/aDrv/
 └── CMakeLists.txt
 ```
 
-普通外设保持一个独立 `.c`。USART 按基础轮询、可选中断、可选异步 DMA 拆分，
+普通外设保持一个独立 `.c`。USART 按基础轮询、可选中断、可选异步 DMA 收发拆分，
 避免基础 USART 对 DMA 形成硬依赖；私有共享状态只通过
 `aDrv_usart_internal.h` 连接。公共头文件不出现 GD32 寄存器类型或 DMA 通道映射。
 

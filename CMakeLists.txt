@@ -14,6 +14,10 @@ aclass_select(
 set(BOARD_HXTAL_HZ 20000000)
 set(BOARD_HXTAL_BYPASS ON)
 
+# Application features. Disabled features keep their public API through
+# lightweight stub implementations.
+set(APP_ENABLE_SHELL ON CACHE BOOL "Enable the application Shell console")
+
 project(
     ${FIRMWARE_NAME}
     VERSION ${FIRMWARE_VERSION}
@@ -21,6 +25,8 @@ project(
 )
 
 aclass_initialize()
+
+message(STATUS "Application features: shell=${APP_ENABLE_SHELL}")
 
 add_subdirectory(platform)
 add_subdirectory(device)

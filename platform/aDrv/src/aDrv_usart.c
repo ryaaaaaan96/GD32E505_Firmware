@@ -48,20 +48,17 @@ aStatus_t aDrvPrivateUsartOwnerAcquire(aDrvUsartHandle_t *handle,
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
-    if ((handle->owner != ADRV_USART_OWNER_NONE) &&
-        (handle->owner != owner)) {
-        return A_STATUS_BUSY;
-    }
-
-    handle->owner = owner;
+    handle->owner = (aDrvUsartOwner_t)((uint32_t)handle->owner |
+                                      (uint32_t)owner);
     return A_STATUS_OK;
 }
 
 void aDrvPrivateUsartOwnerRelease(aDrvUsartHandle_t *handle,
                                   aDrvUsartOwner_t owner)
 {
-    if ((handle != NULL) && (handle->owner == owner)) {
-        handle->owner = ADRV_USART_OWNER_NONE;
+    if (handle != NULL) {
+        handle->owner = (aDrvUsartOwner_t)((uint32_t)handle->owner &
+                                          ~(uint32_t)owner);
     }
 }
 
@@ -181,6 +178,7 @@ aStatus_t aDrvUsartDeInitStatic(aDrvUsartHandle_t *handle)
     }
 
     (void)aDrvUsartAsyncTxAbort(handle);
+    (void)aDrvUsartAsyncRxAbort(handle);
     aDrvUsartDisableInterrupt(handle);
     aDrvPrivateUsartHandleSet(handle->id, NULL);
     usart_disable((uint32_t)handle->instance);
@@ -196,7 +194,7 @@ aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *handle, uint8_t data)
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
-    if (handle->owner == ADRV_USART_OWNER_ASYNC) {
+    if (((uint32_t)handle->owner & ADRV_USART_OWNER_ASYNC_TX) != 0U) {
         return A_STATUS_BUSY;
     }
     if (usart_flag_get((uint32_t)handle->instance, USART_FLAG_TBE) == RESET) {
@@ -214,6 +212,9 @@ aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *handle, uint8_t *data)
     }
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
+    }
+    if (((uint32_t)handle->owner & ADRV_USART_OWNER_ASYNC_RX) != 0U) {
+        return A_STATUS_BUSY;
     }
     if (usart_flag_get((uint32_t)handle->instance, USART_FLAG_RBNE) == RESET) {
         return A_STATUS_BUSY;

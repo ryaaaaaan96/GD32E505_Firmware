@@ -1,6 +1,6 @@
 #include "aDrv.h"
 #include "aOS.h"
-#include "system.h"
+#include "aclass_system.h"
 
 static void appFatal(void)
 {
@@ -16,7 +16,7 @@ int main(void)
     if (aOSInit() != A_STATUS_OK) {
         appFatal();
     }
-    if (systemInit() != A_STATUS_OK) {
+    if (aSystemInit() != A_STATUS_OK) {
         appFatal();
     }
 

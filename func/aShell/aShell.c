@@ -126,6 +126,11 @@ aStatus_t aShellDeInit(aShellHandle_t *handle)
     return A_STATUS_OK;
 }
 
+bool aShellIsEnabled(void)
+{
+    return true;
+}
+
 void aShellPrint(aShellHandle_t *handle, const char *format, ...)
 {
     if ((handle == NULL) || (handle->shell_obj == NULL) ||

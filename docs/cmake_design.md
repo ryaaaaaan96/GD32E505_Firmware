@@ -73,8 +73,14 @@ ADRV_MODULE_* 配置
 GPIO，非法组合在 CMake 配置阶段直接报错。
 
 USART 还提供 `ADRV_USART_INTERRUPT` 与 `ADRV_USART_ASYNC` 两个能力开关。
-`ADRV_USART_ASYNC=1` 自动选择 `ADRV_MODULE_DMA`；关闭时使用 async stub，轮询和
+`ADRV_USART_ASYNC=1` 自动选择 `ADRV_MODULE_DMA`；该能力涵盖 DMA 发送与接收。
+关闭时使用 async stub，轮询和
 中断构建不会带入 DMA。IRQ 与 async 的真实实现/stub 由 aDrv CMake 成对选择。
+
+应用功能使用相同的真实实现/stub 选择方式。`APP_ENABLE_SHELL=ON` 编译 Letter
+Shell 和 OS 适配；设为 `OFF` 时，`aShell` target 改为编译 `aShell_stub.c`，公共
+API 保持不变，同时 aSystem 不再链接 `aDevUsart` 或创建 Shell 传输资源。业务
+模块不需要用条件编译包围已有的 `aShellPrint()` 等调用。
 
 ## 公共规范与状态
 

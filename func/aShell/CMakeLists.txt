@@ -1,20 +1,52 @@
-set(LETTER_SHELL_SOURCES
-    src/shell.c
-    src/shell_ext.c
-    src/shell_cmd_list.c
-)
-
 add_library(
     aShell
     STATIC
-        aShell.c
-        ${LETTER_SHELL_SOURCES}
 )
+
+if(APP_ENABLE_SHELL)
+    set(LETTER_SHELL_SOURCES
+        src/shell.c
+        src/shell_ext.c
+        src/shell_cmd_list.c
+    )
+
+    target_sources(
+        aShell
+        PRIVATE
+            aShell.c
+            ${LETTER_SHELL_SOURCES}
+    )
+
+    target_compile_definitions(
+        aShell
+        PRIVATE
+            SHELL_CFG_USER="shell_cfg_user.h"
+    )
+
+    target_link_libraries(
+        aShell
+        PRIVATE
+            aOS
+    )
+
+    set_source_files_properties(
+        ${LETTER_SHELL_SOURCES}
+        PROPERTIES
+            COMPILE_OPTIONS
+                "-Wno-error;-Wno-pedantic;-Wno-cast-function-type;-Wno-sign-compare;-Wno-strict-aliasing"
+    )
+else()
+    target_sources(
+        aShell
+        PRIVATE
+            aShell_stub.c
+    )
+endif()
 
 target_compile_definitions(
     aShell
-    PRIVATE
-        SHELL_CFG_USER="shell_cfg_user.h"
+    PUBLIC
+        ASHELL_ENABLED=$<BOOL:${APP_ENABLE_SHELL}>
 )
 
 target_include_directories(
@@ -28,12 +60,4 @@ target_link_libraries(
     aShell
     PUBLIC
         aLib
-        aOS
-)
-
-set_source_files_properties(
-    ${LETTER_SHELL_SOURCES}
-    PROPERTIES
-        COMPILE_OPTIONS
-            "-Wno-error;-Wno-pedantic;-Wno-cast-function-type;-Wno-sign-compare;-Wno-strict-aliasing"
 )

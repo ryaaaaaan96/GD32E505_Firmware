@@ -3,6 +3,6 @@
 
 #include "aStatus.h"
 
-aStatus_t systemInit(void);
+aStatus_t aSystemInit(void);
 
 #endif

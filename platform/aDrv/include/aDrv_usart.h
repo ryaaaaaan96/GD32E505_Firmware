@@ -50,9 +50,10 @@ typedef struct {
 } aDrvUsartCallback_t;
 
 typedef enum {
-    ADRV_USART_OWNER_NONE,
-    ADRV_USART_OWNER_INTERRUPT,
-    ADRV_USART_OWNER_ASYNC,
+    ADRV_USART_OWNER_NONE = 0U,
+    ADRV_USART_OWNER_INTERRUPT = 1U << 0,
+    ADRV_USART_OWNER_ASYNC_TX = 1U << 1,
+    ADRV_USART_OWNER_ASYNC_RX = 1U << 2,
 } aDrvUsartOwner_t;
 
 typedef struct {
@@ -101,6 +102,12 @@ aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *handle,
 aStatus_t aDrvUsartAsyncTxGetRemaining(aDrvUsartHandle_t *handle,
                                        size_t *remaining);
 aStatus_t aDrvUsartAsyncTxAbort(aDrvUsartHandle_t *handle);
+bool aDrvUsartAsyncRxIsSupported(const aDrvUsartHandle_t *handle);
+aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
+                                void *buffer, size_t size);
+aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
+                               size_t *received);
+aStatus_t aDrvUsartAsyncRxAbort(aDrvUsartHandle_t *handle);
 aStatus_t aDrvUsartSetBaudrate(aDrvUsartHandle_t *handle, uint32_t baud_rate);
 void aDrvUsartGetBaudrate(const aDrvUsartHandle_t *handle,
                           uint32_t *baud_rate);

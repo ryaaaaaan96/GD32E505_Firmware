@@ -76,6 +76,12 @@ aStatus_t aDrvUsartRegisterCallback(
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
+    if (((config->trigger == ADRV_USART_EXTI_TXE) &&
+         (((uint32_t)handle->owner & ADRV_USART_OWNER_ASYNC_TX) != 0U)) ||
+        ((config->trigger == ADRV_USART_EXTI_RXNE) &&
+         (((uint32_t)handle->owner & ADRV_USART_OWNER_ASYNC_RX) != 0U))) {
+        return A_STATUS_BUSY;
+    }
 
     status = aDrvPrivateUsartOwnerAcquire(
         handle, ADRV_USART_OWNER_INTERRUPT);
@@ -101,7 +107,7 @@ aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
-    if (handle->owner != ADRV_USART_OWNER_INTERRUPT) {
+    if (((uint32_t)handle->owner & ADRV_USART_OWNER_INTERRUPT) == 0U) {
         return A_STATUS_NOT_READY;
     }
 
@@ -125,7 +131,7 @@ aStatus_t aDrvUsartSetInterruptEnabled(aDrvUsartHandle_t *handle,
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
-    if ((handle->owner != ADRV_USART_OWNER_INTERRUPT) ||
+    if ((((uint32_t)handle->owner & ADRV_USART_OWNER_INTERRUPT) == 0U) ||
         (handle->callbacks[trigger].function == NULL)) {
         return A_STATUS_NOT_READY;
     }
@@ -139,7 +145,7 @@ void aDrvUsartEnableInterrupt(aDrvUsartHandle_t *handle)
     const aDrvPrivateUsartMapping_t *mapping;
 
     if ((handle == NULL) || (handle->initialized == 0U) ||
-        (handle->owner != ADRV_USART_OWNER_INTERRUPT)) {
+        (((uint32_t)handle->owner & ADRV_USART_OWNER_INTERRUPT) == 0U)) {
         return;
     }
 
@@ -205,7 +211,7 @@ static void usart_irq_dispatch(aDrvUsartId_t id)
         aDrvPrivateUsartMappingGet(id);
 
     if ((handle == NULL) || (handle->initialized == 0U) ||
-        (handle->owner != ADRV_USART_OWNER_INTERRUPT)) {
+        (((uint32_t)handle->owner & ADRV_USART_OWNER_INTERRUPT) == 0U)) {
         nvic_irq_disable(mapping->irq);
         return;
     }
