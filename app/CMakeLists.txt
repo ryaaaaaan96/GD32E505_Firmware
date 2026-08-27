@@ -5,16 +5,14 @@ add_executable(
         main.c
 )
 
+add_subdirectory(system)
+
 target_link_libraries(
     ${APP_TARGET}
     PRIVATE
         aCore
         aDrv
         aOS
-        aDevUsart
-        aDataBase
-        aModbus
-        aShell
 )
 
 set_target_properties(

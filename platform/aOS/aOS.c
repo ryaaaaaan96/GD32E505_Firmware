@@ -60,7 +60,9 @@ void aOSDelayMs(uint32_t milliseconds)
 
 void aOSYield(void)
 {
-    taskYIELD();
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+        taskYIELD();
+    }
 }
 
 uint32_t aOSGetUptimeMs(void)

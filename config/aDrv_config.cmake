@@ -6,6 +6,8 @@
 
 para_set(ADRV_MODULE_GPIO  1)
 para_set(ADRV_MODULE_USART 1)
-para_set(ADRV_MODULE_DMA   1)
-para_set(ADRV_MODULE_SPI   1)
-para_set(ADRV_MODULE_QSPI  1)
+para_set(ADRV_USART_INTERRUPT 1)
+para_set(ADRV_USART_ASYNC     0)
+para_set(ADRV_MODULE_DMA   0)
+para_set(ADRV_MODULE_SPI   0)
+para_set(ADRV_MODULE_QSPI  0)

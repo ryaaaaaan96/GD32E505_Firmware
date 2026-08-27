@@ -12,6 +12,8 @@
 
 #cmakedefine01 ADRV_MODULE_GPIO
 #cmakedefine01 ADRV_MODULE_USART
+#cmakedefine01 ADRV_USART_INTERRUPT
+#cmakedefine01 ADRV_USART_ASYNC
 #cmakedefine01 ADRV_MODULE_DMA
 #cmakedefine01 ADRV_MODULE_SPI
 #cmakedefine01 ADRV_MODULE_QSPI

@@ -1,20 +1,69 @@
 #include "aDrv_usart.h"
 
-#include "aDrv_internal.h"
+#include "aDrv_usart_internal.h"
 
-typedef struct {
-    uint32_t instance;
-    rcu_periph_enum clock;
-} usartMapping_t;
-
-static const usartMapping_t usart_mappings[] = {
-    {USART0, RCU_USART0},
-    {USART1, RCU_USART1},
-    {USART2, RCU_USART2},
-    {UART3, RCU_UART3},
-    {UART4, RCU_UART4},
-    {USART5, RCU_USART5},
+static const aDrvPrivateUsartMapping_t s_usart_mappings[] = {
+    {USART0, RCU_USART0, USART0_IRQn},
+    {USART1, RCU_USART1, USART1_IRQn},
+    {USART2, RCU_USART2, USART2_IRQn},
+    {UART3, RCU_UART3, UART3_IRQn},
+    {UART4, RCU_UART4, UART4_IRQn},
+    {USART5, RCU_USART5, USART5_IRQn},
 };
+
+static aDrvUsartHandle_t *s_usart_handles[
+    ADRV_ARRAY_COUNT(s_usart_mappings)];
+
+const aDrvPrivateUsartMapping_t *aDrvPrivateUsartMappingGet(
+    aDrvUsartId_t id)
+{
+    if ((size_t)id >= ADRV_ARRAY_COUNT(s_usart_mappings)) {
+        return NULL;
+    }
+    return &s_usart_mappings[id];
+}
+
+aDrvUsartHandle_t *aDrvPrivateUsartHandleGet(aDrvUsartId_t id)
+{
+    if ((size_t)id >= ADRV_ARRAY_COUNT(s_usart_handles)) {
+        return NULL;
+    }
+    return s_usart_handles[id];
+}
+
+void aDrvPrivateUsartHandleSet(aDrvUsartId_t id,
+                               aDrvUsartHandle_t *handle)
+{
+    if ((size_t)id < ADRV_ARRAY_COUNT(s_usart_handles)) {
+        s_usart_handles[id] = handle;
+    }
+}
+
+aStatus_t aDrvPrivateUsartOwnerAcquire(aDrvUsartHandle_t *handle,
+                                       aDrvUsartOwner_t owner)
+{
+    if ((handle == NULL) || (owner == ADRV_USART_OWNER_NONE)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (handle->initialized == 0U) {
+        return A_STATUS_NOT_READY;
+    }
+    if ((handle->owner != ADRV_USART_OWNER_NONE) &&
+        (handle->owner != owner)) {
+        return A_STATUS_BUSY;
+    }
+
+    handle->owner = owner;
+    return A_STATUS_OK;
+}
+
+void aDrvPrivateUsartOwnerRelease(aDrvUsartHandle_t *handle,
+                                  aDrvUsartOwner_t owner)
+{
+    if ((handle != NULL) && (handle->owner == owner)) {
+        handle->owner = ADRV_USART_OWNER_NONE;
+    }
+}
 
 static uint32_t map_parity(aDrvUsartParity_t parity)
 {
@@ -35,7 +84,7 @@ void aDrvUsartConfigStructInit(aDrvUsartConfig_t *config)
         return;
     }
 
-    config->id = ADRV_USART_1;
+    config->id = ADRV_USART_0;
     config->baud_rate = 115200U;
     config->parity = ADRV_USART_PARITY_NONE;
     config->stop_bits = ADRV_USART_STOP_1;
@@ -45,6 +94,8 @@ void aDrvUsartConfigStructInit(aDrvUsartConfig_t *config)
 
 void aDrvUsartHandleStructInit(aDrvUsartHandle_t *handle)
 {
+    size_t index;
+
     if (handle == NULL) {
         return;
     }
@@ -53,18 +104,24 @@ void aDrvUsartHandleStructInit(aDrvUsartHandle_t *handle)
     handle->baud_rate = 0U;
     handle->parity = ADRV_USART_PARITY_NONE;
     handle->stop_bits = ADRV_USART_STOP_1;
+    handle->id = ADRV_USART_0;
+    for (index = 0U; index < ADRV_USART_EXTI_MAX; ++index) {
+        handle->callbacks[index].function = NULL;
+        handle->callbacks[index].argument = NULL;
+    }
+    handle->owner = ADRV_USART_OWNER_NONE;
+    handle->irq_priority = 5U;
     handle->initialized = 0U;
 }
 
 aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *config,
                               aDrvUsartHandle_t *handle)
 {
-    const usartMapping_t *mapping;
+    const aDrvPrivateUsartMapping_t *mapping;
     aDrvPrivateGpio_t tx_gpio;
     aDrvPrivateGpio_t rx_gpio;
 
     if ((config == NULL) || (handle == NULL) ||
-        ((size_t)config->id >= ADRV_ARRAY_COUNT(usart_mappings)) ||
         (config->baud_rate == 0U) ||
         (config->parity > ADRV_USART_PARITY_ODD) ||
         (config->stop_bits > ADRV_USART_STOP_2) ||
@@ -73,7 +130,14 @@ aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *config,
         return A_STATUS_INVALID_PARAM;
     }
 
-    mapping = &usart_mappings[config->id];
+    mapping = aDrvPrivateUsartMappingGet(config->id);
+    if (mapping == NULL) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (aDrvPrivateUsartHandleGet(config->id) != NULL) {
+        return A_STATUS_BUSY;
+    }
+
     rcu_periph_clock_enable(RCU_AF);
     rcu_periph_clock_enable(mapping->clock);
     rcu_periph_clock_enable(tx_gpio.clock);
@@ -100,7 +164,10 @@ aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *config,
     handle->baud_rate = config->baud_rate;
     handle->parity = config->parity;
     handle->stop_bits = config->stop_bits;
+    handle->id = config->id;
+    handle->owner = ADRV_USART_OWNER_NONE;
     handle->initialized = 1U;
+    aDrvPrivateUsartHandleSet(config->id, handle);
     return A_STATUS_OK;
 }
 
@@ -113,6 +180,9 @@ aStatus_t aDrvUsartDeInitStatic(aDrvUsartHandle_t *handle)
         return A_STATUS_NOT_READY;
     }
 
+    (void)aDrvUsartAsyncTxAbort(handle);
+    aDrvUsartDisableInterrupt(handle);
+    aDrvPrivateUsartHandleSet(handle->id, NULL);
     usart_disable((uint32_t)handle->instance);
     aDrvUsartHandleStructInit(handle);
     return A_STATUS_OK;
@@ -125,6 +195,9 @@ aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *handle, uint8_t data)
     }
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
+    }
+    if (handle->owner == ADRV_USART_OWNER_ASYNC) {
+        return A_STATUS_BUSY;
     }
     if (usart_flag_get((uint32_t)handle->instance, USART_FLAG_TBE) == RESET) {
         return A_STATUS_BUSY;
@@ -165,51 +238,17 @@ aStatus_t aDrvUsartIsTransmitComplete(const aDrvUsartHandle_t *handle,
     return A_STATUS_OK;
 }
 
-aStatus_t aDrvUsartRegisterCallback(
-    aDrvUsartHandle_t *handle, const aDrvUsartExtiConfig_t *config)
-{
-    if ((handle == NULL) || (config == NULL)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    if (handle->initialized == 0U) {
-        return A_STATUS_NOT_READY;
-    }
-
-    return A_STATUS_UNSUPPORTED;
-}
-
-aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
-                                      aDrvUsartExti_t trigger)
-{
-    (void)trigger;
-
-    if (handle == NULL) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    if (handle->initialized == 0U) {
-        return A_STATUS_NOT_READY;
-    }
-
-    return A_STATUS_UNSUPPORTED;
-}
-
-void aDrvUsartEnableInterrupt(aDrvUsartHandle_t *handle)
-{
-    (void)handle;
-}
-
-void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *handle)
-{
-    (void)handle;
-}
-
-aStatus_t aDrvUsartSetBaudrate(aDrvUsartHandle_t *handle, uint32_t baud_rate)
+aStatus_t aDrvUsartSetBaudrate(aDrvUsartHandle_t *handle,
+                               uint32_t baud_rate)
 {
     if ((handle == NULL) || (baud_rate == 0U)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
+    }
+    if (handle->owner != ADRV_USART_OWNER_NONE) {
+        return A_STATUS_BUSY;
     }
 
     usart_baudrate_set((uint32_t)handle->instance, baud_rate);
@@ -233,6 +272,9 @@ aStatus_t aDrvUsartSetStopbits(aDrvUsartHandle_t *handle,
     }
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
+    }
+    if (handle->owner != ADRV_USART_OWNER_NONE) {
+        return A_STATUS_BUSY;
     }
 
     usart_stop_bit_set((uint32_t)handle->instance,
@@ -258,6 +300,9 @@ aStatus_t aDrvUsartSetParity(aDrvUsartHandle_t *handle,
     }
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
+    }
+    if (handle->owner != ADRV_USART_OWNER_NONE) {
+        return A_STATUS_BUSY;
     }
 
     usart_parity_config((uint32_t)handle->instance, map_parity(parity));

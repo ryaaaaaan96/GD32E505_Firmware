@@ -36,6 +36,9 @@ platform/aDrv/
 │   ├── aDrv_basic.c
 │   ├── aDrv_gpio.c
 │   ├── aDrv_usart.c
+│   ├── aDrv_usart_irq.c / irq_stub.c
+│   ├── aDrv_usart_async.c / async_stub.c
+│   ├── aDrv_usart_internal.h
 │   ├── aDrv_dma.c
 │   ├── aDrv_spi.c
 │   ├── aDrv_qspi.c
@@ -46,13 +49,18 @@ platform/aDrv/
 └── CMakeLists.txt
 ```
 
-每个外设保持一个独立 `.c`。只被单个模块使用的映射表和辅助函数必须声明为
-`static` 并留在该 `.c`；当前只有 USART、SPI、QSPI 都需要的 GPIO 引脚解析器放在
-`aDrv_internal.h`。公共头文件不出现 GD32 寄存器类型。
+普通外设保持一个独立 `.c`。USART 按基础轮询、可选中断、可选异步 DMA 拆分，
+避免基础 USART 对 DMA 形成硬依赖；私有共享状态只通过
+`aDrv_usart_internal.h` 连接。公共头文件不出现 GD32 寄存器类型或 DMA 通道映射。
 
 `config/aDrv_config.cmake` 的 `ADRV_MODULE_*` 开关同步选择生成的
 `gd32e50x_libopt.h`、SPL 源文件和 aDrv 实现源文件。system 固有依赖由 aDrv
 CMake 自动加入，USART/SPI/QSPI 对 GPIO 的依赖在配置阶段校验。
+
+`ADRV_USART_INTERRUPT` 和 `ADRV_USART_ASYNC` 分别控制 USART 可选能力。异步能力
+启用时自动选择 DMA；关闭异步能力时编译轻量 stub，因此公共接口稳定，但最终
+固件不包含 DMA 驱动和 SPL DMA 源码。不支持的实例或未编译能力返回
+`A_STATUS_UNSUPPORTED`。
 
 芯片实际拥有的 USART、SPI、DMA 通道和 GPIO 端口由各实现文件的私有映射表
 描述。app 只选择公共逻辑实例并设置引脚、速率和工作模式。

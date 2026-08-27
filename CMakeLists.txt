@@ -3,12 +3,16 @@ cmake_minimum_required(VERSION 3.23)
 include(cmake/Aclass.cmake)
 
 aclass_select(
-    NAME io_gd32e505
+    NAME gd32e505vet7_debug
     VERSION 0.1.0
     MCU gd32e505
     LINKER_SCRIPT GD32E505_flash.ld
     TOOLCHAIN GCC
 )
+
+# Board clock: a 20 MHz external active oscillator drives HXTAL_IN.
+set(BOARD_HXTAL_HZ 20000000)
+set(BOARD_HXTAL_BYPASS ON)
 
 project(
     ${FIRMWARE_NAME}

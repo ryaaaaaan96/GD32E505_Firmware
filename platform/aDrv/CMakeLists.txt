@@ -13,6 +13,27 @@ endif()
 
 include("${ADRV_CONFIG}")
 
+if(ADRV_USART_INTERRUPT AND NOT ADRV_MODULE_USART)
+    message(FATAL_ERROR
+        "ADRV_USART_INTERRUPT requires ADRV_MODULE_USART"
+    )
+endif()
+
+if(ADRV_USART_ASYNC AND NOT ADRV_MODULE_USART)
+    message(FATAL_ERROR
+        "ADRV_USART_ASYNC requires ADRV_MODULE_USART"
+    )
+endif()
+
+# Like Zephyr's UART_ASYNC_API, asynchronous USART support selects DMA.
+if(ADRV_USART_ASYNC)
+    set(ADRV_MODULE_DMA 1 CACHE BOOL "Enable the aDrv DMA module" FORCE)
+endif()
+
+if(NOT DEFINED BOARD_HXTAL_HZ OR BOARD_HXTAL_HZ LESS_EQUAL 0)
+    message(FATAL_ERROR "BOARD_HXTAL_HZ must define the board HXTAL frequency")
+endif()
+
 # These adapters use the shared GPIO pin resolver.
 foreach(module USART SPI QSPI)
     if(ADRV_MODULE_${module} AND NOT ADRV_MODULE_GPIO)
@@ -93,6 +114,27 @@ if(ADRV_MODULE_USART)
     list(APPEND ADRV_SOURCES
         src/aDrv_usart.c
     )
+
+    if(ADRV_USART_INTERRUPT)
+        list(APPEND ADRV_SOURCES
+            src/aDrv_usart_irq.c
+        )
+    else()
+        list(APPEND ADRV_SOURCES
+            src/aDrv_usart_irq_stub.c
+        )
+    endif()
+
+    if(ADRV_USART_ASYNC)
+        list(APPEND ADRV_SOURCES
+            src/aDrv_usart_async.c
+        )
+    else()
+        list(APPEND ADRV_SOURCES
+            src/aDrv_usart_async_stub.c
+        )
+    endif()
+
     set(GD32_RCU_DRIVER_REQUIRED ON)
 endif()
 
@@ -150,7 +192,16 @@ target_compile_definitions(
     aDrv_gd32e505_vendor
     PUBLIC
         ${MCU_PUBLIC_DEFINITIONS}
+        HXTAL_VALUE=${BOARD_HXTAL_HZ}U
 )
+
+if(BOARD_HXTAL_BYPASS)
+    target_compile_definitions(
+        aDrv_gd32e505_vendor
+        PRIVATE
+            GD32_HXTAL_BYPASS=1
+    )
+endif()
 
 target_compile_options(
     aDrv_gd32e505_vendor
@@ -191,4 +242,15 @@ message(
     STATUS
     "aDrv modules: GPIO=${ADRV_MODULE_GPIO}, USART=${ADRV_MODULE_USART}, "
     "DMA=${ADRV_MODULE_DMA}, SPI=${ADRV_MODULE_SPI}, QSPI=${ADRV_MODULE_QSPI}"
+)
+
+message(
+    STATUS
+    "aDrv USART capabilities: interrupt=${ADRV_USART_INTERRUPT}, "
+    "async=${ADRV_USART_ASYNC}"
+)
+
+message(
+    STATUS
+    "Board HXTAL: ${BOARD_HXTAL_HZ} Hz, bypass=${BOARD_HXTAL_BYPASS}"
 )

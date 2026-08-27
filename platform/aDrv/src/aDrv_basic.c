@@ -16,6 +16,12 @@ uint32_t aDrvGetRevisionId(void)
     return DBG_ID;
 }
 
+uint32_t aDrvGetCoreClockHz(void)
+{
+    SystemCoreClockUpdate();
+    return SystemCoreClock;
+}
+
 uint16_t aDrvGetFlashSize(void)
 {
     return *(const volatile uint16_t *)GD32_FLASH_SIZE_ADDRESS;

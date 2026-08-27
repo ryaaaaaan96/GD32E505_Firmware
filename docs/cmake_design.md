@@ -72,6 +72,10 @@ ADRV_MODULE_* 配置
 生成文件只位于构建目录，官方 SPL 目录始终保持原貌。USART、SPI、QSPI 依赖
 GPIO，非法组合在 CMake 配置阶段直接报错。
 
+USART 还提供 `ADRV_USART_INTERRUPT` 与 `ADRV_USART_ASYNC` 两个能力开关。
+`ADRV_USART_ASYNC=1` 自动选择 `ADRV_MODULE_DMA`；关闭时使用 async stub，轮询和
+中断构建不会带入 DMA。IRQ 与 async 的真实实现/stub 由 aDrv CMake 成对选择。
+
 ## 公共规范与状态
 
 `aclass_initialize()` 统一设置 C11、`compile_commands.json`、Debug/Release

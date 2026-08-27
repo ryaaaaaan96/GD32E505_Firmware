@@ -24,6 +24,7 @@ typedef enum {
 
 uint32_t aDrvGetChipId(void);
 uint32_t aDrvGetRevisionId(void);
+uint32_t aDrvGetCoreClockHz(void);
 uint16_t aDrvGetFlashSize(void);
 aStatus_t aDrvGetUniqueId(uint8_t uid[12]);
 

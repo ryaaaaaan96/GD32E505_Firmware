@@ -4,6 +4,18 @@
 system、startup、完整标准外设库和驱动实现全部由 `aDrv` 管理；上层不包含 GD32
 厂商头文件。
 
+## 当前调试板
+
+当前 app 面向 GD32E505VET7 最小调试板：
+
+- HXTAL_IN 接入 20 MHz 外部有源时钟，使用 bypass 模式，系统时钟为 180 MHz；
+- USART0 使用 PA9(TX)/PA10(RX)，115200-8-N-1，作为 Shell 控制台；
+- PA8 通过 `aDevLed` 设备驱动，每 500 ms 翻转一次；
+- LED 暂按低电平点亮配置，实物极性不同时只需修改 `app/system/system_config.h`。
+
+app 不再链接 Flash、RS485、数据库和 Modbus。当前工程也只启用 GPIO 与 USART
+驱动，未使用模块仍保留源码，可由后续项目按需打开。
+
 ## 分层
 
 ```text
@@ -37,6 +49,9 @@ app                 main()、项目配置、显式初始化和测试
 GD32 拥有的外设实例和通道由对应 `.c` 内的私有映射表描述，不通过 CMake 注入
 `COUNT` 宏。具体使用哪个实例、哪些引脚以及波特率等参数均由 app 配置。
 
+USART 的 `ADRV_USART_INTERRUPT` 与 `ADRV_USART_ASYNC` 是独立能力开关；只有
+Async-DMA 能力会自动引入 DMA，基础轮询和中断模式不依赖 DMA。
+
 完整 SPL 的 28 个头文件和 28 个源文件保持官方 V1.7.0 原貌。Examples、Docs 和
 USB 库不纳入工程。
 
@@ -64,6 +79,41 @@ build clean
 也可以执行 `python3 scripts/build.py`。当前工程已使用 GCC 15.3 无警告完成 ELF、
 HEX 和 BIN 构建。GD32E50X_CL 的 GCC startup、newlib syscall/sysmem 以及统一超时
 机制均已接入；startup 的向量表来自官方 V1.7.0 CL 启动文件。
+
+## WSL 宿主机与远程调试
+
+先在 Windows 宿主机或其他连接调试器的计算机上启动 JLinkGDBServer/OpenOCD。
+J-Link 目标器件选择 `GD32E505VET6`、接口选择 SWD；这是 SEGGER 当前设备表中
+与 GD32E505VET7 对应的同容量、同封装调试配置。直接运行脚本后，可以输入 `1`
+选择 WSL 所在的 Windows 宿主机，或者输入 `2` 后填写其他远程地址和端口：
+
+```sh
+python3 scripts/debug.py
+```
+
+也可以使用参数跳过交互：
+
+```sh
+python3 scripts/debug.py --mode wsl-host
+python3 scripts/debug.py --mode remote --host 192.168.1.100 --port 2331
+```
+
+脚本默认按 J-Link 生成命令，并主动选择 `GD32E505VET6`。使用 OpenOCD 时指定：
+
+```sh
+python3 scripts/debug.py --mode wsl-host --server openocd
+```
+
+默认下载 Debug 固件并运行到 `main`。只附加、不重新下载时使用：
+
+```sh
+python3 scripts/debug.py --mode remote --host 192.168.1.100 --attach
+```
+
+脚本在 WSL 镜像网络模式下使用 `127.0.0.1` 访问 Windows；在传统 NAT 模式下
+自动使用 WSL 默认网关。可先用 `--mode wsl-host --dry-run` 检查最终地址、ELF、
+GDB 路径及生成的命令。远程主机的防火墙应仅向可信网络开放 GDB Server 端口，
+因为 GDB 协议本身不提供认证和加密。
 
 详细边界见 [架构说明](docs/architecture.md)，构建职责见
 [CMake 设计](docs/cmake_design.md)，统一时间与超时规则见

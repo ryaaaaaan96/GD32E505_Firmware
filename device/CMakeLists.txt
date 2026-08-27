@@ -1,3 +1,4 @@
-add_subdirectory(aDev_Flash25q)
+add_subdirectory(aDev_Flash25q EXCLUDE_FROM_ALL)
 add_subdirectory(aDev_usart)
-add_subdirectory(aDev_RS485)
+add_subdirectory(aDev_RS485 EXCLUDE_FROM_ALL)
+add_subdirectory(aDev_LED)

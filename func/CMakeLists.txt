@@ -1,4 +1,4 @@
-add_subdirectory(aMemory)
-add_subdirectory(aDataBase)
-add_subdirectory(aModbus)
+add_subdirectory(aMemory EXCLUDE_FROM_ALL)
+add_subdirectory(aDataBase EXCLUDE_FROM_ALL)
+add_subdirectory(aModbus EXCLUDE_FROM_ALL)
 add_subdirectory(aShell)

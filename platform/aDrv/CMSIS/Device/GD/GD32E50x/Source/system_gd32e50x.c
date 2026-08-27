@@ -187,8 +187,12 @@ void SystemInit (void)
     /* Reset CFG0 and CFG1 registers */
     RCU_CFG0 = 0x00000000U;
     RCU_CFG1 = 0x00000000U;
-    /* reset HXTALBPS bit */
+    /* Select crystal mode or external active-clock bypass mode. */
+#if defined(GD32_HXTAL_BYPASS) && (GD32_HXTAL_BYPASS == 1)
+    RCU_CTL |= RCU_CTL_HXTALBPS;
+#else
     RCU_CTL &= ~(RCU_CTL_HXTALBPS);
+#endif
 
     /* configure the system clock source, PLL Multiplier, AHB/APBx prescalers and Flash settings */
     system_clock_config();
@@ -998,11 +1002,18 @@ static void system_clock_180m_hxtal(void)
     RCU_CFG0 |= RCU_PLL_MUL45;
 
 #elif (defined(GD32E50X_CL) || defined(GD32E508))
-    /* CK_PLL = (CK_PREDIV0) * 45 = 180 MHz */ 
+    /* CK_PLL = (CK_PREDIV0) * 45 = 180 MHz */
     RCU_CFG0 &= ~(RCU_CFG0_PLLMF | RCU_CFG0_PLLMF_4 | RCU_CFG0_PLLMF_5);
     RCU_CFG0 |= (RCU_PLLSRC_HXTAL_IRC48M | RCU_PLL_MUL45);
 
-    /* CK_PREDIV0 = (CK_HXTAL)/5 *8 /10 = 4 MHz */ 
+#if HXTAL_VALUE == 20000000U
+    /* CK_PREDIV0 = CK_HXTAL / 5 = 4 MHz. */
+    RCU_CFG1 &= ~(RCU_CFG1_PLLPRESEL | RCU_CFG1_PREDV0SEL |
+                  RCU_CFG1_PLL1MF | RCU_CFG1_PREDV1 | RCU_CFG1_PREDV0);
+    RCU_CFG1 |= (RCU_PLLPRESRC_HXTAL | RCU_PREDV0SRC_HXTAL_IRC48M |
+                 RCU_PREDV0_DIV5);
+#else
+    /* CK_PREDIV0 = (CK_HXTAL)/5 *8 /10 = 4 MHz */
     RCU_CFG1 &= ~(RCU_CFG1_PLLPRESEL | RCU_CFG1_PREDV0SEL | RCU_CFG1_PLL1MF | RCU_CFG1_PREDV1 | RCU_CFG1_PREDV0);
     RCU_CFG1 |= (RCU_PLLPRESRC_HXTAL | RCU_PREDV0SRC_CKPLL1 | RCU_PLL1_MUL8 | RCU_PREDV1_DIV5 | RCU_PREDV0_DIV10)    ;
 
@@ -1011,6 +1022,7 @@ static void system_clock_180m_hxtal(void)
     /* wait till PLL1 is ready */
     while((RCU_CTL & RCU_CTL_PLL1STB) == 0U){
     }
+#endif
 
 #elif defined(GD32EPRT)
     /* CK_PLL = (CK_PREDIV0) * 45 = 180 MHz */ 
