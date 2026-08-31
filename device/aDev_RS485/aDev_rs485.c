@@ -13,13 +13,13 @@ static aStatus_t set_direction(aDevRS485Handle_t *handle,
     const aDrvGpioLevel_t level =
         transmit ? handle->transmit_level
                  : inverse_level(handle->transmit_level);
-    aStatus_t status = aDrvGpioWrite(handle->de_pin, level);
+    aStatus_t status = aDrvGpioWrite(&handle->de_gpio, level);
 
     if (status != A_STATUS_OK) {
         return status;
     }
-    if ((handle->re_pin != ADRV_PIN_NONE) &&
-        ((status = aDrvGpioWrite(handle->re_pin, level)) != A_STATUS_OK)) {
+    if (handle->re_gpio.initialized &&
+        ((status = aDrvGpioWrite(&handle->re_gpio, level)) != A_STATUS_OK)) {
         return status;
     }
     return A_STATUS_OK;
@@ -42,8 +42,8 @@ void aDevRS485HandleStructInit(aDevRS485Handle_t *handle)
         return;
     }
     aDevUsartHandleStructInit(&handle->usart_handle);
-    handle->de_pin = ADRV_PIN_NONE;
-    handle->re_pin = ADRV_PIN_NONE;
+    aDrvGpioHandleStructInit(&handle->de_gpio);
+    aDrvGpioHandleStructInit(&handle->re_gpio);
     handle->transmit_level = ADRV_GPIO_HIGH;
     handle->initialized = A_FALSE;
 }
@@ -68,25 +68,35 @@ aStatus_t aDevRS485Init(const aDevRS485Config_t *config,
     gpio_config.mode = ADRV_GPIO_OUTPUT_PUSH_PULL;
     gpio_config.initial_level = inverse_level(config->transmit_level);
     gpio_config.pin = config->de_pin;
-    status = aDrvGpioInit(&gpio_config);
+    status = aDrvGpioInit(&gpio_config, &handle->de_gpio);
     if (status != A_STATUS_OK) {
         (void)aDevUsartDeInit(&handle->usart_handle);
         return status;
     }
     if (config->re_pin != ADRV_PIN_NONE) {
         gpio_config.pin = config->re_pin;
-        status = aDrvGpioInit(&gpio_config);
+        status = aDrvGpioInit(&gpio_config, &handle->re_gpio);
         if (status != A_STATUS_OK) {
+            (void)aDrvGpioDeInit(&handle->de_gpio);
             (void)aDevUsartDeInit(&handle->usart_handle);
             return status;
         }
     }
 
-    handle->de_pin = config->de_pin;
-    handle->re_pin = config->re_pin;
     handle->transmit_level = config->transmit_level;
+    status = set_direction(handle, A_FALSE);
+    if (status != A_STATUS_OK) {
+        if (handle->re_gpio.initialized) {
+            (void)aDrvGpioDeInit(&handle->re_gpio);
+        }
+        (void)aDrvGpioDeInit(&handle->de_gpio);
+        (void)aDevUsartDeInit(&handle->usart_handle);
+        aDevRS485HandleStructInit(handle);
+        return status;
+    }
+
     handle->initialized = A_TRUE;
-    return set_direction(handle, A_FALSE);
+    return A_STATUS_OK;
 }
 
 aStatus_t aDevRS485DeInit(aDevRS485Handle_t *handle)
@@ -98,12 +108,21 @@ aStatus_t aDevRS485DeInit(aDevRS485Handle_t *handle)
         return A_STATUS_NOT_READY;
     }
     (void)set_direction(handle, A_FALSE);
-    const aStatus_t status = aDevUsartDeInit(&handle->usart_handle);
-    if (status != A_STATUS_OK) {
-        return status;
+    aStatus_t status = aDevUsartDeInit(&handle->usart_handle);
+    if (handle->re_gpio.initialized) {
+        const aStatus_t gpio_status = aDrvGpioDeInit(&handle->re_gpio);
+        if (status == A_STATUS_OK) {
+            status = gpio_status;
+        }
+    }
+    {
+        const aStatus_t gpio_status = aDrvGpioDeInit(&handle->de_gpio);
+        if (status == A_STATUS_OK) {
+            status = gpio_status;
+        }
     }
     aDevRS485HandleStructInit(handle);
-    return A_STATUS_OK;
+    return status;
 }
 
 aSSize_t aDevRS485Read(aDevRS485Handle_t *handle, void *buffer,

@@ -24,9 +24,8 @@ void aDevLedHandleStructInit(aDevLedHandle_t *handle)
         return;
     }
 
-    handle->pin = ADRV_PIN_NONE;
+    aDrvGpioHandleStructInit(&handle->gpio);
     handle->active_level = ADEV_LED_ACTIVE_HIGH;
-    handle->initialized = A_FALSE;
 }
 
 aStatus_t aDevLedInit(const aDevLedConfig_t *config,
@@ -41,20 +40,18 @@ aStatus_t aDevLedInit(const aDevLedConfig_t *config,
     }
 
     aDevLedHandleStructInit(handle);
-    handle->pin = config->pin;
     handle->active_level = config->active_level;
 
     aDrvGpioConfigStructInit(&gpio_config);
     gpio_config.pin = config->pin;
     gpio_config.mode = ADRV_GPIO_OUTPUT_PUSH_PULL;
     gpio_config.initial_level = output_level(handle, config->initially_on);
-    const aStatus_t status = aDrvGpioInit(&gpio_config);
+    const aStatus_t status = aDrvGpioInit(&gpio_config, &handle->gpio);
     if (status != A_STATUS_OK) {
         aDevLedHandleStructInit(handle);
         return status;
     }
 
-    handle->initialized = A_TRUE;
     return A_STATUS_OK;
 }
 
@@ -63,11 +60,7 @@ aStatus_t aDevLedSet(aDevLedHandle_t *handle, aBool_t on)
     if (handle == NULL) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (!handle->initialized) {
-        return A_STATUS_NOT_READY;
-    }
-
-    return aDrvGpioWrite(handle->pin, output_level(handle, on));
+    return aDrvGpioWrite(&handle->gpio, output_level(handle, on));
 }
 
 aStatus_t aDevLedOn(aDevLedHandle_t *handle)
@@ -100,11 +93,7 @@ aStatus_t aDevLedGet(const aDevLedHandle_t *handle, aBool_t *on)
     if ((handle == NULL) || (on == NULL)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (!handle->initialized) {
-        return A_STATUS_NOT_READY;
-    }
-
-    status = aDrvGpioRead(handle->pin, &level);
+    status = aDrvGpioRead(&handle->gpio, &level);
     if (status != A_STATUS_OK) {
         return status;
     }

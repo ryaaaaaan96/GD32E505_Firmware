@@ -4,7 +4,7 @@
 #include "aOS.h"
 #include "aclass_system_config.h"
 
-#if ASYSTEM_SHELL_ENABLED
+#if ASHELL_ENABLED
 #include "aDev_usart.h"
 #include "aDrv_basic.h"
 #include "aShell.h"
@@ -55,7 +55,7 @@ static aStatus_t statusInit(void)
  * Shell console
  * -------------------------------------------------------------------------- */
 
-#if ASYSTEM_SHELL_ENABLED
+#if ASHELL_ENABLED
 
 static aDevUsartHandle_t s_shell_usart;
 static aShellHandle_t s_shell;

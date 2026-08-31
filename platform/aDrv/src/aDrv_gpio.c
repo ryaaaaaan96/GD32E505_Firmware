@@ -50,12 +50,23 @@ void aDrvGpioConfigStructInit(aDrvGpioConfig_t *config)
     config->initial_level = ADRV_GPIO_LOW;
 }
 
-aStatus_t aDrvGpioInit(const aDrvGpioConfig_t *config)
+void aDrvGpioHandleStructInit(aDrvGpioHandle_t *handle)
+{
+    if (handle == NULL) {
+        return;
+    }
+
+    handle->pin = ADRV_PIN_NONE;
+    handle->initialized = A_FALSE;
+}
+
+aStatus_t aDrvGpioInit(const aDrvGpioConfig_t *config,
+                       aDrvGpioHandle_t *handle)
 {
     aDrvPrivateGpio_t gpio;
     uint32_t mode;
 
-    if ((config == NULL) ||
+    if ((config == NULL) || (handle == NULL) ||
         (aDrvResolvePin(config->pin, &gpio) != A_STATUS_OK)) {
         return A_STATUS_INVALID_PARAM;
     }
@@ -91,14 +102,43 @@ aStatus_t aDrvGpioInit(const aDrvGpioConfig_t *config)
     }
     gpio_init(gpio.port, mode, GPIO_OSPEED_50MHZ, gpio.pin_mask);
 
+    handle->pin = config->pin;
+    handle->initialized = A_TRUE;
     return A_STATUS_OK;
 }
 
-aStatus_t aDrvGpioWrite(aDrvGpioPin_t pin, aDrvGpioLevel_t level)
+aStatus_t aDrvGpioDeInit(aDrvGpioHandle_t *handle)
 {
     aDrvPrivateGpio_t gpio;
 
-    if (aDrvResolvePin(pin, &gpio) != A_STATUS_OK) {
+    if (handle == NULL) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (!handle->initialized) {
+        return A_STATUS_NOT_READY;
+    }
+    if (aDrvResolvePin(handle->pin, &gpio) != A_STATUS_OK) {
+        return A_STATUS_INVALID_PARAM;
+    }
+
+    gpio_init(gpio.port, GPIO_MODE_IN_FLOATING, GPIO_OSPEED_50MHZ,
+              gpio.pin_mask);
+    aDrvGpioHandleStructInit(handle);
+    return A_STATUS_OK;
+}
+
+aStatus_t aDrvGpioWrite(const aDrvGpioHandle_t *handle,
+                        aDrvGpioLevel_t level)
+{
+    aDrvPrivateGpio_t gpio;
+
+    if (handle == NULL) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (!handle->initialized) {
+        return A_STATUS_NOT_READY;
+    }
+    if (aDrvResolvePin(handle->pin, &gpio) != A_STATUS_OK) {
         return A_STATUS_INVALID_PARAM;
     }
     if ((level != ADRV_GPIO_LOW) && (level != ADRV_GPIO_HIGH)) {
@@ -110,11 +150,18 @@ aStatus_t aDrvGpioWrite(aDrvGpioPin_t pin, aDrvGpioLevel_t level)
     return A_STATUS_OK;
 }
 
-aStatus_t aDrvGpioRead(aDrvGpioPin_t pin, aDrvGpioLevel_t *level)
+aStatus_t aDrvGpioRead(const aDrvGpioHandle_t *handle,
+                       aDrvGpioLevel_t *level)
 {
     aDrvPrivateGpio_t gpio;
 
-    if ((level == NULL) || (aDrvResolvePin(pin, &gpio) != A_STATUS_OK)) {
+    if ((handle == NULL) || (level == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (!handle->initialized) {
+        return A_STATUS_NOT_READY;
+    }
+    if (aDrvResolvePin(handle->pin, &gpio) != A_STATUS_OK) {
         return A_STATUS_INVALID_PARAM;
     }
 
@@ -124,16 +171,16 @@ aStatus_t aDrvGpioRead(aDrvGpioPin_t pin, aDrvGpioLevel_t *level)
     return A_STATUS_OK;
 }
 
-aStatus_t aDrvGpioToggle(aDrvGpioPin_t pin)
+aStatus_t aDrvGpioToggle(const aDrvGpioHandle_t *handle)
 {
     aDrvGpioLevel_t level;
     aStatus_t status;
 
-    status = aDrvGpioRead(pin, &level);
+    status = aDrvGpioRead(handle, &level);
     if (status != A_STATUS_OK) {
         return status;
     }
 
     level = level == ADRV_GPIO_HIGH ? ADRV_GPIO_LOW : ADRV_GPIO_HIGH;
-    return aDrvGpioWrite(pin, level);
+    return aDrvGpioWrite(handle, level);
 }

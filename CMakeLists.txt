@@ -10,13 +10,11 @@ aclass_select(
     TOOLCHAIN GCC
 )
 
+include(config/aclass_config.cmake)
+
 # Board clock: a 20 MHz external active oscillator drives HXTAL_IN.
 set(BOARD_HXTAL_HZ 20000000)
 set(BOARD_HXTAL_BYPASS ON)
-
-# Application features. Disabled features keep their public API through
-# lightweight stub implementations.
-set(APP_ENABLE_SHELL ON CACHE BOOL "Enable the application Shell console")
 
 project(
     ${FIRMWARE_NAME}
@@ -26,7 +24,7 @@ project(
 
 aclass_initialize()
 
-message(STATUS "Application features: shell=${APP_ENABLE_SHELL}")
+message(STATUS "aClass modules: aShell=${ASHELL_ENABLED}")
 
 add_subdirectory(platform)
 add_subdirectory(device)

@@ -16,9 +16,8 @@ typedef struct {
 } aDevLedConfig_t;
 
 typedef struct {
-    aDrvGpioPin_t pin;
+    aDrvGpioHandle_t gpio;
     aDevLedActiveLevel_t active_level;
-    aBool_t initialized;
 } aDevLedHandle_t;
 
 void aDevLedConfigStructInit(aDevLedConfig_t *config);

@@ -13,8 +13,8 @@ typedef struct {
 
 typedef struct {
     aDevUsartHandle_t usart_handle;
-    aDrvGpioPin_t de_pin;
-    aDrvGpioPin_t re_pin;
+    aDrvGpioHandle_t de_gpio;
+    aDrvGpioHandle_t re_gpio;
     aDrvGpioLevel_t transmit_level;
     aBool_t initialized;
 } aDevRS485Handle_t;

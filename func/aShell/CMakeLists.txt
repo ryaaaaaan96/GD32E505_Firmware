@@ -3,7 +3,7 @@ add_library(
     STATIC
 )
 
-if(APP_ENABLE_SHELL)
+if(ASHELL_ENABLED)
     set(LETTER_SHELL_SOURCES
         src/shell.c
         src/shell_ext.c
@@ -46,7 +46,7 @@ endif()
 target_compile_definitions(
     aShell
     PUBLIC
-        ASHELL_ENABLED=$<BOOL:${APP_ENABLE_SHELL}>
+        ASHELL_ENABLED=$<BOOL:${ASHELL_ENABLED}>
 )
 
 target_include_directories(

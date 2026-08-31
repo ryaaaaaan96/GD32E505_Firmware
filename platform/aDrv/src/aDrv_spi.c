@@ -93,7 +93,7 @@ void aDrvSpiHandleStructInit(aDrvSpiHandle_t *handle)
 
     handle->instance = 0U;
     handle->spiId = ADRV_SPI_1;
-    handle->csPin = ADRV_PIN_NONE;
+    aDrvGpioHandleStructInit(&handle->csGpio);
     handle->dataBytes = 1U;
     handle->softwareCs = A_FALSE;
     handle->initialized = A_FALSE;
@@ -104,6 +104,7 @@ aStatus_t aDrvSpiInitStatic(const aDrvSpiConfig_t *config,
 {
     const spiMapping_t *mapping;
     spi_parameter_struct parameters;
+    aStatus_t status;
 
     if ((config == NULL) || (handle == NULL) ||
         ((size_t)config->spiId >= ADRV_ARRAY_COUNT(spi_mappings)) ||
@@ -121,9 +122,17 @@ aStatus_t aDrvSpiInitStatic(const aDrvSpiConfig_t *config,
         (configure_pin(config->misoPin, GPIO_MODE_IN_FLOATING) != A_STATUS_OK)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if ((config->csMode == ADRV_SPI_CS_SOFT) &&
-        (configure_pin(config->csPin, GPIO_MODE_OUT_PP) != A_STATUS_OK)) {
-        return A_STATUS_INVALID_PARAM;
+    if (config->csMode == ADRV_SPI_CS_SOFT) {
+        aDrvGpioConfig_t gpio_config;
+
+        aDrvGpioConfigStructInit(&gpio_config);
+        gpio_config.pin = config->csPin;
+        gpio_config.mode = ADRV_GPIO_OUTPUT_PUSH_PULL;
+        gpio_config.initial_level = ADRV_GPIO_HIGH;
+        status = aDrvGpioInit(&gpio_config, &handle->csGpio);
+        if (status != A_STATUS_OK) {
+            return status;
+        }
     }
 
     mapping = &spi_mappings[config->spiId];
@@ -151,13 +160,12 @@ aStatus_t aDrvSpiInitStatic(const aDrvSpiConfig_t *config,
 
     handle->instance = mapping->instance;
     handle->spiId = config->spiId;
-    handle->csPin = config->csPin;
     handle->dataBytes = (uint8_t)(config->dataBits / 8U);
     handle->softwareCs = config->csMode == ADRV_SPI_CS_SOFT;
     handle->initialized = A_TRUE;
 
     if (handle->softwareCs != 0U) {
-        return aDrvGpioWrite(handle->csPin, ADRV_GPIO_HIGH);
+        return aDrvGpioWrite(&handle->csGpio, ADRV_GPIO_HIGH);
     }
     return A_STATUS_OK;
 }
@@ -174,6 +182,9 @@ aStatus_t aDrvSpiDeInitStatic(aDrvSpiHandle_t *handle)
     spi_disable((uint32_t)handle->instance);
     spi_i2s_deinit((uint32_t)handle->instance);
     rcu_periph_clock_disable(spi_mappings[handle->spiId].clock);
+    if (handle->csGpio.initialized) {
+        (void)aDrvGpioDeInit(&handle->csGpio);
+    }
     aDrvSpiHandleStructInit(handle);
     return A_STATUS_OK;
 }
@@ -233,6 +244,6 @@ aStatus_t aDrvSpiCsControl(aDrvSpiHandle_t *handle, uint8_t state)
         return A_STATUS_UNSUPPORTED;
     }
 
-    return aDrvGpioWrite(handle->csPin,
+    return aDrvGpioWrite(&handle->csGpio,
                          state != 0U ? ADRV_GPIO_HIGH : ADRV_GPIO_LOW);
 }

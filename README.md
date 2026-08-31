@@ -81,18 +81,15 @@ build clean
 HEX 和 BIN 构建。GD32E50X_CL 的 GCC startup、newlib syscall/sysmem 以及统一超时
 机制均已接入；startup 的向量表来自官方 V1.7.0 CL 启动文件。
 
-Shell 是可裁剪的应用功能，根 `CMakeLists.txt` 中的 `APP_ENABLE_SHELL` 默认开启。
-量产构建可显式关闭：
+Shell 是可裁剪的 aClass 功能模块，由 `config/aclass_config.cmake` 统一选择。
+量产配置中将模块关闭：
 
-```sh
-cmake -S . -B build/Production -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DAPP_ENABLE_SHELL=OFF
-cmake --build build/Production
+```cmake
+set(ASHELL_ENABLED OFF)
 ```
 
-关闭后 `aShell` target 和公共 API 继续存在，但实现切换为不创建任务、不申请
-内存的 stub；aSystem 同时不再初始化 Shell USART/DMA 或声明收发缓冲区。
+重新配置并构建后，`aShell` target 和公共 API 继续存在，但实现切换为不创建任务、
+不申请内存的 stub；aSystem 同时不再初始化 Shell USART/DMA 或声明收发缓冲区。
 
 ## WSL 宿主机与远程调试
 

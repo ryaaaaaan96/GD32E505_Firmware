@@ -10,12 +10,6 @@ target_include_directories(
         "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-target_compile_definitions(
-    ${APP_TARGET}
-    PRIVATE
-        ASYSTEM_SHELL_ENABLED=$<BOOL:${APP_ENABLE_SHELL}>
-)
-
 target_link_libraries(
     ${APP_TARGET}
     PRIVATE
@@ -24,7 +18,7 @@ target_link_libraries(
         aShell
 )
 
-if(APP_ENABLE_SHELL)
+if(ASHELL_ENABLED)
     target_link_libraries(
         ${APP_TARGET}
         PRIVATE

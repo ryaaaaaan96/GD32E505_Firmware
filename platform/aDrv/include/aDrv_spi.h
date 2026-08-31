@@ -53,7 +53,7 @@ typedef struct {
 typedef struct {
     uintptr_t instance;
     aDrvSpiId_t spiId;
-    aDrvGpioPin_t csPin;
+    aDrvGpioHandle_t csGpio;
     uint8_t dataBytes;
     aBool_t softwareCs;
     aBool_t initialized;
