@@ -7,34 +7,6 @@ static aDrvGpioLevel_t inverse_level(aDrvGpioLevel_t level)
     return level == ADRV_GPIO_HIGH ? ADRV_GPIO_LOW : ADRV_GPIO_HIGH;
 }
 
-static aErrno_t status_to_errno(aStatus_t status)
-{
-    switch (status) {
-    case A_STATUS_INVALID_PARAM:
-        return A_EINVAL;
-    case A_STATUS_BUSY:
-        return A_EAGAIN;
-    case A_STATUS_TIMEOUT:
-        return A_ETIMEDOUT;
-    case A_STATUS_NOT_READY:
-        return A_ENODEV;
-    case A_STATUS_UNSUPPORTED:
-        return A_ENOTSUP;
-    case A_STATUS_OK:
-        return A_ERRNO_NONE;
-    case A_STATUS_ERROR:
-    case A_STATUS_NO_MEMORY:
-    default:
-        return A_EIO;
-    }
-}
-
-static aSSize_t fail_with_status(aStatus_t status)
-{
-    aOSSetErrno(status_to_errno(status));
-    return -1;
-}
-
 static aStatus_t set_direction(aDevRS485Handle_t *handle,
                                uint8_t transmit)
 {
@@ -142,17 +114,17 @@ aSSize_t aDevRS485Read(aDevRS485Handle_t *handle, void *buffer,
     if ((handle == NULL) || !aTimeoutIsValid(timeout) ||
         (buffer_size > (size_t)PTRDIFF_MAX) ||
         ((buffer == NULL) && (buffer_size != 0U))) {
-        return fail_with_status(A_STATUS_INVALID_PARAM);
+        return aOSFailWithStatus(A_STATUS_INVALID_PARAM);
     }
     if (handle->initialized == 0U) {
-        return fail_with_status(A_STATUS_NOT_READY);
+        return aOSFailWithStatus(A_STATUS_NOT_READY);
     }
     if (buffer_size == 0U) {
         return 0;
     }
     status = set_direction(handle, 0U);
     if (status != A_STATUS_OK) {
-        return fail_with_status(status);
+        return aOSFailWithStatus(status);
     }
     return aDevUsartRead(&handle->usart_handle, buffer, buffer_size,
                          timeout);
@@ -168,10 +140,10 @@ aSSize_t aDevRS485Write(aDevRS485Handle_t *handle, const void *data,
     if ((handle == NULL) || !aTimeoutIsValid(timeout) ||
         (data_size > (size_t)PTRDIFF_MAX) ||
         ((data == NULL) && (data_size != 0U))) {
-        return fail_with_status(A_STATUS_INVALID_PARAM);
+        return aOSFailWithStatus(A_STATUS_INVALID_PARAM);
     }
     if (handle->initialized == 0U) {
-        return fail_with_status(A_STATUS_NOT_READY);
+        return aOSFailWithStatus(A_STATUS_NOT_READY);
     }
     if (data_size == 0U) {
         return 0;
@@ -180,7 +152,7 @@ aSSize_t aDevRS485Write(aDevRS485Handle_t *handle, const void *data,
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
     status = set_direction(handle, 1U);
     if (status != A_STATUS_OK) {
-        return fail_with_status(status);
+        return aOSFailWithStatus(status);
     }
 
     written = aDevUsartWrite(
@@ -202,10 +174,10 @@ aSSize_t aDevRS485Write(aDevRS485Handle_t *handle, const void *data,
             return written;
         }
         if (status != A_STATUS_OK) {
-            return fail_with_status(status);
+            return aOSFailWithStatus(status);
         }
         if (direction_status != A_STATUS_OK) {
-            return fail_with_status(direction_status);
+            return aOSFailWithStatus(direction_status);
         }
     }
 

@@ -60,7 +60,6 @@ static aStatus_t statusInit(void)
 static aDevUsartHandle_t s_shell_usart;
 static aShellHandle_t s_shell;
 static uint8_t s_shell_rx_buffer[ASYSTEM_SHELL_RX_BUFFER_SIZE];
-static uint8_t s_shell_rx_dma_buffer[ASYSTEM_SHELL_RX_DMA_BUFFER_SIZE];
 static uint8_t s_shell_tx_buffer[ASYSTEM_SHELL_TX_BUFFER_SIZE];
 
 static int16_t shellWrite(char *buffer, uint16_t size)
@@ -93,8 +92,6 @@ static aStatus_t shellUsartInit(void)
     config.interrupt_priority = ASYSTEM_SHELL_IRQ_PRIORITY;
     config.rx_buffer = s_shell_rx_buffer;
     config.rx_buffer_size = sizeof(s_shell_rx_buffer);
-    config.rx_dma_buffer = s_shell_rx_dma_buffer;
-    config.rx_dma_buffer_size = sizeof(s_shell_rx_dma_buffer);
     config.tx_buffer = s_shell_tx_buffer;
     config.tx_buffer_size = sizeof(s_shell_tx_buffer);
 

@@ -5,12 +5,31 @@
 
 #define ADRV_USART_ASYNC_MAX_TRANSFER 65535U
 
+/*
+ * GD32E505 fixed USART DMA request mapping.
+ *
+ * UART3 and USART5 share both DMA channels. They may use DMA independently in
+ * opposite directions, but the same direction cannot be active at the same
+ * time on both peripherals.
+ */
+#define ADRV_USART0_TX_DMA_CHANNEL ((aDrvDmaChannel_t)3U)  /* DMA0 CH3 */
+#define ADRV_USART0_RX_DMA_CHANNEL ((aDrvDmaChannel_t)4U)  /* DMA0 CH4 */
+#define ADRV_UART3_TX_DMA_CHANNEL  ((aDrvDmaChannel_t)11U) /* DMA1 CH4 */
+#define ADRV_UART3_RX_DMA_CHANNEL  ((aDrvDmaChannel_t)9U)  /* DMA1 CH2 */
+#define ADRV_USART5_TX_DMA_CHANNEL ADRV_UART3_TX_DMA_CHANNEL
+#define ADRV_USART5_RX_DMA_CHANNEL ADRV_UART3_RX_DMA_CHANNEL
+
 typedef struct {
     aDrvDmaHandle_t tx_dma;
     aDrvDmaHandle_t rx_dma;
     size_t rx_size;
+    volatile size_t rx_wrap_count;
+    IRQn_Type rx_dma_irq;
+    uint8_t rx_irq_priority;
     uint8_t tx_busy;
     uint8_t rx_busy;
+    uint8_t rx_circular;
+    volatile uint8_t rx_error;
 } aDrvPrivateUsartAsyncState_t;
 
 static aDrvPrivateUsartAsyncState_t s_async_states[ADRV_USART_5 + 1U];
@@ -24,14 +43,16 @@ static aStatus_t tx_dma_channel_get(aDrvUsartId_t id,
 
     switch (id) {
     case ADRV_USART_0:
-        *channel = (aDrvDmaChannel_t)3U;  /* DMA0 Channel 3 */
+        *channel = ADRV_USART0_TX_DMA_CHANNEL;
+        return A_STATUS_OK;
+    case ADRV_USART_3:
+        *channel = ADRV_UART3_TX_DMA_CHANNEL;
         return A_STATUS_OK;
     case ADRV_USART_5:
-        *channel = (aDrvDmaChannel_t)11U; /* DMA1 Channel 4 */
+        *channel = ADRV_USART5_TX_DMA_CHANNEL;
         return A_STATUS_OK;
     case ADRV_USART_1:
     case ADRV_USART_2:
-    case ADRV_USART_3:
     case ADRV_USART_4:
     default:
         return A_STATUS_UNSUPPORTED;
@@ -47,18 +68,35 @@ static aStatus_t rx_dma_channel_get(aDrvUsartId_t id,
 
     switch (id) {
     case ADRV_USART_0:
-        *channel = (aDrvDmaChannel_t)4U; /* DMA0 Channel 4 */
+        *channel = ADRV_USART0_RX_DMA_CHANNEL;
+        return A_STATUS_OK;
+    case ADRV_USART_3:
+        *channel = ADRV_UART3_RX_DMA_CHANNEL;
         return A_STATUS_OK;
     case ADRV_USART_5:
-        *channel = (aDrvDmaChannel_t)9U; /* DMA1 Channel 2 */
+        *channel = ADRV_USART5_RX_DMA_CHANNEL;
         return A_STATUS_OK;
     case ADRV_USART_1:
     case ADRV_USART_2:
-    case ADRV_USART_3:
     case ADRV_USART_4:
     default:
         return A_STATUS_UNSUPPORTED;
     }
+}
+
+static bool shared_dma_is_busy(aDrvUsartId_t id, bool transmit)
+{
+    const aDrvPrivateUsartAsyncState_t *other;
+
+    if (id == ADRV_USART_3) {
+        other = &s_async_states[ADRV_USART_5];
+    } else if (id == ADRV_USART_5) {
+        other = &s_async_states[ADRV_USART_3];
+    } else {
+        return false;
+    }
+
+    return transmit ? (other->tx_busy != 0U) : (other->rx_busy != 0U);
 }
 
 static aStatus_t async_dma_init(aDrvDmaHandle_t *dma,
@@ -77,6 +115,44 @@ static aStatus_t async_dma_init(aDrvDmaHandle_t *dma,
     config.direction = direction;
     config.priority = ADRV_DMA_PRIORITY_HIGH;
     return aDrvDmaInitStatic(&config, dma);
+}
+
+static IRQn_Type dma_irq_get(const aDrvDmaHandle_t *dma)
+{
+    if (dma->controller == DMA0) {
+        return (IRQn_Type)((int32_t)DMA0_Channel0_IRQn + dma->channel);
+    }
+    if (dma->controller == DMA1) {
+        return (IRQn_Type)((int32_t)DMA1_Channel0_IRQn + dma->channel);
+    }
+    return (IRQn_Type)-1;
+}
+
+static void rx_dma_flags_service(aDrvPrivateUsartAsyncState_t *state)
+{
+    const uint32_t controller = (uint32_t)state->rx_dma.controller;
+    const dma_channel_enum channel =
+        (dma_channel_enum)state->rx_dma.channel;
+
+    if (dma_flag_get(controller, channel, DMA_FLAG_FTF) != RESET) {
+        dma_flag_clear(controller, channel, DMA_FLAG_FTF);
+        ++state->rx_wrap_count;
+    }
+    if (dma_flag_get(controller, channel, DMA_FLAG_ERR) != RESET) {
+        dma_flag_clear(controller, channel, DMA_FLAG_ERR);
+        state->rx_error = 1U;
+    }
+}
+
+static void rx_dma_irq_dispatch(aDrvUsartId_t id)
+{
+    aDrvPrivateUsartAsyncState_t *state = &s_async_states[id];
+
+    if ((state->rx_busy == 0U) || (state->rx_circular == 0U)) {
+        nvic_irq_disable(state->rx_dma_irq);
+        return;
+    }
+    rx_dma_flags_service(state);
 }
 
 static void tx_stop(aDrvUsartHandle_t *handle,
@@ -118,7 +194,7 @@ aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *handle,
     }
 
     state = &s_async_states[handle->id];
-    if (state->tx_busy != 0U) {
+    if ((state->tx_busy != 0U) || shared_dma_is_busy(handle->id, true)) {
         return A_STATUS_BUSY;
     }
 
@@ -243,7 +319,7 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
     }
 
     state = &s_async_states[handle->id];
-    if (state->rx_busy != 0U) {
+    if ((state->rx_busy != 0U) || shared_dma_is_busy(handle->id, false)) {
         return A_STATUS_BUSY;
     }
 
@@ -260,6 +336,9 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
                             ADRV_DMA_DIR_PERIPH_TO_MEMORY);
     if (status == A_STATUS_OK) {
         status = aDrvDmaTransDisable(&state->rx_dma);
+    }
+    if (status == A_STATUS_OK) {
+        status = aDrvDmaCircularSet(&state->rx_dma, false);
     }
     if (status == A_STATUS_OK) {
         status = aDrvDmaSrcBufferSet(&state->rx_dma, buffer);
@@ -285,8 +364,129 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
     }
 
     state->rx_size = size;
+    state->rx_wrap_count = 0U;
+    state->rx_circular = 0U;
+    state->rx_error = 0U;
     state->rx_busy = 1U;
     return A_STATUS_OK;
+}
+
+aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
+                                        void *buffer, size_t size,
+                                        uint8_t interrupt_priority)
+{
+    aDrvPrivateUsartAsyncState_t *state;
+    aDrvDmaChannel_t channel;
+    aStatus_t status;
+
+    if ((handle == NULL) || (buffer == NULL) || (size < 2U) ||
+        (size > ADRV_USART_ASYNC_MAX_TRANSFER) ||
+        (interrupt_priority > 15U)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (handle->initialized == 0U) {
+        return A_STATUS_NOT_READY;
+    }
+    if (handle->callbacks[ADRV_USART_EXTI_RXNE].function != NULL) {
+        return A_STATUS_BUSY;
+    }
+
+    state = &s_async_states[handle->id];
+    if ((state->rx_busy != 0U) || shared_dma_is_busy(handle->id, false)) {
+        return A_STATUS_BUSY;
+    }
+
+    status = rx_dma_channel_get(handle->id, &channel);
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+    status = aDrvPrivateUsartOwnerAcquire(
+        handle, ADRV_USART_OWNER_ASYNC_RX);
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+    status = async_dma_init(&state->rx_dma, channel,
+                            ADRV_DMA_DIR_PERIPH_TO_MEMORY);
+    if (status == A_STATUS_OK) {
+        status = aDrvDmaTransDisable(&state->rx_dma);
+    }
+    if (status == A_STATUS_OK) {
+        status = aDrvDmaCircularSet(&state->rx_dma, true);
+    }
+    if (status == A_STATUS_OK) {
+        status = aDrvDmaSrcBufferSet(&state->rx_dma, buffer);
+    }
+    if (status == A_STATUS_OK) {
+        status = aDrvDmaDstBufferSet(
+            &state->rx_dma,
+            (void *)(uintptr_t)&USART_DATA((uint32_t)handle->instance));
+    }
+    if (status == A_STATUS_OK) {
+        status = aDrvDmaDstBufferLen(&state->rx_dma, (uint32_t)size);
+    }
+    if (status != A_STATUS_OK) {
+        aDrvPrivateUsartOwnerRelease(handle, ADRV_USART_OWNER_ASYNC_RX);
+        return status;
+    }
+
+    state->rx_size = size;
+    state->rx_wrap_count = 0U;
+    state->rx_dma_irq = dma_irq_get(&state->rx_dma);
+    state->rx_irq_priority = interrupt_priority;
+    state->rx_circular = 1U;
+    state->rx_error = 0U;
+    state->rx_busy = 1U;
+
+    dma_flag_clear((uint32_t)state->rx_dma.controller,
+                   (dma_channel_enum)state->rx_dma.channel, DMA_FLAG_G);
+    dma_interrupt_enable((uint32_t)state->rx_dma.controller,
+                         (dma_channel_enum)state->rx_dma.channel,
+                         DMA_INT_FTF | DMA_INT_ERR);
+    nvic_irq_enable(state->rx_dma_irq, interrupt_priority, 0U);
+    usart_dma_receive_config((uint32_t)handle->instance,
+                             USART_RECEIVE_DMA_ENABLE);
+    status = aDrvDmaTransEnable(&state->rx_dma);
+    if (status != A_STATUS_OK) {
+        dma_interrupt_disable((uint32_t)state->rx_dma.controller,
+                              (dma_channel_enum)state->rx_dma.channel,
+                              DMA_INT_FTF | DMA_INT_ERR);
+        nvic_irq_disable(state->rx_dma_irq);
+        state->rx_busy = 0U;
+        state->rx_circular = 0U;
+        aDrvPrivateUsartOwnerRelease(handle, ADRV_USART_OWNER_ASYNC_RX);
+    }
+    return status;
+}
+
+aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
+                                           size_t *received)
+{
+    aDrvPrivateUsartAsyncState_t *state;
+    size_t remaining;
+    uint8_t error;
+
+    if ((handle == NULL) || (received == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (handle->initialized == 0U) {
+        return A_STATUS_NOT_READY;
+    }
+
+    state = &s_async_states[handle->id];
+    if ((((uint32_t)handle->owner & ADRV_USART_OWNER_ASYNC_RX) == 0U) ||
+        (state->rx_busy == 0U) || (state->rx_circular == 0U)) {
+        return A_STATUS_NOT_READY;
+    }
+
+    nvic_irq_disable(state->rx_dma_irq);
+    rx_dma_flags_service(state);
+    remaining = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
+    *received = state->rx_wrap_count * state->rx_size +
+                (state->rx_size - remaining);
+    error = state->rx_error;
+    nvic_irq_enable(state->rx_dma_irq, state->rx_irq_priority, 0U);
+
+    return error != 0U ? A_STATUS_ERROR : A_STATUS_OK;
 }
 
 aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
@@ -312,10 +512,19 @@ aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
     usart_dma_receive_config((uint32_t)handle->instance,
                              USART_RECEIVE_DMA_DISABLE);
     remaining = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
+    if (state->rx_circular != 0U) {
+        nvic_irq_disable(state->rx_dma_irq);
+        rx_dma_flags_service(state);
+        dma_interrupt_disable((uint32_t)state->rx_dma.controller,
+                              (dma_channel_enum)state->rx_dma.channel,
+                              DMA_INT_FTF | DMA_INT_ERR);
+    }
     if (received != NULL) {
-        *received = state->rx_size - remaining;
+        *received = state->rx_wrap_count * state->rx_size +
+                    (state->rx_size - remaining);
     }
     state->rx_busy = 0U;
+    state->rx_circular = 0U;
     aDrvPrivateUsartOwnerRelease(handle, ADRV_USART_OWNER_ASYNC_RX);
     return A_STATUS_OK;
 }
@@ -338,6 +547,28 @@ aStatus_t aDrvUsartAsyncRxAbort(aDrvUsartHandle_t *handle)
     if (state->rx_dma.initialized != 0U) {
         (void)aDrvDmaDeInitStatic(&state->rx_dma);
         state->rx_size = 0U;
+        state->rx_wrap_count = 0U;
+        state->rx_irq_priority = 0U;
+        state->rx_circular = 0U;
+        state->rx_error = 0U;
     }
     return A_STATUS_OK;
+}
+
+void DMA0_Channel4_IRQHandler(void)
+{
+    rx_dma_irq_dispatch(ADRV_USART_0);
+}
+
+void DMA1_Channel2_IRQHandler(void)
+{
+    if ((s_async_states[ADRV_USART_3].rx_busy != 0U) &&
+        (s_async_states[ADRV_USART_3].rx_circular != 0U)) {
+        rx_dma_irq_dispatch(ADRV_USART_3);
+    } else if ((s_async_states[ADRV_USART_5].rx_busy != 0U) &&
+               (s_async_states[ADRV_USART_5].rx_circular != 0U)) {
+        rx_dma_irq_dispatch(ADRV_USART_5);
+    } else {
+        nvic_irq_disable(DMA1_Channel2_IRQn);
+    }
 }

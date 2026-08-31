@@ -103,8 +103,25 @@ aStatus_t aDrvUsartAsyncTxGetRemaining(aDrvUsartHandle_t *handle,
                                        size_t *remaining);
 aStatus_t aDrvUsartAsyncTxAbort(aDrvUsartHandle_t *handle);
 bool aDrvUsartAsyncRxIsSupported(const aDrvUsartHandle_t *handle);
+
+/* Start one finite DMA reception. Use Stop() to obtain its received length. */
 aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
                                 void *buffer, size_t size);
+
+/*
+ * Start continuous circular DMA reception directly into buffer. The buffer is
+ * owned by DMA until Stop()/Abort(); size is limited by the target DMA counter.
+ */
+aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
+                                        void *buffer, size_t size,
+                                        uint8_t interrupt_priority);
+
+/*
+ * Return the cumulative byte count since CircularStart(). The unsigned count
+ * may naturally wrap; callers obtain new bytes with unsigned subtraction.
+ */
+aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
+                                           size_t *received);
 aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
                                size_t *received);
 aStatus_t aDrvUsartAsyncRxAbort(aDrvUsartHandle_t *handle);

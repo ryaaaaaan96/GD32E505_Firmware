@@ -49,10 +49,9 @@ static aStatus_t wait_command_complete(aDevFlash25qHandle_t *handle,
         if (complete) {
             return A_STATUS_OK;
         }
-        if (aTimepointExpired(end, aOSGetUptimeMs())) {
+        if (aOSPollWaitExpired(end)) {
             return A_STATUS_TIMEOUT;
         }
-        aOSYield();
     }
 }
 

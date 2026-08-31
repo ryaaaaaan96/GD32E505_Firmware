@@ -46,6 +46,25 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
     return A_STATUS_UNSUPPORTED;
 }
 
+aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
+                                        void *buffer, size_t size,
+                                        uint8_t interrupt_priority)
+{
+    (void)handle;
+    (void)buffer;
+    (void)size;
+    (void)interrupt_priority;
+    return A_STATUS_UNSUPPORTED;
+}
+
+aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
+                                           size_t *received)
+{
+    (void)handle;
+    (void)received;
+    return A_STATUS_UNSUPPORTED;
+}
+
 aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
                                size_t *received)
 {

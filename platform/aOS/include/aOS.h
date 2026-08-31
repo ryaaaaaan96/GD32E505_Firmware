@@ -27,5 +27,8 @@ void aOSYield(void);
 uint32_t aOSGetUptimeMs(void);
 aErrno_t aOSGetErrno(void);
 void aOSSetErrno(aErrno_t error);
+aSSize_t aOSFailWithStatus(aStatus_t status);
+aSSize_t aOSFailWithTimeout(aTimeout_t timeout);
+bool aOSPollWaitExpired(const aTimepoint_t *timepoint);
 
 #endif

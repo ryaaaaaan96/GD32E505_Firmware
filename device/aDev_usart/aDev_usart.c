@@ -4,50 +4,6 @@
 
 #include <limits.h>
 
-static aErrno_t status_to_errno(aStatus_t status)
-{
-    switch (status) {
-    case A_STATUS_INVALID_PARAM:
-        return A_EINVAL;
-    case A_STATUS_BUSY:
-        return A_EAGAIN;
-    case A_STATUS_TIMEOUT:
-        return A_ETIMEDOUT;
-    case A_STATUS_NOT_READY:
-        return A_ENODEV;
-    case A_STATUS_UNSUPPORTED:
-        return A_ENOTSUP;
-    case A_STATUS_OK:
-        return A_ERRNO_NONE;
-    case A_STATUS_ERROR:
-    case A_STATUS_NO_MEMORY:
-    default:
-        return A_EIO;
-    }
-}
-
-static aSSize_t fail_with_status(aStatus_t status)
-{
-    aOSSetErrno(status_to_errno(status));
-    return -1;
-}
-
-static aSSize_t fail_when_wait_expires(aTimeout_t timeout)
-{
-    aOSSetErrno(timeout.milliseconds == 0U ? A_EAGAIN : A_ETIMEDOUT);
-    return -1;
-}
-
-static bool wait_expired(const aTimepoint_t *end)
-{
-    if (!aTimepointExpired(end, aOSGetUptimeMs())) {
-        aOSYield();
-        return false;
-    }
-
-    return true;
-}
-
 static void irq_receive(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
@@ -92,34 +48,54 @@ static void irq_idle(void *argument)
     ++handle->idle_event_count;
 }
 
+static aStatus_t dma_rx_commit(aDevUsartHandle_t *handle)
+{
+    size_t received = handle->rx_dma_observed;
+    size_t added;
+    size_t free_space;
+    aStatus_t status;
+
+    status = aDrvUsartAsyncRxGetReceivedCount(&handle->drv_handle,
+                                              &received);
+    added = received - handle->rx_dma_observed;
+    handle->rx_dma_observed = received;
+
+    if (added == 0U) {
+        if (status != A_STATUS_OK) {
+            handle->rx_overflow = 1U;
+        }
+        return status;
+    }
+
+    free_space = handle->rx_buffer_size - handle->rx_count;
+    if (added >= handle->rx_buffer_size) {
+        handle->rx_tail = received % handle->rx_buffer_size;
+        handle->rx_count = handle->rx_buffer_size;
+        handle->rx_overflow = 1U;
+    } else if (added > free_space) {
+        const size_t discarded = added - free_space;
+
+        handle->rx_tail =
+            (handle->rx_tail + discarded) % handle->rx_buffer_size;
+        handle->rx_count = handle->rx_buffer_size;
+        handle->rx_overflow = 1U;
+    } else {
+        handle->rx_count += added;
+    }
+    handle->rx_head = received % handle->rx_buffer_size;
+
+    if (status != A_STATUS_OK) {
+        handle->rx_overflow = 1U;
+    }
+    return status;
+}
+
 static void dma_rx_idle(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
-    size_t received = 0U;
-    size_t index;
 
-    if (aDrvUsartAsyncRxStop(&handle->drv_handle, &received) !=
-        A_STATUS_OK) {
-        handle->rx_overflow = 1U;
-        return;
-    }
-
-    for (index = 0U; index < received; ++index) {
-        if (handle->rx_count >= handle->rx_buffer_size) {
-            handle->rx_overflow = 1U;
-            break;
-        }
-        handle->rx_buffer[handle->rx_head] = handle->rx_dma_buffer[index];
-        handle->rx_head = (handle->rx_head + 1U) % handle->rx_buffer_size;
-        ++handle->rx_count;
-    }
+    (void)dma_rx_commit(handle);
     ++handle->idle_event_count;
-
-    if (aDrvUsartAsyncRxStart(&handle->drv_handle,
-                              handle->rx_dma_buffer,
-                              handle->rx_dma_buffer_size) != A_STATUS_OK) {
-        handle->rx_overflow = 1U;
-    }
 }
 
 static aStatus_t register_irq_callback(aDevUsartHandle_t *handle,
@@ -190,16 +166,13 @@ static aStatus_t buffered_tx_dma_rx_init(
         return A_STATUS_UNSUPPORTED;
     }
     if ((config->rx_buffer == NULL) || (config->rx_buffer_size < 2U) ||
-        (config->rx_dma_buffer == NULL) ||
-        (config->rx_dma_buffer_size < 2U) ||
+        (config->rx_buffer_size > 65535U) ||
         (config->tx_buffer == NULL) || (config->tx_buffer_size < 2U)) {
         return A_STATUS_INVALID_PARAM;
     }
 
     handle->rx_buffer = config->rx_buffer;
     handle->rx_buffer_size = config->rx_buffer_size;
-    handle->rx_dma_buffer = config->rx_dma_buffer;
-    handle->rx_dma_buffer_size = config->rx_dma_buffer_size;
     handle->tx_buffer = config->tx_buffer;
     handle->tx_buffer_size = config->tx_buffer_size;
 
@@ -212,9 +185,9 @@ static aStatus_t buffered_tx_dma_rx_init(
                                        config->interrupt_priority, false);
     }
     if (status == A_STATUS_OK) {
-        status = aDrvUsartAsyncRxStart(&handle->drv_handle,
-                                       handle->rx_dma_buffer,
-                                       handle->rx_dma_buffer_size);
+        status = aDrvUsartAsyncRxCircularStart(
+            &handle->drv_handle, handle->rx_buffer,
+            handle->rx_buffer_size, config->interrupt_priority);
     }
     if (status == A_STATUS_OK) {
         status = aDrvUsartSetInterruptEnabled(
@@ -234,8 +207,6 @@ void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
     config->interrupt_priority = 5U;
     config->rx_buffer = NULL;
     config->rx_buffer_size = 0U;
-    config->rx_dma_buffer = NULL;
-    config->rx_dma_buffer_size = 0U;
     config->tx_buffer = NULL;
     config->tx_buffer_size = 0U;
 }
@@ -250,8 +221,7 @@ void aDevUsartHandleStructInit(aDevUsartHandle_t *handle)
     handle->mode = ADEV_USART_MODE_POLLING;
     handle->rx_buffer = NULL;
     handle->rx_buffer_size = 0U;
-    handle->rx_dma_buffer = NULL;
-    handle->rx_dma_buffer_size = 0U;
+    handle->rx_dma_observed = 0U;
     handle->rx_head = 0U;
     handle->rx_tail = 0U;
     handle->rx_count = 0U;
@@ -323,25 +293,31 @@ static aSSize_t polling_read(aDevUsartHandle_t *handle, void *buffer,
         if (status == A_STATUS_OK) {
             ++count;
         } else if (status != A_STATUS_BUSY) {
-            return count != 0U ? (aSSize_t)count : fail_with_status(status);
-        } else if (wait_expired(&end)) {
             return count != 0U ? (aSSize_t)count
-                               : fail_when_wait_expires(timeout);
+                               : aOSFailWithStatus(status);
+        } else if (aOSPollWaitExpired(&end)) {
+            return count != 0U ? (aSSize_t)count
+                               : aOSFailWithTimeout(timeout);
         }
     }
     return (aSSize_t)count;
 }
 
-static aSSize_t interrupt_read(aDevUsartHandle_t *handle, void *buffer,
-                               size_t buffer_size, aTimeout_t timeout)
+static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
+                              size_t buffer_size, aTimeout_t timeout)
 {
     const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
     size_t count = 0U;
 
     while (count < buffer_size) {
         bool available;
+        aStatus_t status = A_STATUS_OK;
 
         aDrvUsartDisableInterrupt(&handle->drv_handle);
+        if (handle->mode ==
+            ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE) {
+            status = dma_rx_commit(handle);
+        }
         available = handle->rx_count != 0U;
         if (available) {
             ((uint8_t *)buffer)[count] = handle->rx_buffer[handle->rx_tail];
@@ -352,9 +328,12 @@ static aSSize_t interrupt_read(aDevUsartHandle_t *handle, void *buffer,
 
         if (available) {
             ++count;
-        } else if (wait_expired(&end)) {
+        } else if (status != A_STATUS_OK) {
             return count != 0U ? (aSSize_t)count
-                               : fail_when_wait_expires(timeout);
+                               : aOSFailWithStatus(status);
+        } else if (aOSPollWaitExpired(&end)) {
+            return count != 0U ? (aSSize_t)count
+                               : aOSFailWithTimeout(timeout);
         }
     }
     return (aSSize_t)count;
@@ -366,7 +345,7 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
     if ((handle == NULL) || !aTimeoutIsValid(timeout) ||
         (buffer_size > (size_t)PTRDIFF_MAX) ||
         ((buffer == NULL) && (buffer_size != 0U))) {
-        return fail_with_status(A_STATUS_INVALID_PARAM);
+        return aOSFailWithStatus(A_STATUS_INVALID_PARAM);
     }
     if (buffer_size == 0U) {
         return 0;
@@ -375,7 +354,7 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
     return (handle->mode == ADEV_USART_MODE_INTERRUPT_IDLE) ||
                    (handle->mode ==
                     ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE)
-               ? interrupt_read(handle, buffer, buffer_size, timeout)
+               ? buffered_read(handle, buffer, buffer_size, timeout)
                : polling_read(handle, buffer, buffer_size, timeout);
 }
 
@@ -392,10 +371,11 @@ static aSSize_t polling_write(aDevUsartHandle_t *handle, const void *data,
         if (status == A_STATUS_OK) {
             ++count;
         } else if (status != A_STATUS_BUSY) {
-            return count != 0U ? (aSSize_t)count : fail_with_status(status);
-        } else if (wait_expired(&end)) {
             return count != 0U ? (aSSize_t)count
-                               : fail_when_wait_expires(timeout);
+                               : aOSFailWithStatus(status);
+        } else if (aOSPollWaitExpired(&end)) {
+            return count != 0U ? (aSSize_t)count
+                               : aOSFailWithTimeout(timeout);
         }
     }
     return (aSSize_t)count;
@@ -415,7 +395,8 @@ static aSSize_t dma_write(aDevUsartHandle_t *handle, const void *data,
             &handle->drv_handle, (const uint8_t *)data + count,
             data_size - count, &started);
         if (status != A_STATUS_OK) {
-            return count != 0U ? (aSSize_t)count : fail_with_status(status);
+            return count != 0U ? (aSSize_t)count
+                               : aOSFailWithStatus(status);
         }
 
         for (;;) {
@@ -426,17 +407,17 @@ static aSSize_t dma_write(aDevUsartHandle_t *handle, const void *data,
             if (status != A_STATUS_OK) {
                 (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
                 return count != 0U ? (aSSize_t)count
-                                   : fail_with_status(status);
+                                   : aOSFailWithStatus(status);
             }
             if (remaining == 0U) {
                 count += started;
                 break;
             }
-            if (wait_expired(&end)) {
+            if (aOSPollWaitExpired(&end)) {
                 (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
                 count += started - remaining;
                 return count != 0U ? (aSSize_t)count
-                                   : fail_when_wait_expires(timeout);
+                                   : aOSFailWithTimeout(timeout);
             }
         }
     }
@@ -465,9 +446,9 @@ static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
             ++count;
             (void)aDrvUsartSetInterruptEnabled(
                 &handle->drv_handle, ADRV_USART_EXTI_TXE, true);
-        } else if (wait_expired(&end)) {
+        } else if (aOSPollWaitExpired(&end)) {
             return count != 0U ? (aSSize_t)count
-                               : fail_when_wait_expires(timeout);
+                               : aOSFailWithTimeout(timeout);
         }
     }
     return (aSSize_t)count;
@@ -479,7 +460,7 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
     if ((handle == NULL) || !aTimeoutIsValid(timeout) ||
         (data_size > (size_t)PTRDIFF_MAX) ||
         ((data == NULL) && (data_size != 0U))) {
-        return fail_with_status(A_STATUS_INVALID_PARAM);
+        return aOSFailWithStatus(A_STATUS_INVALID_PARAM);
     }
     if (data_size == 0U) {
         return 0;
@@ -521,7 +502,7 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
                          handle->tx_count == 0U)) {
             return A_STATUS_OK;
         }
-        if (wait_expired(&end)) {
+        if (aOSPollWaitExpired(&end)) {
             return timeout.milliseconds == 0U ? A_STATUS_BUSY
                                               : A_STATUS_TIMEOUT;
         }

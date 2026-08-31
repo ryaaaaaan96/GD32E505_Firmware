@@ -234,6 +234,25 @@ aStatus_t aDrvDmaTransEnable(aDrvDmaHandle_t *handle)
     return A_STATUS_OK;
 }
 
+aStatus_t aDrvDmaCircularSet(aDrvDmaHandle_t *handle, bool enabled)
+{
+    if (handle == NULL) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (handle->initialized == 0U) {
+        return A_STATUS_NOT_READY;
+    }
+
+    if (enabled) {
+        dma_circulation_enable((uint32_t)handle->controller,
+                               (dma_channel_enum)handle->channel);
+    } else {
+        dma_circulation_disable((uint32_t)handle->controller,
+                                (dma_channel_enum)handle->channel);
+    }
+    return A_STATUS_OK;
+}
+
 uint32_t aDrvDmaCurLenGet(const aDrvDmaHandle_t *handle)
 {
     if ((handle == NULL) || (handle->initialized == 0U)) {

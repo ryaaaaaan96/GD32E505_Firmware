@@ -1,6 +1,8 @@
 #ifndef A_LIB_H
 #define A_LIB_H
 
+#include "aStatus.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -28,7 +30,31 @@ typedef enum {
     A_ENODEV,
     A_ENOTSUP,
     A_EINTR,
+    A_ENOMEM,
 } aErrno_t;
+
+static inline aErrno_t aStatusToErrno(aStatus_t status)
+{
+    switch (status) {
+    case A_STATUS_OK:
+        return A_ERRNO_NONE;
+    case A_STATUS_INVALID_PARAM:
+        return A_EINVAL;
+    case A_STATUS_BUSY:
+        return A_EAGAIN;
+    case A_STATUS_TIMEOUT:
+        return A_ETIMEDOUT;
+    case A_STATUS_NOT_READY:
+        return A_ENODEV;
+    case A_STATUS_UNSUPPORTED:
+        return A_ENOTSUP;
+    case A_STATUS_NO_MEMORY:
+        return A_ENOMEM;
+    case A_STATUS_ERROR:
+    default:
+        return A_EIO;
+    }
+}
 
 typedef enum {
     A_TIMEOUT_TYPE_RELATIVE = 0,

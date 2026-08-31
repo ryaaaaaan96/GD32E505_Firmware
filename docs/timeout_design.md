@@ -111,7 +111,8 @@ typedef enum {
     A_EIO,
     A_ENODEV,
     A_ENOTSUP,
-    A_EINTR
+    A_EINTR,
+    A_ENOMEM
 } aErrno_t;
 ```
 
@@ -184,6 +185,8 @@ aStatus_t aOSInit(void);
 uint32_t aOSGetUptimeMs(void);
 void aOSDelayMs(uint32_t milliseconds);
 void aOSYield(void);
+bool aOSPollWaitExpired(const aTimepoint_t *timepoint);
+aSSize_t aOSFailWithTimeout(aTimeout_t timeout);
 ```
 
 `aOSGetUptimeMs()` 返回启动后的单调毫秒数。它不是日历时间，也不是原始 RTOS
@@ -223,6 +226,11 @@ void aOSSetErrno(aErrno_t error);
 
 errno 只在线程或任务上下文中使用。ISR 和 aDrv 不读写 errno，而是直接返回
 `aStatus_t`。
+
+`aOSPollWaitExpired()` 组合 aLib 的纯截止时间计算与当前 aOS 的 uptime/yield：
+截止时间已经到期时返回 `true`，否则让出一次执行权并返回 `false`。
+`aOSFailWithTimeout()` 在 NO_WAIT 场景设置 `A_EAGAIN`，在有限等待到期时设置
+`A_ETIMEDOUT`，然后返回 `-1`。两者只能在任务或线程上下文调用。
 
 ### device
 
@@ -272,6 +280,7 @@ read/write 返回部分长度，不修改 errno；调用者可以决定是否使
 | `A_ENODEV` | 设备未初始化或已经离线 |
 | `A_ENOTSUP` | 当前 port 不支持该操作 |
 | `A_EINTR` | 等待被任务取消、信号或平台事件中断 |
+| `A_ENOMEM` | 内存或其他动态资源分配失败 |
 
 `A_TIMEOUT_NO_WAIT` 下必须至少尝试一次硬件操作。如果没有传输任何字节，返回
 `-1` 并设置 `A_EAGAIN`。有限等待到期且没有传输任何字节时，返回 `-1` 并设置
@@ -383,15 +392,16 @@ device 实现。
 -1：失败，具体原因由 aOSGetErrno() 提供
 ```
 
-不得让 aDrv 设置 errno。aDrv 返回的 `aStatus_t` 由调用它的 device 映射为
-`aErrno_t`。errno 是任务或线程局部的附加错误信息，不能保存在共享 device handle
-中。
+不得让 aDrv 设置 errno。aDrv 返回的 `aStatus_t` 通过 aLib 的
+`aStatusToErrno()` 统一映射为 `aErrno_t`；需要返回 `-1` 的 OS 感知接口使用
+`aOSFailWithStatus()` 设置任务 errno。errno 是任务或线程局部的附加错误信息，
+不能保存在共享 device handle 中。
 
 ## 当前实现状态
 
 当前 GD32E505 + FreeRTOS 组合已经完成以下迁移：
 
-- aLib 已提供 `aTimeout_t`、`aTimepoint_t`、`aSSize_t` 和 `aErrno_t`；
+- aLib 已提供 `aTimeout_t`、`aTimepoint_t`、`aSSize_t`、`aErrno_t` 和统一状态映射；
 - 已验证 NO_WAIT、FOREVER、普通到期和 32 位计数回绕；
 - aOS 已提供单调毫秒 uptime、delay、yield 和任务局部 errno；
 - aDrv 已删除系统时基、延时以及 USART/SPI 软件超时轮询；

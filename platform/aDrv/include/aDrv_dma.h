@@ -3,6 +3,8 @@
 
 #include "aDrv_basic.h"
 
+#include <stdbool.h>
+
 typedef enum {
     ADRV_DMA_DIR_PERIPH_TO_MEMORY,
     ADRV_DMA_DIR_MEMORY_TO_PERIPH,
@@ -49,6 +51,8 @@ aStatus_t aDrvDmaDstBufferSet(aDrvDmaHandle_t *handle, void *destination);
 aStatus_t aDrvDmaDstBufferLen(aDrvDmaHandle_t *handle, uint32_t length);
 aStatus_t aDrvDmaTransDisable(aDrvDmaHandle_t *handle);
 aStatus_t aDrvDmaTransEnable(aDrvDmaHandle_t *handle);
+/* Configure address/length reload mode while the DMA channel is disabled. */
+aStatus_t aDrvDmaCircularSet(aDrvDmaHandle_t *handle, bool enabled);
 uint32_t aDrvDmaCurLenGet(const aDrvDmaHandle_t *handle);
 
 #endif

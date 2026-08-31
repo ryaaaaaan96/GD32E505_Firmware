@@ -100,6 +100,32 @@ void aOSSetErrno(aErrno_t error)
                                       (void *)(uintptr_t)error);
 }
 
+aSSize_t aOSFailWithStatus(aStatus_t status)
+{
+    aOSSetErrno(aStatusToErrno(status));
+    return -1;
+}
+
+aSSize_t aOSFailWithTimeout(aTimeout_t timeout)
+{
+    const bool no_wait =
+        (timeout.type == A_TIMEOUT_TYPE_RELATIVE) &&
+        (timeout.milliseconds == 0U);
+
+    aOSSetErrno(no_wait ? A_EAGAIN : A_ETIMEDOUT);
+    return -1;
+}
+
+bool aOSPollWaitExpired(const aTimepoint_t *timepoint)
+{
+    if (aTimepointExpired(timepoint, aOSGetUptimeMs())) {
+        return true;
+    }
+
+    aOSYield();
+    return false;
+}
+
 void vApplicationMallocFailedHook(void)
 {
     taskDISABLE_INTERRUPTS();
