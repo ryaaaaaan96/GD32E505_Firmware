@@ -1,8 +1,8 @@
 #include "aDrv_usart.h"
 
-bool aDrvUsartInterruptIsSupported(void)
+aBool_t aDrvUsartInterruptIsSupported(void)
 {
-    return false;
+    return A_FALSE;
 }
 
 aStatus_t aDrvUsartRegisterCallback(
@@ -23,7 +23,7 @@ aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
 
 aStatus_t aDrvUsartSetInterruptEnabled(aDrvUsartHandle_t *handle,
                                        aDrvUsartExti_t trigger,
-                                       bool enabled)
+                                       aBool_t enabled)
 {
     (void)handle;
     (void)trigger;

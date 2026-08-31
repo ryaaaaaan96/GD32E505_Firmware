@@ -21,6 +21,15 @@
 
 typedef ptrdiff_t aSSize_t;
 
+/*
+ * Project-wide logical type. Its storage size is intentionally not part of
+ * any protocol, persistent format, hardware register layout, or external ABI.
+ */
+typedef bool aBool_t;
+
+#define A_FALSE ((aBool_t)false)
+#define A_TRUE  ((aBool_t)true)
+
 typedef enum {
     A_ERRNO_NONE = 0,
     A_EINVAL,
@@ -69,7 +78,7 @@ typedef struct {
 typedef struct {
     uint32_t start_ms;
     uint32_t duration_ms;
-    bool forever;
+    aBool_t forever;
 } aTimepoint_t;
 
 #define A_TIMEOUT_NO_WAIT \
@@ -84,7 +93,7 @@ typedef struct {
 #define A_TIMEOUT_FOREVER \
     ((aTimeout_t){.milliseconds = 0U, .type = A_TIMEOUT_TYPE_FOREVER})
 
-static inline bool aTimeoutIsValid(aTimeout_t timeout)
+static inline aBool_t aTimeoutIsValid(aTimeout_t timeout)
 {
     return (timeout.type == A_TIMEOUT_TYPE_RELATIVE) ||
            (timeout.type == A_TIMEOUT_TYPE_FOREVER);
@@ -102,8 +111,8 @@ static inline aTimepoint_t aTimepointCalc(aTimeout_t timeout,
     return timepoint;
 }
 
-static inline bool aTimepointExpired(const aTimepoint_t *timepoint,
-                                     uint32_t now_ms)
+static inline aBool_t aTimepointExpired(const aTimepoint_t *timepoint,
+                                        uint32_t now_ms)
 {
     return (timepoint != NULL) && !timepoint->forever &&
            ((uint32_t)(now_ms - timepoint->start_ms) >=

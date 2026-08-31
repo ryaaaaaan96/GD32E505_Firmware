@@ -23,7 +23,7 @@ app                 main()、项目配置、显式初始化和测试
 ├── func            aMemory、aDataBase、aModbus、aShell 等功能
 ├── device          USART、RS485、Flash25Q 等硬件无关设备语义
 └── platform
-    ├── aLib        状态码、超时/错误类型、编译器属性和公共定义
+    ├── aLib        布尔/状态/超时/错误类型、编译器属性和公共定义
     ├── aCore       通用 Arm CMSIS Core 与工具链运行库适配
     ├── aOS         FreeRTOS 封装
     └── aDrv

@@ -128,7 +128,7 @@ typedef struct {
      * 接收异常锁存标志：RX 环形缓冲区被 DMA 追上并覆盖未读数据，或者 DMA
      * 报告传输错误时置位。
      */
-    volatile uint8_t rx_overflow;
+    volatile aBool_t rx_overflow;
 } aDevUsartHandle_t;
 
 /**
@@ -262,10 +262,10 @@ uint32_t aDevUsartGetIdleEventCount(const aDevUsartHandle_t *handle);
 /**
  * @brief 查询接收异常锁存标志。
  *
- * RX 环形缓冲区已满而覆盖未读数据，或者循环 DMA 报告传输错误时返回 true。
- * handle 为 NULL 时返回 false。
+ * RX 环形缓冲区已满而覆盖未读数据，或者循环 DMA 报告传输错误时返回
+ * A_TRUE。handle 为 NULL 时返回 A_FALSE。
  */
-bool aDevUsartHasRxOverflowed(const aDevUsartHandle_t *handle);
+aBool_t aDevUsartHasRxOverflowed(const aDevUsartHandle_t *handle);
 
 /**
  * @brief 清除接收异常锁存标志。

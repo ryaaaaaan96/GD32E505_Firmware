@@ -24,7 +24,7 @@ static uint32_t interrupt_value(aDrvUsartId_t id,
 }
 
 static void interrupt_config(aDrvUsartHandle_t *handle,
-                             aDrvUsartExti_t trigger, bool enabled)
+                             aDrvUsartExti_t trigger, aBool_t enabled)
 {
     const uint32_t interrupt = interrupt_value(handle->id, trigger);
 
@@ -45,21 +45,21 @@ static void interrupt_config(aDrvUsartHandle_t *handle,
     }
 }
 
-static bool has_registered_callback(const aDrvUsartHandle_t *handle)
+static aBool_t has_registered_callback(const aDrvUsartHandle_t *handle)
 {
     size_t index;
 
     for (index = 0U; index < ADRV_USART_EXTI_MAX; ++index) {
         if (handle->callbacks[index].function != NULL) {
-            return true;
+            return A_TRUE;
         }
     }
-    return false;
+    return A_FALSE;
 }
 
-bool aDrvUsartInterruptIsSupported(void)
+aBool_t aDrvUsartInterruptIsSupported(void)
 {
-    return true;
+    return A_TRUE;
 }
 
 aStatus_t aDrvUsartRegisterCallback(
@@ -94,7 +94,7 @@ aStatus_t aDrvUsartRegisterCallback(
     handle->callbacks[config->trigger].argument = config->argument;
     handle->irq_priority = (uint8_t)config->priority;
     nvic_irq_enable(mapping->irq, handle->irq_priority, 0U);
-    interrupt_config(handle, config->trigger, config->enable != 0U);
+    interrupt_config(handle, config->trigger, config->enabled);
     return A_STATUS_OK;
 }
 
@@ -111,7 +111,7 @@ aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
         return A_STATUS_NOT_READY;
     }
 
-    interrupt_config(handle, trigger, false);
+    interrupt_config(handle, trigger, A_FALSE);
     handle->callbacks[trigger].function = NULL;
     handle->callbacks[trigger].argument = NULL;
     if (!has_registered_callback(handle)) {
@@ -123,7 +123,7 @@ aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
 
 aStatus_t aDrvUsartSetInterruptEnabled(aDrvUsartHandle_t *handle,
                                        aDrvUsartExti_t trigger,
-                                       bool enabled)
+                                       aBool_t enabled)
 {
     if ((handle == NULL) || (trigger >= ADRV_USART_EXTI_MAX)) {
         return A_STATUS_INVALID_PARAM;
@@ -165,8 +165,8 @@ void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *handle)
     nvic_irq_disable(mapping->irq);
 }
 
-static bool interrupt_pending(const aDrvUsartHandle_t *handle,
-                              aDrvUsartExti_t trigger)
+static aBool_t interrupt_pending(const aDrvUsartHandle_t *handle,
+                                 aDrvUsartExti_t trigger)
 {
     static const uint32_t regular[] = {
         USART_INT_FLAG_TBE,

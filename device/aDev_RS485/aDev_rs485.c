@@ -8,11 +8,11 @@ static aDrvGpioLevel_t inverse_level(aDrvGpioLevel_t level)
 }
 
 static aStatus_t set_direction(aDevRS485Handle_t *handle,
-                               uint8_t transmit)
+                               aBool_t transmit)
 {
     const aDrvGpioLevel_t level =
-        transmit != 0U ? handle->transmit_level
-                       : inverse_level(handle->transmit_level);
+        transmit ? handle->transmit_level
+                 : inverse_level(handle->transmit_level);
     aStatus_t status = aDrvGpioWrite(handle->de_pin, level);
 
     if (status != A_STATUS_OK) {
@@ -45,7 +45,7 @@ void aDevRS485HandleStructInit(aDevRS485Handle_t *handle)
     handle->de_pin = ADRV_PIN_NONE;
     handle->re_pin = ADRV_PIN_NONE;
     handle->transmit_level = ADRV_GPIO_HIGH;
-    handle->initialized = 0U;
+    handle->initialized = A_FALSE;
 }
 
 aStatus_t aDevRS485Init(const aDevRS485Config_t *config,
@@ -85,8 +85,8 @@ aStatus_t aDevRS485Init(const aDevRS485Config_t *config,
     handle->de_pin = config->de_pin;
     handle->re_pin = config->re_pin;
     handle->transmit_level = config->transmit_level;
-    handle->initialized = 1U;
-    return set_direction(handle, 0U);
+    handle->initialized = A_TRUE;
+    return set_direction(handle, A_FALSE);
 }
 
 aStatus_t aDevRS485DeInit(aDevRS485Handle_t *handle)
@@ -97,7 +97,7 @@ aStatus_t aDevRS485DeInit(aDevRS485Handle_t *handle)
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
-    (void)set_direction(handle, 0U);
+    (void)set_direction(handle, A_FALSE);
     const aStatus_t status = aDevUsartDeInit(&handle->usart_handle);
     if (status != A_STATUS_OK) {
         return status;
@@ -122,7 +122,7 @@ aSSize_t aDevRS485Read(aDevRS485Handle_t *handle, void *buffer,
     if (buffer_size == 0U) {
         return 0;
     }
-    status = set_direction(handle, 0U);
+    status = set_direction(handle, A_FALSE);
     if (status != A_STATUS_OK) {
         return aOSFailWithStatus(status);
     }
@@ -150,7 +150,7 @@ aSSize_t aDevRS485Write(aDevRS485Handle_t *handle, const void *data,
     }
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
-    status = set_direction(handle, 1U);
+    status = set_direction(handle, A_TRUE);
     if (status != A_STATUS_OK) {
         return aOSFailWithStatus(status);
     }
@@ -165,7 +165,7 @@ aSSize_t aDevRS485Write(aDevRS485Handle_t *handle, const void *data,
     }
 
     {
-        const aStatus_t direction_status = set_direction(handle, 0U);
+        const aStatus_t direction_status = set_direction(handle, A_FALSE);
 
         if (written < 0) {
             return written;

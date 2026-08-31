@@ -108,7 +108,7 @@ void aDrvUsartHandleStructInit(aDrvUsartHandle_t *handle)
     }
     handle->owner = ADRV_USART_OWNER_NONE;
     handle->irq_priority = 5U;
-    handle->initialized = 0U;
+    handle->initialized = A_FALSE;
 }
 
 aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *config,
@@ -163,7 +163,7 @@ aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *config,
     handle->stop_bits = config->stop_bits;
     handle->id = config->id;
     handle->owner = ADRV_USART_OWNER_NONE;
-    handle->initialized = 1U;
+    handle->initialized = A_TRUE;
     aDrvPrivateUsartHandleSet(config->id, handle);
     return A_STATUS_OK;
 }
@@ -225,7 +225,7 @@ aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *handle, uint8_t *data)
 }
 
 aStatus_t aDrvUsartIsTransmitComplete(const aDrvUsartHandle_t *handle,
-                                      bool *complete)
+                                      aBool_t *complete)
 {
     if ((handle == NULL) || (complete == NULL)) {
         return A_STATUS_INVALID_PARAM;

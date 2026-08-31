@@ -18,7 +18,7 @@ static aDevFlash25qHandle_t *s_flash_devices[ADEV_FLASH25Q_DEVICE_COUNT];
 static aStatus_t issue_command(aDevFlash25qHandle_t *handle,
                                uint32_t instruction, uint32_t address,
                                uint32_t length, uint32_t functional_mode,
-                               uint32_t dummy_cycles, bool has_address)
+                               uint32_t dummy_cycles, aBool_t has_address)
 {
     aDrvQspiCmd_t command = {0};
     command.Instruction = instruction;
@@ -39,7 +39,7 @@ static aStatus_t wait_command_complete(aDevFlash25qHandle_t *handle,
                                        const aTimepoint_t *end)
 {
     for (;;) {
-        bool complete;
+        aBool_t complete;
         const aStatus_t status = aDrvQspiIsCommandComplete(
             &handle->qspi, &complete);
 
@@ -60,7 +60,7 @@ static aStatus_t write_enable(aDevFlash25qHandle_t *handle,
 {
     const aStatus_t status = issue_command(
         handle, FLASH_CMD_WRITE_ENABLE, 0U, 0U,
-        ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, false);
+        ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, A_FALSE);
 
     return status == A_STATUS_OK ? wait_command_complete(handle, end)
                                  : status;
@@ -73,7 +73,7 @@ static aStatus_t wait_ready(aDevFlash25qHandle_t *handle,
         uint8_t status_register = 0U;
         aStatus_t status = issue_command(
             handle, FLASH_CMD_READ_STATUS, 0U, 1U,
-            ADRV_QSPI_FMODE_INDIRECT_READ, 0U, false);
+            ADRV_QSPI_FMODE_INDIRECT_READ, 0U, A_FALSE);
         if (status == A_STATUS_OK) {
             status = aDrvQspiReceive(&handle->qspi, &status_register, 1U);
         }
@@ -104,8 +104,8 @@ void aDevFlash25qHandleStructInit(aDevFlash25qHandle_t *handle)
     aDrvQspiHandleStructInit(&handle->qspi);
     handle->size = 0U;
     handle->flash_index = 0U;
-    handle->init_ok = 0U;
-    handle->fast_read = 0U;
+    handle->initialized = A_FALSE;
+    handle->fast_read = A_FALSE;
 }
 
 aStatus_t aDevFlash25qInit(const aDevFlash25qConfig_t *config,
@@ -121,7 +121,7 @@ aStatus_t aDevFlash25qInit(const aDevFlash25qConfig_t *config,
     if (status != A_STATUS_OK) return status;
     handle->size = config->capacity;
     handle->flash_index = config->flashIndex;
-    handle->init_ok = 1U;
+    handle->initialized = A_TRUE;
     s_flash_devices[config->flashIndex] = handle;
     return A_STATUS_OK;
 }
@@ -129,7 +129,7 @@ aStatus_t aDevFlash25qInit(const aDevFlash25qConfig_t *config,
 aStatus_t aDevFlash25qDeInit(aDevFlash25qHandle_t *handle)
 {
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
-    if (handle->init_ok == 0U) return A_STATUS_NOT_READY;
+    if (!handle->initialized) return A_STATUS_NOT_READY;
     const uint8_t flash_index = handle->flash_index;
     const aStatus_t status = aDrvQspiDeInitStatic(&handle->qspi);
     if ((flash_index < ADEV_FLASH25Q_DEVICE_COUNT) &&
@@ -146,13 +146,13 @@ aStatus_t aDevFlash25qRead(aDevFlash25qHandle_t *handle, uint32_t address,
     if ((handle == NULL) || (data == NULL) || (size == 0U)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (handle->init_ok == 0U) return A_STATUS_NOT_READY;
+    if (!handle->initialized) return A_STATUS_NOT_READY;
     if ((address > handle->size) || (size > (handle->size - address))) {
         return A_STATUS_INVALID_PARAM;
     }
-    aStatus_t status = issue_command(handle, handle->fast_read != 0U ? FLASH_CMD_FAST_READ : FLASH_CMD_READ,
+    aStatus_t status = issue_command(handle, handle->fast_read ? FLASH_CMD_FAST_READ : FLASH_CMD_READ,
                                         address, size, ADRV_QSPI_FMODE_INDIRECT_READ,
-                                        handle->fast_read != 0U ? 8U : 0U, true);
+                                        handle->fast_read ? 8U : 0U, A_TRUE);
     return status == A_STATUS_OK ? aDrvQspiReceive(&handle->qspi, data, size) : status;
 }
 
@@ -168,7 +168,7 @@ aStatus_t aDevFlash25qWrite(aDevFlash25qHandle_t *handle, uint32_t address,
     if (!aTimeoutIsValid(timeout)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (handle->init_ok == 0U) return A_STATUS_NOT_READY;
+    if (!handle->initialized) return A_STATUS_NOT_READY;
     if ((address > handle->size) || (size > (handle->size - address))) {
         return A_STATUS_INVALID_PARAM;
     }
@@ -182,7 +182,7 @@ aStatus_t aDevFlash25qWrite(aDevFlash25qHandle_t *handle, uint32_t address,
         if (status == A_STATUS_OK) {
             status = issue_command(handle, FLASH_CMD_PAGE_PROGRAM, address + written,
                                    chunk, ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U,
-                                   true);
+                                   A_TRUE);
         }
         if (status == A_STATUS_OK) status = aDrvQspiTransmit(&handle->qspi, &data[written], chunk);
         if (status == A_STATUS_OK) {
@@ -207,7 +207,7 @@ aStatus_t aDevFlash25qErase(aDevFlash25qHandle_t *handle, uint32_t address,
     if (!aTimeoutIsValid(timeout)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (handle->init_ok == 0U) return A_STATUS_NOT_READY;
+    if (!handle->initialized) return A_STATUS_NOT_READY;
     if ((address > handle->size) || (size > (handle->size - address))) {
         return A_STATUS_INVALID_PARAM;
     }
@@ -218,7 +218,7 @@ aStatus_t aDevFlash25qErase(aDevFlash25qHandle_t *handle, uint32_t address,
         if (status == A_STATUS_OK) {
             status = issue_command(handle, FLASH_CMD_SECTOR_ERASE,
                                    address + offset, 0U,
-                                   ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, true);
+                                   ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, A_TRUE);
         }
         if (status == A_STATUS_OK) {
             status = wait_ready(handle, &end);
@@ -236,7 +236,7 @@ aStatus_t aDevFlash25qChipErase(aDevFlash25qHandle_t *handle,
     if ((handle == NULL) || !aTimeoutIsValid(timeout)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (handle->init_ok == 0U) {
+    if (!handle->initialized) {
         return A_STATUS_NOT_READY;
     }
 
@@ -244,7 +244,7 @@ aStatus_t aDevFlash25qChipErase(aDevFlash25qHandle_t *handle,
     aStatus_t status = write_enable(handle, &end);
     if (status == A_STATUS_OK) {
         status = issue_command(handle, FLASH_CMD_CHIP_ERASE, 0U, 0U,
-                               ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, false);
+                               ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, A_FALSE);
     }
     if (status == A_STATUS_OK) {
         status = wait_command_complete(handle, &end);
@@ -260,7 +260,7 @@ uint32_t aDevFlash25qGetSize(const aDevFlash25qHandle_t *handle)
 aStatus_t aDevFlash25qHandleIsValid(const aDevFlash25qHandle_t *handle)
 {
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
-    return handle->init_ok != 0U ? A_STATUS_OK : A_STATUS_NOT_READY;
+    return handle->initialized ? A_STATUS_OK : A_STATUS_NOT_READY;
 }
 
 aStatus_t aDevFlash25qIoCtl(aDevFlash25qHandle_t *handle, uint32_t command,
@@ -270,8 +270,8 @@ aStatus_t aDevFlash25qIoCtl(aDevFlash25qHandle_t *handle, uint32_t command,
         (command != ADEV_FLASH_IOCTL_QSPI_FAST_READ)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (handle->init_ok == 0U) return A_STATUS_NOT_READY;
-    handle->fast_read = (uint8_t)((uintptr_t)argument != 0U ? 1U : 0U);
+    if (!handle->initialized) return A_STATUS_NOT_READY;
+    handle->fast_read = (uintptr_t)argument != 0U;
     return A_STATUS_OK;
 }
 

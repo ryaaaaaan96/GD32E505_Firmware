@@ -29,6 +29,6 @@ aErrno_t aOSGetErrno(void);
 void aOSSetErrno(aErrno_t error);
 aSSize_t aOSFailWithStatus(aStatus_t status);
 aSSize_t aOSFailWithTimeout(aTimeout_t timeout);
-bool aOSPollWaitExpired(const aTimepoint_t *timepoint);
+aBool_t aOSPollWaitExpired(const aTimepoint_t *timepoint);
 
 #endif

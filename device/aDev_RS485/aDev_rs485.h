@@ -16,7 +16,7 @@ typedef struct {
     aDrvGpioPin_t de_pin;
     aDrvGpioPin_t re_pin;
     aDrvGpioLevel_t transmit_level;
-    uint8_t initialized;
+    aBool_t initialized;
 } aDevRS485Handle_t;
 
 typedef struct {

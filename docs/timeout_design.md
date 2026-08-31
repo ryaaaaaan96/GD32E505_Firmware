@@ -40,7 +40,9 @@ aCore 不得依赖 aDrv
 
 ### aLib
 
-aLib 定义与硬件和操作系统无关的公共时间类型，并提供纯计算函数：
+aLib 定义与硬件和操作系统无关的 `aBool_t` 和公共时间类型，并提供纯计算
+函数。项目自研接口统一使用 `aBool_t`、`A_TRUE`、`A_FALSE`；固定二进制格式
+与第三方源码的边界规则见 `platform/aLib/README.md`：
 
 - `aTimeout_t`：调用者给出的等待要求；
 - `aTimepoint_t`：一次操作的截止点；
@@ -72,7 +74,7 @@ typedef struct {
 typedef struct {
     uint32_t start_ms;
     uint32_t duration_ms;
-    bool forever;
+    aBool_t forever;
 } aTimepoint_t;
 
 #define A_TIMEOUT_NO_WAIT \
@@ -89,8 +91,8 @@ typedef struct {
 
 aTimepoint_t aTimepointCalc(aTimeout_t timeout, uint32_t now_ms);
 
-bool aTimepointExpired(const aTimepoint_t *timepoint,
-                       uint32_t now_ms);
+aBool_t aTimepointExpired(const aTimepoint_t *timepoint,
+                          uint32_t now_ms);
 
 aTimeout_t aTimepointRemaining(const aTimepoint_t *timepoint,
                                uint32_t now_ms);
@@ -157,7 +159,7 @@ aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *handle,
 
 aStatus_t aDrvUsartIsTransmitComplete(
     const aDrvUsartHandle_t *handle,
-    bool *complete);
+    aBool_t *complete);
 ```
 
 aDrv 公共操作中禁止出现：
@@ -185,7 +187,7 @@ aStatus_t aOSInit(void);
 uint32_t aOSGetUptimeMs(void);
 void aOSDelayMs(uint32_t milliseconds);
 void aOSYield(void);
-bool aOSPollWaitExpired(const aTimepoint_t *timepoint);
+aBool_t aOSPollWaitExpired(const aTimepoint_t *timepoint);
 aSSize_t aOSFailWithTimeout(aTimeout_t timeout);
 ```
 
@@ -228,7 +230,7 @@ errno 只在线程或任务上下文中使用。ISR 和 aDrv 不读写 errno，�
 `aStatus_t`。
 
 `aOSPollWaitExpired()` 组合 aLib 的纯截止时间计算与当前 aOS 的 uptime/yield：
-截止时间已经到期时返回 `true`，否则让出一次执行权并返回 `false`。
+截止时间已经到期时返回 `A_TRUE`，否则让出一次执行权并返回 `A_FALSE`。
 `aOSFailWithTimeout()` 在 NO_WAIT 场景设置 `A_EAGAIN`，在有限等待到期时设置
 `A_ETIMEDOUT`，然后返回 `-1`。两者只能在任务或线程上下文调用。
 

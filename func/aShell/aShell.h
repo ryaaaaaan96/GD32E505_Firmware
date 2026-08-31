@@ -1,8 +1,7 @@
 #ifndef A_SHELL_H
 #define A_SHELL_H
 
-#include "aStatus.h"
-#include <stdbool.h>
+#include "aLib.h"
 #include <stdint.h>
 
 struct shell_def;
@@ -29,7 +28,7 @@ void aShellHandleStructInit(aShellHandle_t *handle);
 aStatus_t aShellInit(aShellHandle_t *handle,
                      const aShellConfig_t *config);
 aStatus_t aShellDeInit(aShellHandle_t *handle);
-bool aShellIsEnabled(void);
+aBool_t aShellIsEnabled(void);
 void aShellPrint(aShellHandle_t *handle, const char *format, ...);
 
 #endif

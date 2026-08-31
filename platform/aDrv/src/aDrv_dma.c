@@ -74,9 +74,9 @@ void aDrvDmaConfigStructInit(aDrvDmaConfig_t *config)
     config->periphWidth = ADRV_DMA_WIDTH_8;
     config->memoryWidth = ADRV_DMA_WIDTH_8;
     config->priority = ADRV_DMA_PRIORITY_LOW;
-    config->periphIncrement = 0U;
-    config->memoryIncrement = 1U;
-    config->circular = 0U;
+    config->periphIncrement = A_FALSE;
+    config->memoryIncrement = A_TRUE;
+    config->circular = A_FALSE;
 }
 
 void aDrvDmaHandleStructInit(aDrvDmaHandle_t *handle)
@@ -87,7 +87,7 @@ void aDrvDmaHandleStructInit(aDrvDmaHandle_t *handle)
 
     handle->controller = 0U;
     handle->channel = 0U;
-    handle->initialized = 0U;
+    handle->initialized = A_FALSE;
 }
 
 aStatus_t aDrvDmaInitStatic(const aDrvDmaConfig_t *config,
@@ -143,7 +143,7 @@ aStatus_t aDrvDmaInitStatic(const aDrvDmaConfig_t *config,
 
     handle->controller = mapping.controller;
     handle->channel = mapping.channel;
-    handle->initialized = 1U;
+    handle->initialized = A_TRUE;
     return A_STATUS_OK;
 }
 
@@ -234,7 +234,7 @@ aStatus_t aDrvDmaTransEnable(aDrvDmaHandle_t *handle)
     return A_STATUS_OK;
 }
 
-aStatus_t aDrvDmaCircularSet(aDrvDmaHandle_t *handle, bool enabled)
+aStatus_t aDrvDmaCircularSet(aDrvDmaHandle_t *handle, aBool_t enabled)
 {
     if (handle == NULL) {
         return A_STATUS_INVALID_PARAM;

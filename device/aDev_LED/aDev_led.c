@@ -1,8 +1,9 @@
 #include "aDev_led.h"
 
-static aDrvGpioLevel_t output_level(const aDevLedHandle_t *handle, bool on)
+static aDrvGpioLevel_t output_level(const aDevLedHandle_t *handle, aBool_t on)
 {
-    const bool active_high = handle->active_level == ADEV_LED_ACTIVE_HIGH;
+    const aBool_t active_high =
+        handle->active_level == ADEV_LED_ACTIVE_HIGH;
     return on == active_high ? ADRV_GPIO_HIGH : ADRV_GPIO_LOW;
 }
 
@@ -14,7 +15,7 @@ void aDevLedConfigStructInit(aDevLedConfig_t *config)
 
     config->pin = ADRV_PIN_NONE;
     config->active_level = ADEV_LED_ACTIVE_HIGH;
-    config->initially_on = false;
+    config->initially_on = A_FALSE;
 }
 
 void aDevLedHandleStructInit(aDevLedHandle_t *handle)
@@ -25,7 +26,7 @@ void aDevLedHandleStructInit(aDevLedHandle_t *handle)
 
     handle->pin = ADRV_PIN_NONE;
     handle->active_level = ADEV_LED_ACTIVE_HIGH;
-    handle->initialized = false;
+    handle->initialized = A_FALSE;
 }
 
 aStatus_t aDevLedInit(const aDevLedConfig_t *config,
@@ -53,11 +54,11 @@ aStatus_t aDevLedInit(const aDevLedConfig_t *config,
         return status;
     }
 
-    handle->initialized = true;
+    handle->initialized = A_TRUE;
     return A_STATUS_OK;
 }
 
-aStatus_t aDevLedSet(aDevLedHandle_t *handle, bool on)
+aStatus_t aDevLedSet(aDevLedHandle_t *handle, aBool_t on)
 {
     if (handle == NULL) {
         return A_STATUS_INVALID_PARAM;
@@ -71,17 +72,17 @@ aStatus_t aDevLedSet(aDevLedHandle_t *handle, bool on)
 
 aStatus_t aDevLedOn(aDevLedHandle_t *handle)
 {
-    return aDevLedSet(handle, true);
+    return aDevLedSet(handle, A_TRUE);
 }
 
 aStatus_t aDevLedOff(aDevLedHandle_t *handle)
 {
-    return aDevLedSet(handle, false);
+    return aDevLedSet(handle, A_FALSE);
 }
 
 aStatus_t aDevLedToggle(aDevLedHandle_t *handle)
 {
-    bool on;
+    aBool_t on;
     aStatus_t status;
 
     status = aDevLedGet(handle, &on);
@@ -91,7 +92,7 @@ aStatus_t aDevLedToggle(aDevLedHandle_t *handle)
     return aDevLedSet(handle, !on);
 }
 
-aStatus_t aDevLedGet(const aDevLedHandle_t *handle, bool *on)
+aStatus_t aDevLedGet(const aDevLedHandle_t *handle, aBool_t *on)
 {
     aDrvGpioLevel_t level;
     aStatus_t status;
@@ -108,6 +109,6 @@ aStatus_t aDevLedGet(const aDevLedHandle_t *handle, bool *on)
         return status;
     }
 
-    *on = level == output_level(handle, true);
+    *on = level == output_level(handle, A_TRUE);
     return A_STATUS_OK;
 }

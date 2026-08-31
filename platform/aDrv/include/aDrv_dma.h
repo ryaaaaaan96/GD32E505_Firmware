@@ -3,8 +3,6 @@
 
 #include "aDrv_basic.h"
 
-#include <stdbool.h>
-
 typedef enum {
     ADRV_DMA_DIR_PERIPH_TO_MEMORY,
     ADRV_DMA_DIR_MEMORY_TO_PERIPH,
@@ -30,15 +28,15 @@ typedef struct {
     aDrvDmaWidth_t periphWidth;
     aDrvDmaWidth_t memoryWidth;
     aDrvDmaPriority_t priority;
-    uint8_t periphIncrement;
-    uint8_t memoryIncrement;
-    uint8_t circular;
+    aBool_t periphIncrement;
+    aBool_t memoryIncrement;
+    aBool_t circular;
 } aDrvDmaConfig_t;
 
 typedef struct {
     uintptr_t controller;
     uint8_t channel;
-    uint8_t initialized;
+    aBool_t initialized;
 } aDrvDmaHandle_t;
 
 void aDrvDmaConfigStructInit(aDrvDmaConfig_t *config);
@@ -52,7 +50,7 @@ aStatus_t aDrvDmaDstBufferLen(aDrvDmaHandle_t *handle, uint32_t length);
 aStatus_t aDrvDmaTransDisable(aDrvDmaHandle_t *handle);
 aStatus_t aDrvDmaTransEnable(aDrvDmaHandle_t *handle);
 /* Configure address/length reload mode while the DMA channel is disabled. */
-aStatus_t aDrvDmaCircularSet(aDrvDmaHandle_t *handle, bool enabled);
+aStatus_t aDrvDmaCircularSet(aDrvDmaHandle_t *handle, aBool_t enabled);
 uint32_t aDrvDmaCurLenGet(const aDrvDmaHandle_t *handle);
 
 #endif

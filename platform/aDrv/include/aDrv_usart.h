@@ -4,8 +4,6 @@
 #include "aDrv.h"
 #include "aDrv_gpio.h"
 
-#include <stdbool.h>
-
 typedef enum {
     ADRV_USART_0,
     ADRV_USART_1,
@@ -65,7 +63,7 @@ typedef struct {
     aDrvUsartCallback_t callbacks[ADRV_USART_EXTI_MAX];
     aDrvUsartOwner_t owner;
     uint8_t irq_priority;
-    uint8_t initialized;
+    aBool_t initialized;
 } aDrvUsartHandle_t;
 
 typedef struct {
@@ -73,7 +71,7 @@ typedef struct {
     uint32_t priority;
     aDrvInterruptCallback_t callback;
     void *argument;
-    uint8_t enable;
+    aBool_t enabled;
 } aDrvUsartExtiConfig_t;
 
 void aDrvUsartConfigStructInit(aDrvUsartConfig_t *config);
@@ -84,25 +82,25 @@ aStatus_t aDrvUsartDeInitStatic(aDrvUsartHandle_t *handle);
 aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *handle, uint8_t data);
 aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *handle, uint8_t *data);
 aStatus_t aDrvUsartIsTransmitComplete(
-    const aDrvUsartHandle_t *handle, bool *complete);
+    const aDrvUsartHandle_t *handle, aBool_t *complete);
 aStatus_t aDrvUsartRegisterCallback(
     aDrvUsartHandle_t *handle, const aDrvUsartExtiConfig_t *config);
 aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
                                       aDrvUsartExti_t trigger);
 aStatus_t aDrvUsartSetInterruptEnabled(aDrvUsartHandle_t *handle,
                                        aDrvUsartExti_t trigger,
-                                       bool enabled);
-bool aDrvUsartInterruptIsSupported(void);
+                                       aBool_t enabled);
+aBool_t aDrvUsartInterruptIsSupported(void);
 void aDrvUsartEnableInterrupt(aDrvUsartHandle_t *handle);
 void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *handle);
-bool aDrvUsartAsyncTxIsSupported(const aDrvUsartHandle_t *handle);
+aBool_t aDrvUsartAsyncTxIsSupported(const aDrvUsartHandle_t *handle);
 aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *handle,
                                 const void *data, size_t size,
                                 size_t *started);
 aStatus_t aDrvUsartAsyncTxGetRemaining(aDrvUsartHandle_t *handle,
                                        size_t *remaining);
 aStatus_t aDrvUsartAsyncTxAbort(aDrvUsartHandle_t *handle);
-bool aDrvUsartAsyncRxIsSupported(const aDrvUsartHandle_t *handle);
+aBool_t aDrvUsartAsyncRxIsSupported(const aDrvUsartHandle_t *handle);
 
 /* Start one finite DMA reception. Use Stop() to obtain its received length. */
 aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,

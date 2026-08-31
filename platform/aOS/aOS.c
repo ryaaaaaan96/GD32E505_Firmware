@@ -108,7 +108,7 @@ aSSize_t aOSFailWithStatus(aStatus_t status)
 
 aSSize_t aOSFailWithTimeout(aTimeout_t timeout)
 {
-    const bool no_wait =
+    const aBool_t no_wait =
         (timeout.type == A_TIMEOUT_TYPE_RELATIVE) &&
         (timeout.milliseconds == 0U);
 
@@ -116,14 +116,14 @@ aSSize_t aOSFailWithTimeout(aTimeout_t timeout)
     return -1;
 }
 
-bool aOSPollWaitExpired(const aTimepoint_t *timepoint)
+aBool_t aOSPollWaitExpired(const aTimepoint_t *timepoint)
 {
     if (aTimepointExpired(timepoint, aOSGetUptimeMs())) {
-        return true;
+        return A_TRUE;
     }
 
     aOSYield();
-    return false;
+    return A_FALSE;
 }
 
 void vApplicationMallocFailedHook(void)

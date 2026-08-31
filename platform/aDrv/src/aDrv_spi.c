@@ -95,8 +95,8 @@ void aDrvSpiHandleStructInit(aDrvSpiHandle_t *handle)
     handle->spiId = ADRV_SPI_1;
     handle->csPin = ADRV_PIN_NONE;
     handle->dataBytes = 1U;
-    handle->softwareCs = 0U;
-    handle->initialized = 0U;
+    handle->softwareCs = A_FALSE;
+    handle->initialized = A_FALSE;
 }
 
 aStatus_t aDrvSpiInitStatic(const aDrvSpiConfig_t *config,
@@ -154,7 +154,7 @@ aStatus_t aDrvSpiInitStatic(const aDrvSpiConfig_t *config,
     handle->csPin = config->csPin;
     handle->dataBytes = (uint8_t)(config->dataBits / 8U);
     handle->softwareCs = config->csMode == ADRV_SPI_CS_SOFT;
-    handle->initialized = 1U;
+    handle->initialized = A_TRUE;
 
     if (handle->softwareCs != 0U) {
         return aDrvGpioWrite(handle->csPin, ADRV_GPIO_HIGH);

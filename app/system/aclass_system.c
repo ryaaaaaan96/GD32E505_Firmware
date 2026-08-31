@@ -40,7 +40,7 @@ static aStatus_t statusInit(void)
     aDevLedHandleStructInit(&s_status_led);
     config.pin = ASYSTEM_STATUS_LED_PIN;
     config.active_level = ASYSTEM_STATUS_LED_ACTIVE_LEVEL;
-    config.initially_on = false;
+    config.initially_on = A_FALSE;
 
     status = aDevLedInit(&config, &s_status_led);
     if (status != A_STATUS_OK) {

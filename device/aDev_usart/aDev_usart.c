@@ -14,7 +14,7 @@ static void irq_receive(void *argument)
     }
 
     if (handle->rx_count >= handle->rx_buffer_size) {
-        handle->rx_overflow = 1U;
+        handle->rx_overflow = A_TRUE;
         return;
     }
 
@@ -29,7 +29,7 @@ static void irq_transmit(void *argument)
 
     if (handle->tx_count == 0U) {
         (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TXE, false);
+            &handle->drv_handle, ADRV_USART_EXTI_TXE, A_FALSE);
         return;
     }
 
@@ -62,7 +62,7 @@ static aStatus_t dma_rx_commit(aDevUsartHandle_t *handle)
 
     if (added == 0U) {
         if (status != A_STATUS_OK) {
-            handle->rx_overflow = 1U;
+            handle->rx_overflow = A_TRUE;
         }
         return status;
     }
@@ -71,21 +71,21 @@ static aStatus_t dma_rx_commit(aDevUsartHandle_t *handle)
     if (added >= handle->rx_buffer_size) {
         handle->rx_tail = received % handle->rx_buffer_size;
         handle->rx_count = handle->rx_buffer_size;
-        handle->rx_overflow = 1U;
+        handle->rx_overflow = A_TRUE;
     } else if (added > free_space) {
         const size_t discarded = added - free_space;
 
         handle->rx_tail =
             (handle->rx_tail + discarded) % handle->rx_buffer_size;
         handle->rx_count = handle->rx_buffer_size;
-        handle->rx_overflow = 1U;
+        handle->rx_overflow = A_TRUE;
     } else {
         handle->rx_count += added;
     }
     handle->rx_head = received % handle->rx_buffer_size;
 
     if (status != A_STATUS_OK) {
-        handle->rx_overflow = 1U;
+        handle->rx_overflow = A_TRUE;
     }
     return status;
 }
@@ -101,7 +101,7 @@ static void dma_rx_idle(void *argument)
 static aStatus_t register_irq_callback(aDevUsartHandle_t *handle,
                                        aDrvUsartExti_t trigger,
                                        aDrvInterruptCallback_t callback,
-                                       uint8_t priority, bool enabled)
+                                       uint8_t priority, aBool_t enabled)
 {
     aDrvUsartExtiConfig_t config;
 
@@ -109,7 +109,7 @@ static aStatus_t register_irq_callback(aDevUsartHandle_t *handle,
     config.priority = priority;
     config.callback = callback;
     config.argument = handle;
-    config.enable = enabled ? 1U : 0U;
+    config.enabled = enabled;
     return aDrvUsartRegisterCallback(&handle->drv_handle, &config);
 }
 
@@ -133,18 +133,18 @@ static aStatus_t interrupt_mode_init(aDevUsartHandle_t *handle,
 
     status = register_irq_callback(handle, ADRV_USART_EXTI_RXNE,
                                    irq_receive, config->interrupt_priority,
-                                   true);
+                                   A_TRUE);
     if (status != A_STATUS_OK) {
         return status;
     }
     status = register_irq_callback(handle, ADRV_USART_EXTI_TXE,
                                    irq_transmit, config->interrupt_priority,
-                                   false);
+                                   A_FALSE);
     if (status != A_STATUS_OK) {
         return status;
     }
     return register_irq_callback(handle, ADRV_USART_EXTI_IDLE,
-                                 irq_idle, config->interrupt_priority, true);
+                                 irq_idle, config->interrupt_priority, A_TRUE);
 }
 
 static aStatus_t dma_mode_init(aDevUsartHandle_t *handle,
@@ -178,11 +178,11 @@ static aStatus_t buffered_tx_dma_rx_init(
 
     status = register_irq_callback(handle, ADRV_USART_EXTI_TXE,
                                    irq_transmit,
-                                   config->interrupt_priority, false);
+                                   config->interrupt_priority, A_FALSE);
     if (status == A_STATUS_OK) {
         status = register_irq_callback(handle, ADRV_USART_EXTI_IDLE,
                                        dma_rx_idle,
-                                       config->interrupt_priority, false);
+                                       config->interrupt_priority, A_FALSE);
     }
     if (status == A_STATUS_OK) {
         status = aDrvUsartAsyncRxCircularStart(
@@ -191,7 +191,7 @@ static aStatus_t buffered_tx_dma_rx_init(
     }
     if (status == A_STATUS_OK) {
         status = aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_IDLE, true);
+            &handle->drv_handle, ADRV_USART_EXTI_IDLE, A_TRUE);
     }
     return status;
 }
@@ -231,7 +231,7 @@ void aDevUsartHandleStructInit(aDevUsartHandle_t *handle)
     handle->tx_tail = 0U;
     handle->tx_count = 0U;
     handle->idle_event_count = 0U;
-    handle->rx_overflow = 0U;
+    handle->rx_overflow = A_FALSE;
 }
 
 aStatus_t aDevUsartInit(const aDevUsartConfig_t *config,
@@ -310,7 +310,7 @@ static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
     size_t count = 0U;
 
     while (count < buffer_size) {
-        bool available;
+        aBool_t available;
         aStatus_t status = A_STATUS_OK;
 
         aDrvUsartDisableInterrupt(&handle->drv_handle);
@@ -431,7 +431,7 @@ static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
     size_t count = 0U;
 
     while (count < data_size) {
-        bool space_available;
+        aBool_t space_available;
 
         aDrvUsartDisableInterrupt(&handle->drv_handle);
         space_available = handle->tx_count < handle->tx_buffer_size;
@@ -445,7 +445,7 @@ static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
         if (space_available) {
             ++count;
             (void)aDrvUsartSetInterruptEnabled(
-                &handle->drv_handle, ADRV_USART_EXTI_TXE, true);
+                &handle->drv_handle, ADRV_USART_EXTI_TXE, A_TRUE);
         } else if (aOSPollWaitExpired(&end)) {
             return count != 0U ? (aSSize_t)count
                                : aOSFailWithTimeout(timeout);
@@ -489,7 +489,7 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
     for (;;) {
-        bool complete;
+        aBool_t complete;
         const aStatus_t status = aDrvUsartIsTransmitComplete(
             &handle->drv_handle, &complete);
 
@@ -514,14 +514,14 @@ uint32_t aDevUsartGetIdleEventCount(const aDevUsartHandle_t *handle)
     return handle == NULL ? 0U : handle->idle_event_count;
 }
 
-bool aDevUsartHasRxOverflowed(const aDevUsartHandle_t *handle)
+aBool_t aDevUsartHasRxOverflowed(const aDevUsartHandle_t *handle)
 {
-    return (handle != NULL) && (handle->rx_overflow != 0U);
+    return (handle != NULL) && handle->rx_overflow;
 }
 
 void aDevUsartClearRxOverflow(aDevUsartHandle_t *handle)
 {
     if (handle != NULL) {
-        handle->rx_overflow = 0U;
+        handle->rx_overflow = A_FALSE;
     }
 }

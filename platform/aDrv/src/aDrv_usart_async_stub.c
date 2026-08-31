@@ -1,9 +1,9 @@
 #include "aDrv_usart.h"
 
-bool aDrvUsartAsyncTxIsSupported(const aDrvUsartHandle_t *handle)
+aBool_t aDrvUsartAsyncTxIsSupported(const aDrvUsartHandle_t *handle)
 {
     (void)handle;
-    return false;
+    return A_FALSE;
 }
 
 aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *handle,
@@ -31,10 +31,10 @@ aStatus_t aDrvUsartAsyncTxAbort(aDrvUsartHandle_t *handle)
     return A_STATUS_UNSUPPORTED;
 }
 
-bool aDrvUsartAsyncRxIsSupported(const aDrvUsartHandle_t *handle)
+aBool_t aDrvUsartAsyncRxIsSupported(const aDrvUsartHandle_t *handle)
 {
     (void)handle;
-    return false;
+    return A_FALSE;
 }
 
 aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,

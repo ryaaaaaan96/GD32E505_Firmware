@@ -55,8 +55,8 @@ typedef struct {
     aDrvSpiId_t spiId;
     aDrvGpioPin_t csPin;
     uint8_t dataBytes;
-    uint8_t softwareCs;
-    uint8_t initialized;
+    aBool_t softwareCs;
+    aBool_t initialized;
 } aDrvSpiHandle_t;
 
 void aDrvSpiConfigStructInit(aDrvSpiConfig_t *config);

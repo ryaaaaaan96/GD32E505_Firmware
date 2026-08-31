@@ -78,7 +78,7 @@ void aDrvQspiHandleStructInit(aDrvQspiHandle_t *handle)
     handle->address = 0U;
     handle->transferLength = 0U;
     handle->functionalMode = 0U;
-    handle->initialized = 0U;
+    handle->initialized = A_FALSE;
 }
 
 aStatus_t aDrvQspiInitStatic(const aDrvQspiConfig_t *config,
@@ -115,7 +115,7 @@ aStatus_t aDrvQspiInitStatic(const aDrvQspiConfig_t *config,
     handle->instance = SQPI;
     handle->qspiId = config->qspiId;
     handle->csPin = config->csPin;
-    handle->initialized = 1U;
+    handle->initialized = A_TRUE;
     return A_STATUS_OK;
 }
 
@@ -202,7 +202,7 @@ aStatus_t aDrvQspiCommand(aDrvQspiHandle_t *handle,
 }
 
 aStatus_t aDrvQspiIsCommandComplete(const aDrvQspiHandle_t *handle,
-                                    bool *complete)
+                                    aBool_t *complete)
 {
     if ((handle == NULL) || (complete == NULL)) {
         return A_STATUS_INVALID_PARAM;
@@ -265,7 +265,7 @@ aStatus_t aDrvQspiReceive(aDrvQspiHandle_t *handle, uint8_t *data,
     return A_STATUS_OK;
 }
 
-void aDrvQspiCsManual(aDrvQspiHandle_t *handle, bool low)
+void aDrvQspiCsManual(aDrvQspiHandle_t *handle, aBool_t low)
 {
     (void)handle;
     (void)low;

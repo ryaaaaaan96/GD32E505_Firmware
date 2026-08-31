@@ -17,8 +17,8 @@ typedef struct {
     aDrvQspiHandle_t qspi;
     uint32_t size;
     uint8_t flash_index;
-    uint8_t init_ok;
-    uint8_t fast_read;
+    aBool_t initialized;
+    aBool_t fast_read;
 } aDevFlash25qHandle_t;
 
 void aDevFlash25qConfigStructInit(aDevFlash25qConfig_t *config);

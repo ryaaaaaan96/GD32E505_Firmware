@@ -3,8 +3,6 @@
 
 #include "aDrv_gpio.h"
 
-#include <stdbool.h>
-
 #define ADRV_QSPI_FMODE_INDIRECT_WRITE 0U
 #define ADRV_QSPI_FMODE_INDIRECT_READ  1U
 
@@ -46,7 +44,7 @@ typedef struct {
     uint32_t address;
     uint32_t transferLength;
     uint8_t functionalMode;
-    uint8_t initialized;
+    aBool_t initialized;
 } aDrvQspiHandle_t;
 
 typedef struct {
@@ -69,12 +67,12 @@ aStatus_t aDrvQspiDeInitStatic(aDrvQspiHandle_t *handle);
 aStatus_t aDrvQspiCommand(aDrvQspiHandle_t *handle,
                           const aDrvQspiCmd_t *command);
 aStatus_t aDrvQspiIsCommandComplete(const aDrvQspiHandle_t *handle,
-                                    bool *complete);
+                                    aBool_t *complete);
 aStatus_t aDrvQspiTransmit(aDrvQspiHandle_t *handle, const uint8_t *data,
                            uint32_t length);
 aStatus_t aDrvQspiReceive(aDrvQspiHandle_t *handle, uint8_t *data,
                           uint32_t length);
-void aDrvQspiCsManual(aDrvQspiHandle_t *handle, bool low);
+void aDrvQspiCsManual(aDrvQspiHandle_t *handle, aBool_t low);
 void aDrvQspiCsAuto(aDrvQspiHandle_t *handle);
 
 #endif
