@@ -93,6 +93,11 @@ aStatus_t aDrvUsartRegisterCallback(
     handle->callbacks[config->trigger].function = config->callback;
     handle->callbacks[config->trigger].argument = config->argument;
     handle->irq_priority = (uint8_t)config->priority;
+    if (config->enabled) {
+        handle->interrupt_enabled_mask |= 1UL << config->trigger;
+    } else {
+        handle->interrupt_enabled_mask &= ~(1UL << config->trigger);
+    }
     nvic_irq_enable(mapping->irq, handle->irq_priority, 0U);
     interrupt_config(handle, config->trigger, config->enabled);
     return A_STATUS_OK;
@@ -112,6 +117,7 @@ aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
     }
 
     interrupt_config(handle, trigger, A_FALSE);
+    handle->interrupt_enabled_mask &= ~(1UL << trigger);
     handle->callbacks[trigger].function = NULL;
     handle->callbacks[trigger].argument = NULL;
     if (!has_registered_callback(handle)) {
@@ -137,6 +143,11 @@ aStatus_t aDrvUsartSetInterruptEnabled(aDrvUsartHandle_t *handle,
     }
 
     interrupt_config(handle, trigger, enabled);
+    if (enabled) {
+        handle->interrupt_enabled_mask |= 1UL << trigger;
+    } else {
+        handle->interrupt_enabled_mask &= ~(1UL << trigger);
+    }
     return A_STATUS_OK;
 }
 
@@ -199,7 +210,8 @@ static void invoke_callback(aDrvUsartHandle_t *handle,
 {
     const aDrvUsartCallback_t callback = handle->callbacks[trigger];
 
-    if ((callback.function != NULL) && interrupt_pending(handle, trigger)) {
+    if (((handle->interrupt_enabled_mask & (1UL << trigger)) != 0U) &&
+        (callback.function != NULL) && interrupt_pending(handle, trigger)) {
         callback.function(callback.argument);
     }
 }
@@ -220,7 +232,9 @@ static void usart_irq_dispatch(aDrvUsartId_t id)
     invoke_callback(handle, ADRV_USART_EXTI_TXE);
     invoke_callback(handle, ADRV_USART_EXTI_TC);
 
-    if (interrupt_pending(handle, ADRV_USART_EXTI_IDLE)) {
+    if (((handle->interrupt_enabled_mask &
+          (1UL << ADRV_USART_EXTI_IDLE)) != 0U) &&
+        interrupt_pending(handle, ADRV_USART_EXTI_IDLE)) {
         (void)usart_data_receive((uint32_t)handle->instance);
         if (handle->callbacks[ADRV_USART_EXTI_IDLE].function != NULL) {
             handle->callbacks[ADRV_USART_EXTI_IDLE].function(

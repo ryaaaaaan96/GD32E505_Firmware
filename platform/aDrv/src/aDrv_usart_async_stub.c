@@ -65,6 +65,14 @@ aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
     return A_STATUS_UNSUPPORTED;
 }
 
+aStatus_t aDrvUsartAsyncRxGetRemaining(aDrvUsartHandle_t *handle,
+                                       size_t *remaining)
+{
+    (void)handle;
+    (void)remaining;
+    return A_STATUS_UNSUPPORTED;
+}
+
 aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
                                size_t *received)
 {

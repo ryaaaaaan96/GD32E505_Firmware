@@ -22,6 +22,12 @@ if(FREERTOS_TASK_NOTIFICATION_ARRAY_ENTRIES LESS 2)
     )
 endif()
 
+if(NOT FREERTOS_USE_MUTEXES)
+    message(FATAL_ERROR
+        "aOS mutex objects require FreeRTOS mutex support"
+    )
+endif()
+
 set(FREERTOS_PORT_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/portable/${FREERTOS_PORT}"
 )

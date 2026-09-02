@@ -62,6 +62,7 @@ typedef struct {
     aDrvUsartId_t id;
     aDrvUsartCallback_t callbacks[ADRV_USART_EXTI_MAX];
     aDrvUsartOwner_t owner;
+    uint32_t interrupt_enabled_mask;
     uint8_t irq_priority;
     aBool_t initialized;
 } aDrvUsartHandle_t;
@@ -120,6 +121,8 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
  */
 aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
                                            size_t *received);
+aStatus_t aDrvUsartAsyncRxGetRemaining(aDrvUsartHandle_t *handle,
+                                       size_t *remaining);
 aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
                                size_t *received);
 aStatus_t aDrvUsartAsyncRxAbort(aDrvUsartHandle_t *handle);

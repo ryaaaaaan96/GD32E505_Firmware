@@ -18,7 +18,7 @@ flag，可以按位叠加。`aDevUsartInit()` 会拒绝未知 bit 和字段中�
 | --- | --- | --- |
 | `ADEV_USART_TX_POLLING` | 轮询 TBE，逐字节写入 USART | 无额外资源 |
 | `ADEV_USART_TX_INTERRUPT_BUFFERED` | 先写入 TX 环形缓冲区，再由 TBE 中断发送 | 配置 TX 缓冲区和中断优先级 |
-| `ADEV_USART_TX_DMA_DIRECT` | 调用者缓冲区直接交给 DMA，等待本次 DMA 完成 | aDrv 提供当前 USART 的 TX DMA 路由 |
+| `ADEV_USART_TX_DMA_BUFFERED` | 数据复制到 TX ring，再由 DMA 分块排空 | TX ring；aDrv 提供当前 USART 的 TX DMA 路由 |
 
 ## RX 模式
 
@@ -103,9 +103,15 @@ FreeRTOS port 的等待对象只动态分配很小的 `waiting_task + pending` �
 Queue/Semaphore 内核对象。未来 Linux port 可在相同 aOS 接口下使用 condition
 variable/eventfd，裸机 port 可使用事件标志；不得改变 aDev 的调用方式。
 
-纯 polling TX/RX 以及当前的 DMA direct TX 没有对应的完成通知，仍使用
-`aOSYield()` 配合截止时间轮询。循环 DMA RX 未启用 IDLE 时也会保持主动查询 DMA
-位置；需要真正阻塞等待时应组合 `ADEV_USART_OPTION_RX_IDLE`。
+纯 polling TX/RX 没有对应的完成通知，仍使用 `aOSYield()` 配合截止时间轮询。
+循环 DMA RX 未启用 IDLE 时也会保持主动查询 DMA 位置；需要真正阻塞等待时应组合
+`ADEV_USART_OPTION_RX_IDLE`。DMA buffered TX 由 TC ISR 回收已经传完的 ring 分块，
+释放空间并唤醒写任务。
+
+每个 handle 内部具有独立 TX mutex 和 RX mutex。mutex 覆盖一次完整的
+`aDevUsartWrite()` 或 `aDevUsartRead()` 调用，因此多个写任务的数据不会按字节交错，
+多个读任务也不会拆分同一个读取请求。获取 mutex 的等待时间属于调用者传入的同一
+timeout 总预算；mutex 只在任务上下文使用，ISR 仍只更新环形索引和发出通知。
 
 业务若需要异步事件通知，应在初始化成功后调用
 `aDevUsartRegisterEventCallback()`，不再需要时调用
@@ -126,7 +132,8 @@ variable/eventfd，裸机 port 可使用事件标志；不得改变 aDev 的调�
 | RX interrupt buffered | `RX_READY`；组合 IDLE 时还有 `RX_IDLE` |
 | RX DMA circular + IDLE | `RX_READY`、`RX_IDLE` |
 | TX interrupt buffered | `TX_SPACE`、`TX_COMPLETE` |
-| polling、TX DMA direct、RX DMA circular without IDLE | 当前不产生业务回调 |
+| TX DMA buffered | `TX_SPACE`、`TX_COMPLETE` |
+| polling、RX DMA circular without IDLE | 当前不产生业务回调 |
 
 事件回调运行在 ISR 上下文，只能调用 ISR-safe 接口或向任务投递通知，不能执行
 阻塞 read/write 或复杂业务。这个回调接口只负责通知，不接管用户缓冲区，也不
@@ -160,10 +167,23 @@ Blocked，并由下一次 IDLE 中断唤醒。DMA 每次回绕都会由 aDrv 的
 累计接收量。生产速度追上消费速度时，循环 DMA 会覆盖最旧的未读数据；aDev
 保留最新一圈数据、移动读取位置，并锁存 RX overflow 标志供应用查询。
 
-中断缓冲 TX 的 `aDevUsartWrite()` 返回表示数据已经进入软件队列，不代表最后
-一个停止位已经发出。DMA direct TX 会在返回前停止使用调用者缓冲区，因此调用者
-可以安全复用该内存。需要确认物理发送完成时，应调用
-`aDevUsartWaitTransmitComplete()`。
+中断缓冲 TX 和 DMA buffered TX 的 `aDevUsartWrite()` 返回都表示数据已经复制进
+软件队列，不代表最后一个停止位已经发出，因此调用者可以立即复用源内存。需要确认
+物理发送完成时，应调用 `aDevUsartWaitTransmitComplete()`。
 
 当前板级组合位于 `app/system/aclass_system_config.h`。aDev 不包含 DMA handle、
 通道或寄存器地址；USART 到 TX/RX DMA 的芯片专用映射和状态由 aDrv 管理。
+
+## Direct 零拷贝接口
+
+`aDevUsartWriteDirect()` 和 `aDevUsartReadDirect()` 将调用者 buffer 直接交给 GD32
+DMA，不经过 aDev 的 TX/RX ring，也不复制 payload。Direct 调用持有对应方向 mutex，
+函数返回前无论成功、超时还是错误都必须停止 DMA 对 buffer 的访问。
+
+`WriteDirect()` 返回表示 DMA 已消费 buffer，不表示 USART TC；需要等待最后停止位时
+继续调用 `aDevUsartWaitTransmitComplete()`。没有对应 DMA 路由的实例返回
+`-1/A_ENOTSUP`，可以通过 `aDevUsartIsSupported()` 提前查询 TX/RX Direct 能力。
+
+Direct 不隐式打乱 stream 数据：TX ring 或 DMA buffered 分块尚未清空时返回
+`-1/A_EAGAIN`；RX ring 仍有未读数据或循环 DMA RX 已接管接收方向时同样返回
+`-1/A_EAGAIN`。Direct 与另一方向可以并行，例如 Direct TX 不阻止普通 RX。

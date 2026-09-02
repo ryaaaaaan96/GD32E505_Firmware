@@ -107,6 +107,7 @@ void aDrvUsartHandleStructInit(aDrvUsartHandle_t *handle)
         handle->callbacks[index].argument = NULL;
     }
     handle->owner = ADRV_USART_OWNER_NONE;
+    handle->interrupt_enabled_mask = 0U;
     handle->irq_priority = 5U;
     handle->initialized = A_FALSE;
 }

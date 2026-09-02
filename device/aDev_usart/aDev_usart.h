@@ -48,7 +48,7 @@ typedef void (*aDevUsartEventCallback_t)(aDevUsartEvent_t event,
 #define ADEV_USART_TX_MASK                 0x00000003U
 #define ADEV_USART_TX_POLLING              0x00000000U
 #define ADEV_USART_TX_INTERRUPT_BUFFERED   0x00000001U
-#define ADEV_USART_TX_DMA_DIRECT           0x00000002U
+#define ADEV_USART_TX_DMA_BUFFERED         0x00000002U
 
 /** @brief RX 模式字段及其有效值，三者互斥。 */
 #define ADEV_USART_RX_MASK                 0x0000000CU
@@ -104,8 +104,8 @@ typedef struct {
     size_t rx_buffer_size;
 
     /**
-     * TX 环形缓冲区，中断发送模式使用。aDevUsartWrite() 先写入该缓冲区，
-     * TBE ISR 再逐字节送入 USART。
+     * TX 环形缓冲区，中断缓冲和 DMA 缓冲发送模式使用。
+     * aDevUsartWrite() 只把数据复制到该缓冲区，底层再异步排空。
      */
     uint8_t *tx_buffer;
 
@@ -113,6 +113,29 @@ typedef struct {
     size_t tx_buffer_size;
 
 } aDevUsartConfig_t;
+
+/** @brief TX 方向当前所有权；应用不得直接修改。 */
+typedef enum {
+    ADEV_USART_TX_IDLE,
+    ADEV_USART_TX_STREAM,
+    ADEV_USART_TX_DIRECT,
+    ADEV_USART_TX_ASYNC,
+    ADEV_USART_TX_QUEUE,
+} aDevUsartTxState_t;
+
+/** @brief RX 方向当前所有权；应用不得直接修改。 */
+typedef enum {
+    ADEV_USART_RX_IDLE,
+    ADEV_USART_RX_STREAM,
+    ADEV_USART_RX_DIRECT,
+    ADEV_USART_RX_ASYNC,
+} aDevUsartRxState_t;
+
+/** @brief 可选的 USART 设备能力。 */
+typedef enum {
+    ADEV_USART_CAP_TX_DIRECT,
+    ADEV_USART_CAP_RX_DIRECT,
+} aDevUsartCapability_t;
 
 /**
  * @brief USART 设备运行句柄。
@@ -147,6 +170,17 @@ typedef struct {
     volatile size_t tx_tail;
     volatile size_t tx_count;
 
+    /** DMA 当前直接从 TX ring 读取的连续块长度；0 表示没有活动块。 */
+    volatile size_t tx_dma_active;
+
+    /** TX/RX 的独立运行状态，允许全双工并行。 */
+    volatile aDevUsartTxState_t tx_state;
+    volatile aDevUsartRxState_t rx_state;
+
+    /** 串行化完整 Read/Write 调用的 aOS mutex。 */
+    void *rx_mutex;
+    void *tx_mutex;
+
     /** aOS 内部等待对象；保持为 void 指针以避免向公共头文件暴露 OS 类型。 */
     void *rx_wait_object;
     void *tx_wait_object;
@@ -163,6 +197,9 @@ typedef struct {
      * 报告传输错误时置位。
      */
     volatile aBool_t rx_overflow;
+
+    /** ISR 中发现的异步 TX 错误，任务接口读取后返回给调用者。 */
+    volatile aStatus_t tx_error;
 } aDevUsartHandle_t;
 
 /**
@@ -280,7 +317,7 @@ aStatus_t aDevUsartUnregisterEventCallback(
  * @return 正数表示实际读取长度，0 表示请求长度为 0，-1 表示未读取到任何数据
  *         且发生错误；返回 -1 时使用 aOSGetErrno() 查询详细原因。
  *
- * @warning 不是 ISR 安全接口；同一 handle 的多读取者必须由上层串行化。
+ * @warning 不是 ISR 安全接口；模块内部会用 RX mutex 串行化多读取者。
  */
 aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
                        size_t buffer_size, aTimeout_t timeout);
@@ -304,11 +341,37 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
  * @return 正数表示实际提交长度，0 表示请求长度为 0，-1 表示未提交任何数据
  *         且发生错误；返回 -1 时使用 aOSGetErrno() 查询详细原因。
  *
- * @warning 不是 ISR 安全接口；多个写入者必须由上层互斥，否则不同消息可能
- *          在 TX 环形缓冲区中按字节交错。
+ * @warning 不是 ISR 安全接口；模块内部会用 TX mutex 保证一次 Write 的数据
+ *          不会与另一个写入者按字节交错。
  */
 aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
                         size_t data_size, aTimeout_t timeout);
+
+/**
+ * @brief 使用调用者 buffer 完成一次同步零拷贝接收。
+ *
+ * 成功启动后，底层硬件直接写入 buffer，不经过 aDev RX ring。函数返回前一定
+ * 停止硬件对 buffer 的访问；不支持 RX DMA/零拷贝通道的实例返回
+ * -1/A_ENOTSUP。循环 DMA RX 正在作为默认流路径运行时返回 -1/A_EAGAIN。
+ */
+aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
+                             size_t buffer_size, aTimeout_t timeout);
+
+/**
+ * @brief 使用调用者 buffer 完成一次同步零拷贝发送。
+ *
+ * 底层硬件直接读取 data，不复制到 aDev TX ring。函数返回表示硬件不再访问
+ * data，但不表示最后一个停止位已经发出；物理排空使用
+ * aDevUsartWaitTransmitComplete()。不支持 TX DMA/零拷贝通道的实例返回
+ * -1/A_ENOTSUP。
+ */
+aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
+                              const void *data, size_t data_size,
+                              aTimeout_t timeout);
+
+/** @brief 查询当前实例是否支持指定的可选零拷贝能力。 */
+aBool_t aDevUsartIsSupported(const aDevUsartHandle_t *handle,
+                             aDevUsartCapability_t capability);
 
 /**
  * @brief 等待软件 TX 队列清空且 USART 硬件报告发送完成。

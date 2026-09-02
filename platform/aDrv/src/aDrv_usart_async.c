@@ -27,6 +27,7 @@ typedef struct {
     IRQn_Type rx_dma_irq;
     uint8_t rx_irq_priority;
     aBool_t tx_busy;
+    aBool_t tx_error;
     aBool_t rx_busy;
     aBool_t rx_circular;
     volatile aBool_t rx_error;
@@ -189,7 +190,8 @@ aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *handle,
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
-    if (handle->callbacks[ADRV_USART_EXTI_TXE].function != NULL) {
+    if ((handle->interrupt_enabled_mask &
+         (1UL << ADRV_USART_EXTI_TXE)) != 0U) {
         return A_STATUS_BUSY;
     }
 
@@ -241,6 +243,7 @@ aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *handle,
     }
 
     state->tx_busy = A_TRUE;
+    state->tx_error = A_FALSE;
     *started = transfer_size;
     return A_STATUS_OK;
 }
@@ -264,6 +267,18 @@ aStatus_t aDrvUsartAsyncTxGetRemaining(aDrvUsartHandle_t *handle,
     }
 
     *remaining = (size_t)aDrvDmaCurLenGet(&state->tx_dma);
+    if (dma_flag_get((uint32_t)state->tx_dma.controller,
+                     (dma_channel_enum)state->tx_dma.channel,
+                     DMA_FLAG_ERR) != RESET) {
+        dma_flag_clear((uint32_t)state->tx_dma.controller,
+                       (dma_channel_enum)state->tx_dma.channel,
+                       DMA_FLAG_ERR);
+        state->tx_error = A_TRUE;
+    }
+    if (state->tx_error) {
+        tx_stop(handle, state);
+        return A_STATUS_ERROR;
+    }
     if (*remaining == 0U) {
         tx_stop(handle, state);
     }
@@ -288,6 +303,7 @@ aStatus_t aDrvUsartAsyncTxAbort(aDrvUsartHandle_t *handle)
     if (state->tx_dma.initialized != 0U) {
         (void)aDrvDmaDeInitStatic(&state->tx_dma);
         state->tx_busy = A_FALSE;
+        state->tx_error = A_FALSE;
     }
     return A_STATUS_OK;
 }
@@ -314,7 +330,8 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
-    if (handle->callbacks[ADRV_USART_EXTI_RXNE].function != NULL) {
+    if ((handle->interrupt_enabled_mask &
+         (1UL << ADRV_USART_EXTI_RXNE)) != 0U) {
         return A_STATUS_BUSY;
     }
 
@@ -387,7 +404,8 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
-    if (handle->callbacks[ADRV_USART_EXTI_RXNE].function != NULL) {
+    if ((handle->interrupt_enabled_mask &
+         (1UL << ADRV_USART_EXTI_RXNE)) != 0U) {
         return A_STATUS_BUSY;
     }
 
@@ -487,6 +505,36 @@ aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
     nvic_irq_enable(state->rx_dma_irq, state->rx_irq_priority, 0U);
 
     return error != 0U ? A_STATUS_ERROR : A_STATUS_OK;
+}
+
+aStatus_t aDrvUsartAsyncRxGetRemaining(aDrvUsartHandle_t *handle,
+                                       size_t *remaining)
+{
+    aDrvPrivateUsartAsyncState_t *state;
+
+    if ((handle == NULL) || (remaining == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (handle->initialized == 0U) {
+        return A_STATUS_NOT_READY;
+    }
+
+    state = &s_async_states[handle->id];
+    if ((((uint32_t)handle->owner & ADRV_USART_OWNER_ASYNC_RX) == 0U) ||
+        !state->rx_busy || state->rx_circular) {
+        return A_STATUS_NOT_READY;
+    }
+
+    *remaining = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
+    if (dma_flag_get((uint32_t)state->rx_dma.controller,
+                     (dma_channel_enum)state->rx_dma.channel,
+                     DMA_FLAG_ERR) != RESET) {
+        dma_flag_clear((uint32_t)state->rx_dma.controller,
+                       (dma_channel_enum)state->rx_dma.channel,
+                       DMA_FLAG_ERR);
+        state->rx_error = A_TRUE;
+    }
+    return state->rx_error ? A_STATUS_ERROR : A_STATUS_OK;
 }
 
 aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
