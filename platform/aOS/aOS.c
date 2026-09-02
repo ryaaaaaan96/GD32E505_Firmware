@@ -1,6 +1,7 @@
 #include "aOS.h"
 
 #include "FreeRTOS.h"
+#include "semphr.h"
 #include "task.h"
 
 #include <stdint.h>
@@ -214,6 +215,70 @@ void aOSWaitObjectNotifyFromISR(aOSWaitObject_t object)
     }
     taskEXIT_CRITICAL_FROM_ISR(interrupt_mask);
     portYIELD_FROM_ISR(higher_priority_task_woken);
+}
+
+aStatus_t aOSMutexCreate(aOSMutex_t *mutex)
+{
+    SemaphoreHandle_t handle;
+
+    if ((mutex == NULL) || (*mutex != NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+
+    handle = xSemaphoreCreateMutex();
+    if (handle == NULL) {
+        return A_STATUS_NO_MEMORY;
+    }
+
+    *mutex = (aOSMutex_t)handle;
+    return A_STATUS_OK;
+}
+
+void aOSMutexDestroy(aOSMutex_t *mutex)
+{
+    if ((mutex == NULL) || (*mutex == NULL)) {
+        return;
+    }
+
+    vSemaphoreDelete((SemaphoreHandle_t)*mutex);
+    *mutex = NULL;
+}
+
+aStatus_t aOSMutexLock(aOSMutex_t mutex, aTimeout_t timeout)
+{
+    TickType_t ticks;
+
+    if ((mutex == NULL) || !aTimeoutIsValid(timeout)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if ((xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) &&
+        (timeout.type == A_TIMEOUT_TYPE_FOREVER ||
+         timeout.milliseconds != 0U)) {
+        return A_STATUS_NOT_READY;
+    }
+
+    ticks = timeout.type == A_TIMEOUT_TYPE_FOREVER
+                ? portMAX_DELAY
+                : milliseconds_to_ticks(timeout.milliseconds);
+    if (xSemaphoreTake((SemaphoreHandle_t)mutex, ticks) == pdTRUE) {
+        return A_STATUS_OK;
+    }
+
+    return ((timeout.type == A_TIMEOUT_TYPE_RELATIVE) &&
+            (timeout.milliseconds == 0U))
+               ? A_STATUS_BUSY
+               : A_STATUS_TIMEOUT;
+}
+
+aStatus_t aOSMutexUnlock(aOSMutex_t mutex)
+{
+    if (mutex == NULL) {
+        return A_STATUS_INVALID_PARAM;
+    }
+
+    return xSemaphoreGive((SemaphoreHandle_t)mutex) == pdTRUE
+               ? A_STATUS_OK
+               : A_STATUS_ERROR;
 }
 
 aErrno_t aOSGetErrno(void)

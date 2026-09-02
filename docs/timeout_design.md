@@ -420,13 +420,16 @@ device 实现。
 
 - aLib 已提供 `aTimeout_t`、`aTimepoint_t`、`aSSize_t`、`aErrno_t` 和统一状态映射；
 - 已验证 NO_WAIT、FOREVER、普通到期和 32 位计数回绕；
-- aOS 已提供单调毫秒 uptime、delay、yield、合并通知等待对象和任务局部 errno；
+- aOS 已提供单调毫秒 uptime、delay、yield、合并通知等待对象、带超时 mutex 和
+  任务局部 errno；
 - aDrv 已删除系统时基、延时以及 USART/SPI 软件超时轮询；
 - USART/SPI aDrv 接口只尝试一次或查询一次硬件状态，SQPI 特殊命令也已改为
   启动与完成查询分离；
 - USART 和 RS485 流式接口返回长度或 `-1`，具体错误通过 aOS errno 查询；
-- USART 中断缓冲 TX/RX 和 DMA RX+IDLE 已使用 ISR 通知唤醒阻塞任务；纯 polling
-  以及尚无完成事件的 DMA direct TX 继续使用 yield 轮询；
+- USART 中断缓冲 TX/RX、DMA buffered TX 和 DMA RX+IDLE 已使用 ISR 通知唤醒阻塞
+  任务；纯 polling 继续使用 yield 轮询；
+- USART 的完整 Read/Write 由独立 RX/TX mutex 串行化，等待 mutex 与传输过程共享
+  同一个绝对 timepoint；
 - RS485 写入和发送完成使用同一个 timepoint；
 - Flash25Q 的页写、扇区擦除和整片擦除使用调用者给出的总时间预算；
 - app 已使用 `A_TIMEOUT_*` 明确选择控制台超时；

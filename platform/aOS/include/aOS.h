@@ -25,6 +25,9 @@ typedef void *aOSTaskHandle_t;
  */
 typedef void *aOSWaitObject_t;
 
+/* Opaque task mutex. A mutex is never acquired or released from an ISR. */
+typedef void *aOSMutex_t;
+
 aStatus_t aOSInit(void);
 aStatus_t aOSCreateTask(aOSTaskFunction_t function, const char *name,
                         uint16_t stack_words, void *argument,
@@ -42,6 +45,13 @@ void aOSWaitObjectNotify(aOSWaitObject_t object);
 
 /* ISR-only notification; the aOS port performs any required reschedule. */
 void aOSWaitObjectNotifyFromISR(aOSWaitObject_t object);
+
+/* Task-context mutex operations with the same timeout model as wait objects. */
+aStatus_t aOSMutexCreate(aOSMutex_t *mutex);
+void aOSMutexDestroy(aOSMutex_t *mutex);
+aStatus_t aOSMutexLock(aOSMutex_t mutex, aTimeout_t timeout);
+aStatus_t aOSMutexUnlock(aOSMutex_t mutex);
+
 aErrno_t aOSGetErrno(void);
 void aOSSetErrno(aErrno_t error);
 aSSize_t aOSFailWithStatus(aStatus_t status);

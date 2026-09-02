@@ -3,6 +3,9 @@
 #include "aOS.h"
 
 #include <limits.h>
+#include <string.h>
+
+static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle);
 
 static void notify_event(aDevUsartHandle_t *handle,
                          aDevUsartEvent_t event)
@@ -64,6 +67,41 @@ static void irq_transmit(void *argument)
 static void irq_transmit_complete(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
+
+    if ((handle->mode & ADEV_USART_TX_MASK) ==
+        ADEV_USART_TX_DMA_BUFFERED) {
+        size_t remaining = 0U;
+        aStatus_t status;
+
+        status = aDrvUsartAsyncTxGetRemaining(
+            &handle->drv_handle, &remaining);
+        if ((status == A_STATUS_OK) && (remaining != 0U)) {
+            return;
+        }
+        if (status != A_STATUS_OK) {
+            handle->tx_error = status;
+        } else {
+            handle->tx_tail =
+                (handle->tx_tail + handle->tx_dma_active) %
+                handle->tx_buffer_size;
+            handle->tx_count -= handle->tx_dma_active;
+            handle->tx_dma_active = 0U;
+            status = dma_tx_start_locked(handle);
+            if (status != A_STATUS_OK) {
+                handle->tx_error = status;
+            }
+        }
+
+        aOSWaitObjectNotifyFromISR(handle->tx_wait_object);
+        notify_event(handle, ADEV_USART_EVENT_TX_SPACE);
+        if ((handle->tx_count == 0U) ||
+            (handle->tx_error != A_STATUS_OK)) {
+            (void)aDrvUsartSetInterruptEnabled(
+                &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+            notify_event(handle, ADEV_USART_EVENT_TX_COMPLETE);
+        }
+        return;
+    }
 
     (void)aDrvUsartSetInterruptEnabled(
         &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
@@ -163,7 +201,7 @@ static aBool_t mode_is_valid(aDevUsartMode_t mode)
     switch (mode & ADEV_USART_TX_MASK) {
     case ADEV_USART_TX_POLLING:
     case ADEV_USART_TX_INTERRUPT_BUFFERED:
-    case ADEV_USART_TX_DMA_DIRECT:
+    case ADEV_USART_TX_DMA_BUFFERED:
         break;
     default:
         return A_FALSE;
@@ -207,10 +245,24 @@ static aStatus_t tx_mode_init(aDevUsartHandle_t *handle,
             handle, ADRV_USART_EXTI_TC, irq_transmit_complete,
             config->interrupt_priority, A_FALSE);
     }
-    case ADEV_USART_TX_DMA_DIRECT:
-        return aDrvUsartAsyncTxIsSupported(&handle->drv_handle)
-                   ? A_STATUS_OK
-                   : A_STATUS_UNSUPPORTED;
+    case ADEV_USART_TX_DMA_BUFFERED: {
+        aStatus_t status;
+
+        if (!aDrvUsartInterruptIsSupported() ||
+            !aDrvUsartAsyncTxIsSupported(&handle->drv_handle)) {
+            return A_STATUS_UNSUPPORTED;
+        }
+        if ((config->tx_buffer == NULL) ||
+            (config->tx_buffer_size < 2U)) {
+            return A_STATUS_INVALID_PARAM;
+        }
+        handle->tx_buffer = config->tx_buffer;
+        handle->tx_buffer_size = config->tx_buffer_size;
+        status = register_irq_callback(
+            handle, ADRV_USART_EXTI_TC, irq_transmit_complete,
+            config->interrupt_priority, A_FALSE);
+        return status;
+    }
     default:
         return A_STATUS_INVALID_PARAM;
     }
@@ -286,8 +338,10 @@ static aStatus_t wait_objects_create(aDevUsartHandle_t *handle)
 {
     aStatus_t status;
 
-    if ((handle->mode & ADEV_USART_TX_MASK) ==
-        ADEV_USART_TX_INTERRUPT_BUFFERED) {
+    if (((handle->mode & ADEV_USART_TX_MASK) ==
+         ADEV_USART_TX_INTERRUPT_BUFFERED) ||
+        ((handle->mode & ADEV_USART_TX_MASK) ==
+         ADEV_USART_TX_DMA_BUFFERED)) {
         status = aOSWaitObjectCreate(&handle->tx_wait_object);
         if (status != A_STATUS_OK) {
             return status;
@@ -313,6 +367,26 @@ static void wait_objects_destroy(aDevUsartHandle_t *handle)
 {
     aOSWaitObjectDestroy(&handle->rx_wait_object);
     aOSWaitObjectDestroy(&handle->tx_wait_object);
+}
+
+static aStatus_t mutexes_create(aDevUsartHandle_t *handle)
+{
+    aStatus_t status = aOSMutexCreate(&handle->tx_mutex);
+
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+    status = aOSMutexCreate(&handle->rx_mutex);
+    if (status != A_STATUS_OK) {
+        aOSMutexDestroy(&handle->tx_mutex);
+    }
+    return status;
+}
+
+static void mutexes_destroy(aDevUsartHandle_t *handle)
+{
+    aOSMutexDestroy(&handle->rx_mutex);
+    aOSMutexDestroy(&handle->tx_mutex);
 }
 
 void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
@@ -349,12 +423,18 @@ void aDevUsartHandleStructInit(aDevUsartHandle_t *handle)
     handle->tx_head = 0U;
     handle->tx_tail = 0U;
     handle->tx_count = 0U;
+    handle->tx_dma_active = 0U;
+    handle->tx_state = ADEV_USART_TX_IDLE;
+    handle->rx_state = ADEV_USART_RX_IDLE;
+    handle->rx_mutex = NULL;
+    handle->tx_mutex = NULL;
     handle->rx_wait_object = NULL;
     handle->tx_wait_object = NULL;
     handle->event_callback = NULL;
     handle->event_argument = NULL;
     handle->idle_event_count = 0U;
     handle->rx_overflow = A_FALSE;
+    handle->tx_error = A_STATUS_OK;
 }
 
 aStatus_t aDevUsartInit(const aDevUsartConfig_t *config,
@@ -373,7 +453,10 @@ aStatus_t aDevUsartInit(const aDevUsartConfig_t *config,
     }
     handle->mode = config->mode;
 
-    status = wait_objects_create(handle);
+    status = mutexes_create(handle);
+    if (status == A_STATUS_OK) {
+        status = wait_objects_create(handle);
+    }
     if (status == A_STATUS_OK) {
         status = tx_mode_init(handle, config);
     }
@@ -384,6 +467,7 @@ aStatus_t aDevUsartInit(const aDevUsartConfig_t *config,
     if (status != A_STATUS_OK) {
         (void)aDrvUsartDeInitStatic(&handle->drv_handle);
         wait_objects_destroy(handle);
+        mutexes_destroy(handle);
         aDevUsartHandleStructInit(handle);
     }
     return status;
@@ -397,9 +481,18 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
         return A_STATUS_INVALID_PARAM;
     }
 
+    if (!handle->drv_handle.initialized) {
+        return A_STATUS_NOT_READY;
+    }
+    if ((handle->tx_state != ADEV_USART_TX_IDLE) ||
+        (handle->rx_state != ADEV_USART_RX_IDLE)) {
+        return A_STATUS_BUSY;
+    }
+
     status = aDrvUsartDeInitStatic(&handle->drv_handle);
     if (status == A_STATUS_OK) {
         wait_objects_destroy(handle);
+        mutexes_destroy(handle);
         aDevUsartHandleStructInit(handle);
     }
     return status;
@@ -458,9 +551,9 @@ static aSSize_t fail_with_wait_status(aStatus_t status,
 }
 
 static aSSize_t polling_read(aDevUsartHandle_t *handle, void *buffer,
-                             size_t buffer_size, aTimeout_t timeout)
+                             size_t buffer_size, const aTimepoint_t *end,
+                             aTimeout_t original_timeout)
 {
-    const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
     size_t count = 0U;
 
     while (count < buffer_size) {
@@ -472,18 +565,19 @@ static aSSize_t polling_read(aDevUsartHandle_t *handle, void *buffer,
         } else if (status != A_STATUS_BUSY) {
             return count != 0U ? (aSSize_t)count
                                : aOSFailWithStatus(status);
-        } else if (aOSPollWaitExpired(&end)) {
+        } else if (aOSPollWaitExpired(end)) {
             return count != 0U ? (aSSize_t)count
-                               : aOSFailWithTimeout(timeout);
+                               : aOSFailWithTimeout(original_timeout);
         }
     }
     return (aSSize_t)count;
 }
 
 static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
-                              size_t buffer_size, aTimeout_t timeout)
+                              size_t buffer_size,
+                              const aTimepoint_t *end,
+                              aTimeout_t original_timeout)
 {
-    const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
     size_t count = 0U;
 
     while (count < buffer_size) {
@@ -509,14 +603,15 @@ static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
             return count != 0U ? (aSSize_t)count
                                : aOSFailWithStatus(status);
         } else if (handle->rx_wait_object != NULL) {
-            status = wait_for_event(handle->rx_wait_object, &end);
+            status = wait_for_event(handle->rx_wait_object, end);
             if (status != A_STATUS_OK) {
                 return count != 0U ? (aSSize_t)count
-                                   : fail_with_wait_status(status, timeout);
+                                   : fail_with_wait_status(
+                                         status, original_timeout);
             }
-        } else if (aOSPollWaitExpired(&end)) {
+        } else if (aOSPollWaitExpired(end)) {
             return count != 0U ? (aSSize_t)count
-                               : aOSFailWithTimeout(timeout);
+                               : aOSFailWithTimeout(original_timeout);
         }
     }
     return (aSSize_t)count;
@@ -525,25 +620,51 @@ static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
 aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
                        size_t buffer_size, aTimeout_t timeout)
 {
+    aTimepoint_t end;
+    aStatus_t status;
+    aSSize_t result;
+
     if ((handle == NULL) || !aTimeoutIsValid(timeout) ||
         (buffer_size > (size_t)PTRDIFF_MAX) ||
         ((buffer == NULL) && (buffer_size != 0U))) {
         return aOSFailWithStatus(A_STATUS_INVALID_PARAM);
     }
+    if (!handle->drv_handle.initialized) {
+        return aOSFailWithStatus(A_STATUS_NOT_READY);
+    }
     if (buffer_size == 0U) {
         return 0;
     }
 
-    return ((handle->mode & ADEV_USART_RX_MASK) !=
-            ADEV_USART_RX_POLLING)
-               ? buffered_read(handle, buffer, buffer_size, timeout)
-               : polling_read(handle, buffer, buffer_size, timeout);
+    end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    status = aOSMutexLock(
+        handle->rx_mutex,
+        aTimepointRemaining(&end, aOSGetUptimeMs()));
+    if (status != A_STATUS_OK) {
+        return fail_with_wait_status(status, timeout);
+    }
+    if (handle->rx_state != ADEV_USART_RX_IDLE) {
+        (void)aOSMutexUnlock(handle->rx_mutex);
+        return aOSFailWithStatus(A_STATUS_BUSY);
+    }
+
+    handle->rx_state = ADEV_USART_RX_STREAM;
+    result = ((handle->mode & ADEV_USART_RX_MASK) !=
+              ADEV_USART_RX_POLLING)
+                 ? buffered_read(handle, buffer, buffer_size, &end,
+                                 timeout)
+                 : polling_read(handle, buffer, buffer_size, &end,
+                                timeout);
+    handle->rx_state = ADEV_USART_RX_IDLE;
+    (void)aOSMutexUnlock(handle->rx_mutex);
+    return result;
 }
 
 static aSSize_t polling_write(aDevUsartHandle_t *handle, const void *data,
-                              size_t data_size, aTimeout_t timeout)
+                              size_t data_size,
+                              const aTimepoint_t *end,
+                              aTimeout_t original_timeout)
 {
-    const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
     size_t count = 0U;
 
     while (count < data_size) {
@@ -555,51 +676,102 @@ static aSSize_t polling_write(aDevUsartHandle_t *handle, const void *data,
         } else if (status != A_STATUS_BUSY) {
             return count != 0U ? (aSSize_t)count
                                : aOSFailWithStatus(status);
-        } else if (aOSPollWaitExpired(&end)) {
+        } else if (aOSPollWaitExpired(end)) {
             return count != 0U ? (aSSize_t)count
-                               : aOSFailWithTimeout(timeout);
+                               : aOSFailWithTimeout(original_timeout);
         }
     }
     return (aSSize_t)count;
 }
 
-static aSSize_t dma_write(aDevUsartHandle_t *handle, const void *data,
-                          size_t data_size, aTimeout_t timeout)
+static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
 {
-    const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    size_t contiguous;
+    size_t started = 0U;
+    aStatus_t status;
+
+    if ((handle->tx_dma_active != 0U) || (handle->tx_count == 0U)) {
+        return A_STATUS_OK;
+    }
+
+    contiguous = handle->tx_buffer_size - handle->tx_tail;
+    if (contiguous > handle->tx_count) {
+        contiguous = handle->tx_count;
+    }
+    status = aDrvUsartAsyncTxStart(
+        &handle->drv_handle, &handle->tx_buffer[handle->tx_tail],
+        contiguous, &started);
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+
+    handle->tx_dma_active = started;
+    status = aDrvUsartSetInterruptEnabled(
+        &handle->drv_handle, ADRV_USART_EXTI_TC, A_TRUE);
+    if (status != A_STATUS_OK) {
+        (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
+        handle->tx_dma_active = 0U;
+    }
+    return status;
+}
+
+static size_t ring_write(aDevUsartHandle_t *handle, const uint8_t *data,
+                         size_t size)
+{
+    size_t writable = handle->tx_buffer_size - handle->tx_count;
+    size_t first;
+
+    if (writable > size) {
+        writable = size;
+    }
+    first = handle->tx_buffer_size - handle->tx_head;
+    if (first > writable) {
+        first = writable;
+    }
+
+    memcpy(&handle->tx_buffer[handle->tx_head], data, first);
+    memcpy(handle->tx_buffer, data + first, writable - first);
+    handle->tx_head = (handle->tx_head + writable) %
+                      handle->tx_buffer_size;
+    handle->tx_count += writable;
+    return writable;
+}
+
+static aSSize_t dma_buffered_write(aDevUsartHandle_t *handle,
+                                   const void *data, size_t data_size,
+                                   const aTimepoint_t *end,
+                                   aTimeout_t original_timeout)
+{
     size_t count = 0U;
 
     while (count < data_size) {
-        size_t started = 0U;
+        size_t accepted = 0U;
         aStatus_t status;
 
-        status = aDrvUsartAsyncTxStart(
-            &handle->drv_handle, (const uint8_t *)data + count,
-            data_size - count, &started);
+        aDrvUsartDisableInterrupt(&handle->drv_handle);
+        status = handle->tx_error;
+        if (status == A_STATUS_OK) {
+            accepted = ring_write(
+                handle, (const uint8_t *)data + count,
+                data_size - count);
+            status = dma_tx_start_locked(handle);
+            if (status != A_STATUS_OK) {
+                handle->tx_error = status;
+            }
+        }
+        aDrvUsartEnableInterrupt(&handle->drv_handle);
+
+        count += accepted;
         if (status != A_STATUS_OK) {
             return count != 0U ? (aSSize_t)count
                                : aOSFailWithStatus(status);
         }
-
-        for (;;) {
-            size_t remaining;
-
-            status = aDrvUsartAsyncTxGetRemaining(
-                &handle->drv_handle, &remaining);
+        if (accepted == 0U) {
+            status = wait_for_event(handle->tx_wait_object, end);
             if (status != A_STATUS_OK) {
-                (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
                 return count != 0U ? (aSSize_t)count
-                                   : aOSFailWithStatus(status);
-            }
-            if (remaining == 0U) {
-                count += started;
-                break;
-            }
-            if (aOSPollWaitExpired(&end)) {
-                (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
-                count += started - remaining;
-                return count != 0U ? (aSSize_t)count
-                                   : aOSFailWithTimeout(timeout);
+                                   : fail_with_wait_status(
+                                         status, original_timeout);
             }
         }
     }
@@ -607,9 +779,10 @@ static aSSize_t dma_write(aDevUsartHandle_t *handle, const void *data,
 }
 
 static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
-                                size_t data_size, aTimeout_t timeout)
+                                size_t data_size,
+                                const aTimepoint_t *end,
+                                aTimeout_t original_timeout)
 {
-    const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
     size_t count = 0U;
 
     while (count < data_size) {
@@ -632,10 +805,11 @@ static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
         if (space_available) {
             ++count;
         } else {
-            status = wait_for_event(handle->tx_wait_object, &end);
+            status = wait_for_event(handle->tx_wait_object, end);
             if (status != A_STATUS_OK) {
                 return count != 0U ? (aSSize_t)count
-                                   : fail_with_wait_status(status, timeout);
+                                   : fail_with_wait_status(
+                                         status, original_timeout);
             }
         }
     }
@@ -645,60 +819,91 @@ static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
 aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
                         size_t data_size, aTimeout_t timeout)
 {
+    aTimepoint_t end;
+    aStatus_t status;
+    aSSize_t result;
+
     if ((handle == NULL) || !aTimeoutIsValid(timeout) ||
         (data_size > (size_t)PTRDIFF_MAX) ||
         ((data == NULL) && (data_size != 0U))) {
         return aOSFailWithStatus(A_STATUS_INVALID_PARAM);
     }
+    if (!handle->drv_handle.initialized) {
+        return aOSFailWithStatus(A_STATUS_NOT_READY);
+    }
     if (data_size == 0U) {
         return 0;
     }
 
+    end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    status = aOSMutexLock(
+        handle->tx_mutex,
+        aTimepointRemaining(&end, aOSGetUptimeMs()));
+    if (status != A_STATUS_OK) {
+        return fail_with_wait_status(status, timeout);
+    }
+    if (handle->tx_state != ADEV_USART_TX_IDLE) {
+        (void)aOSMutexUnlock(handle->tx_mutex);
+        return aOSFailWithStatus(A_STATUS_BUSY);
+    }
+
+    handle->tx_state = ADEV_USART_TX_STREAM;
     switch (handle->mode & ADEV_USART_TX_MASK) {
-    case ADEV_USART_TX_DMA_DIRECT:
-        return dma_write(handle, data, data_size, timeout);
+    case ADEV_USART_TX_DMA_BUFFERED:
+        result = dma_buffered_write(handle, data, data_size, &end,
+                                    timeout);
+        break;
     case ADEV_USART_TX_INTERRUPT_BUFFERED:
-        return interrupt_write(handle, data, data_size, timeout);
+        result = interrupt_write(handle, data, data_size, &end,
+                                 timeout);
+        break;
     case ADEV_USART_TX_POLLING:
     default:
-        return polling_write(handle, data, data_size, timeout);
+        result = polling_write(handle, data, data_size, &end, timeout);
+        break;
     }
+    handle->tx_state = ADEV_USART_TX_IDLE;
+    (void)aOSMutexUnlock(handle->tx_mutex);
+    return result;
 }
 
-aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
-                                         aTimeout_t timeout)
+static aStatus_t wait_transmit_complete_locked(
+    aDevUsartHandle_t *handle, const aTimepoint_t *end,
+    aTimeout_t original_timeout)
 {
-    aTimepoint_t end;
-
-    if ((handle == NULL) || !aTimeoutIsValid(timeout)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-
-    end = aTimepointCalc(timeout, aOSGetUptimeMs());
     for (;;) {
         aBool_t complete;
-        const aStatus_t status = aDrvUsartIsTransmitComplete(
+        aStatus_t status;
+
+        if (handle->tx_error != A_STATUS_OK) {
+            return handle->tx_error;
+        }
+        status = aDrvUsartIsTransmitComplete(
             &handle->drv_handle, &complete);
 
         if (status != A_STATUS_OK) {
             return status;
         }
         if (complete &&
-            (((handle->mode & ADEV_USART_TX_MASK) !=
-              ADEV_USART_TX_INTERRUPT_BUFFERED) ||
-                         handle->tx_count == 0U)) {
+            (((handle->mode & ADEV_USART_TX_MASK) ==
+              ADEV_USART_TX_POLLING) ||
+             ((handle->tx_count == 0U) &&
+              (handle->tx_dma_active == 0U)))) {
             return A_STATUS_OK;
         }
-        if ((handle->mode & ADEV_USART_TX_MASK) ==
-            ADEV_USART_TX_INTERRUPT_BUFFERED) {
+        if (((handle->mode & ADEV_USART_TX_MASK) ==
+             ADEV_USART_TX_INTERRUPT_BUFFERED) ||
+            ((handle->mode & ADEV_USART_TX_MASK) ==
+             ADEV_USART_TX_DMA_BUFFERED)) {
             const aStatus_t wait_status = wait_for_event(
-                handle->tx_wait_object, &end);
+                handle->tx_wait_object, end);
 
             if (wait_status != A_STATUS_OK) {
                 if ((wait_status == A_STATUS_BUSY) ||
                     (wait_status == A_STATUS_TIMEOUT)) {
-                    return ((timeout.type == A_TIMEOUT_TYPE_RELATIVE) &&
-                            (timeout.milliseconds == 0U))
+                    return ((original_timeout.type ==
+                             A_TIMEOUT_TYPE_RELATIVE) &&
+                            (original_timeout.milliseconds == 0U))
                                ? A_STATUS_BUSY
                                : A_STATUS_TIMEOUT;
                 }
@@ -706,11 +911,46 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
             }
             continue;
         }
-        if (aOSPollWaitExpired(&end)) {
-            return timeout.milliseconds == 0U ? A_STATUS_BUSY
-                                              : A_STATUS_TIMEOUT;
+        if (aOSPollWaitExpired(end)) {
+            return original_timeout.milliseconds == 0U
+                       ? A_STATUS_BUSY
+                       : A_STATUS_TIMEOUT;
         }
     }
+}
+
+aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
+                                         aTimeout_t timeout)
+{
+    aTimepoint_t end;
+    aStatus_t status;
+
+    if ((handle == NULL) || !aTimeoutIsValid(timeout)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (!handle->drv_handle.initialized) {
+        return A_STATUS_NOT_READY;
+    }
+
+    end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    status = aOSMutexLock(
+        handle->tx_mutex,
+        aTimepointRemaining(&end, aOSGetUptimeMs()));
+    if (status != A_STATUS_OK) {
+        return status == A_STATUS_BUSY && timeout.milliseconds != 0U
+                   ? A_STATUS_TIMEOUT
+                   : status;
+    }
+    if (handle->tx_state != ADEV_USART_TX_IDLE) {
+        (void)aOSMutexUnlock(handle->tx_mutex);
+        return A_STATUS_BUSY;
+    }
+
+    handle->tx_state = ADEV_USART_TX_STREAM;
+    status = wait_transmit_complete_locked(handle, &end, timeout);
+    handle->tx_state = ADEV_USART_TX_IDLE;
+    (void)aOSMutexUnlock(handle->tx_mutex);
+    return status;
 }
 
 uint32_t aDevUsartGetIdleEventCount(const aDevUsartHandle_t *handle)
