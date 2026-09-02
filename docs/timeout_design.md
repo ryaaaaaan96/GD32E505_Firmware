@@ -234,6 +234,21 @@ errno 只在线程或任务上下文中使用。ISR 和 aDrv 不读写 errno，�
 `aOSFailWithTimeout()` 在 NO_WAIT 场景设置 `A_EAGAIN`，在有限等待到期时设置
 `A_ETIMEDOUT`，然后返回 `-1`。两者只能在任务或线程上下文调用。
 
+对于中断驱动的数据路径，aOS 提供不暴露 FreeRTOS 类型的合并通知等待对象：
+
+```c
+aStatus_t aOSWaitObjectCreate(aOSWaitObject_t *object);
+aStatus_t aOSWaitObjectWait(aOSWaitObject_t object, aTimeout_t timeout);
+void aOSWaitObjectNotifyFromISR(aOSWaitObject_t object);
+void aOSWaitObjectDestroy(aOSWaitObject_t *object);
+```
+
+FreeRTOS port 使用保留的任务通知 index 1 实现，使等待任务进入 Blocked；等待
+对象使用 `pending` 锁存 ISR 在任务登记前产生的事件，并限制同一对象同一时刻只有
+一个等待者。Linux port 可映射到 condition/eventfd，裸机 port 可退化为事件
+标志。通知可以合并，因此使用者必须按“检查条件—等待—重新检查条件”的循环
+实现，不得把一次通知等同于一个字节。aDev 不直接调用任何 FreeRTOS API。
+
 ### device
 
 device 使用 aDrv 非阻塞能力和 aOS 单调时基，实现一次完整设备操作：
@@ -405,11 +420,13 @@ device 实现。
 
 - aLib 已提供 `aTimeout_t`、`aTimepoint_t`、`aSSize_t`、`aErrno_t` 和统一状态映射；
 - 已验证 NO_WAIT、FOREVER、普通到期和 32 位计数回绕；
-- aOS 已提供单调毫秒 uptime、delay、yield 和任务局部 errno；
+- aOS 已提供单调毫秒 uptime、delay、yield、合并通知等待对象和任务局部 errno；
 - aDrv 已删除系统时基、延时以及 USART/SPI 软件超时轮询；
 - USART/SPI aDrv 接口只尝试一次或查询一次硬件状态，SQPI 特殊命令也已改为
   启动与完成查询分离；
 - USART 和 RS485 流式接口返回长度或 `-1`，具体错误通过 aOS errno 查询；
+- USART 中断缓冲 TX/RX 和 DMA RX+IDLE 已使用 ISR 通知唤醒阻塞任务；纯 polling
+  以及尚无完成事件的 DMA direct TX 继续使用 yield 轮询；
 - RS485 写入和发送完成使用同一个 timepoint；
 - Flash25Q 的页写、扇区擦除和整片擦除使用调用者给出的总时间预算；
 - app 已使用 `A_TIMEOUT_*` 明确选择控制台超时；

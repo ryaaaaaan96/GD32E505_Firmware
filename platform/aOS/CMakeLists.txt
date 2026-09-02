@@ -1,8 +1,30 @@
+# aOS owns the FreeRTOS configuration schema and reusable defaults.  A firmware
+# project may override those defaults without modifying aOS itself.
+include(
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/freeRTOS_defaults.cmake"
+)
+
+include(
+    "${CMAKE_SOURCE_DIR}/config/freeRTOS_config.cmake"
+    OPTIONAL
+)
+
+if(NOT FREERTOS_USE_TASK_NOTIFICATIONS)
+    message(FATAL_ERROR
+        "aOS wait objects require FreeRTOS task notifications"
+    )
+endif()
+
+if(FREERTOS_TASK_NOTIFICATION_ARRAY_ENTRIES LESS 2)
+    message(FATAL_ERROR
+        "aOS reserves task notification index 1; "
+        "FREERTOS_TASK_NOTIFICATION_ARRAY_ENTRIES must be at least 2"
+    )
+endif()
+
 set(FREERTOS_PORT_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/portable/${FREERTOS_PORT}"
 )
-
-include("${CMAKE_SOURCE_DIR}/config/freeRTOS_config.cmake")
 
 set(FREERTOS_CONFIG_DIR
     "${CMAKE_BINARY_DIR}/aOS_config"
@@ -13,7 +35,7 @@ file(MAKE_DIRECTORY
 )
 
 configure_file(
-    "${CMAKE_SOURCE_DIR}/config/FreeRTOSConfig.h.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/config/FreeRTOSConfig.h.in"
     "${FREERTOS_CONFIG_DIR}/FreeRTOSConfig.h"
     @ONLY
 )

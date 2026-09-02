@@ -17,6 +17,14 @@
 typedef void (*aOSTaskFunction_t)(void *argument);
 typedef void *aOSTaskHandle_t;
 
+/*
+ * Opaque, coalescing notification object. Multiple notifications before a
+ * waiter runs may merge into one wakeup; callers must always recheck their
+ * protected condition after Wait() returns. Only one task may wait on an
+ * object at a time; a concurrent second waiter receives A_STATUS_BUSY.
+ */
+typedef void *aOSWaitObject_t;
+
 aStatus_t aOSInit(void);
 aStatus_t aOSCreateTask(aOSTaskFunction_t function, const char *name,
                         uint16_t stack_words, void *argument,
@@ -25,6 +33,15 @@ void aOSRun(void) ALIB_NORETURN;
 void aOSDelayMs(uint32_t milliseconds);
 void aOSYield(void);
 uint32_t aOSGetUptimeMs(void);
+
+/* Task-context lifecycle and wait operations. */
+aStatus_t aOSWaitObjectCreate(aOSWaitObject_t *object);
+void aOSWaitObjectDestroy(aOSWaitObject_t *object);
+aStatus_t aOSWaitObjectWait(aOSWaitObject_t object, aTimeout_t timeout);
+void aOSWaitObjectNotify(aOSWaitObject_t object);
+
+/* ISR-only notification; the aOS port performs any required reschedule. */
+void aOSWaitObjectNotifyFromISR(aOSWaitObject_t object);
 aErrno_t aOSGetErrno(void);
 void aOSSetErrno(aErrno_t error);
 aSSize_t aOSFailWithStatus(aStatus_t status);

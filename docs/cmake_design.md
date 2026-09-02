@@ -9,9 +9,10 @@
 | `cmake/toolchains/GCC.cmake` | 查找 Arm GCC，设置 CPU/FPU、链接器和 binutils |
 | `config/mcu_gd32e505.cmake` | CPU/FPU、主频、厂商宏、startup variant 和 FreeRTOS port |
 | `config/aDrv_config.cmake` | 选择项目启用的 aDrv 模块 |
-| `config/freeRTOS_config.cmake` | FreeRTOS 配置参数 |
+| `config/freeRTOS_config.cmake` | 当前工程对 FreeRTOS 默认参数的覆盖 |
 | `platform/aCore/CMakeLists.txt` | 导出 CMSIS Core，并按工具链构建运行库适配 |
 | `platform/aDrv/CMakeLists.txt` | 生成 libopt 并构建 GD32 vendor 与 aDrv target |
+| `platform/aOS/config/` | FreeRTOS 通用默认值和 `FreeRTOSConfig.h` 生成模板 |
 | `app/CMakeLists.txt` | 创建最终 ELF、链接所需层并生成固件产物 |
 
 ## 工程选择
@@ -76,6 +77,21 @@ USART 还提供 `ADRV_USART_INTERRUPT` 与 `ADRV_USART_ASYNC` 两个能力开关
 `ADRV_USART_ASYNC=1` 自动选择 `ADRV_MODULE_DMA`；该能力涵盖 DMA 发送与接收。
 关闭时使用 async stub，轮询和
 中断构建不会带入 DMA。IRQ 与 async 的真实实现/stub 由 aDrv CMake 成对选择。
+
+## aOS 配置生成
+
+`platform/aOS/config/freeRTOS_defaults.cmake` 声明完整的 FreeRTOS 通用默认值，
+根目录 `config/freeRTOS_config.cmake` 使用普通 `set()` 覆盖当前工程参数。两个文件
+按顺序在 aOS 的同一目录作用域中加载，因此后加载的工程配置自然覆盖默认值，
+不会把 FreeRTOS 内部配置保存到 `CMakeCache.txt`。aOS
+使用最终参数和自身的 `config/FreeRTOSConfig.h.in` 生成：
+
+```text
+build/<配置>/aOS_config/FreeRTOSConfig.h
+```
+
+模板和默认值随 aOS 复用，工程只保存差异参数，源代码目录中不保存生成头文件。
+FreeRTOS port 仍由 MCU profile 决定。
 
 func 层模块由 `config/aclass_config.cmake` 统一选择。`ASHELL_ENABLED=ON` 编译
 Letter Shell 和 OS 适配；设为 `OFF` 时，`aShell` target 改为编译

@@ -20,14 +20,11 @@
 #define ASYSTEM_SHELL_BAUD_RATE 115200U
 #define ASYSTEM_SHELL_IO_TIMEOUT A_TIMEOUT_MS(20U)
 
-/*
- * ADEV_USART_MODE_POLLING:        polling TX and RX
- * ADEV_USART_MODE_DMA_TX:         DMA TX, polling RX
- * ADEV_USART_MODE_INTERRUPT_IDLE: interrupt TX/RX with IDLE detection
- * ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE:
- *                                  buffered interrupt TX, DMA RX + IDLE
- */
-#define ASYSTEM_SHELL_USART_MODE ADEV_USART_MODE_BUFFERED_TX_DMA_RX_IDLE
+/* Shell: buffered interrupt TX + circular DMA RX + RX IDLE detection. */
+#define ASYSTEM_SHELL_USART_MODE                    \
+    (ADEV_USART_TX_INTERRUPT_BUFFERED |             \
+     ADEV_USART_RX_DMA_CIRCULAR |                   \
+     ADEV_USART_OPTION_RX_IDLE)
 #define ASYSTEM_SHELL_IRQ_PRIORITY 6U
 #define ASYSTEM_SHELL_RX_BUFFER_SIZE 256U
 #define ASYSTEM_SHELL_TX_BUFFER_SIZE 256U

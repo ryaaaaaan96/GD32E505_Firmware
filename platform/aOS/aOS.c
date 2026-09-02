@@ -6,6 +6,20 @@
 #include <stdint.h>
 
 #define AOS_ERRNO_TLS_INDEX 0
+#define AOS_WAIT_NOTIFICATION_INDEX 1U
+
+#if (configUSE_TASK_NOTIFICATIONS != 1)
+#error "aOS wait objects require FreeRTOS task notifications"
+#endif
+
+#if (configTASK_NOTIFICATION_ARRAY_ENTRIES <= AOS_WAIT_NOTIFICATION_INDEX)
+#error "aOS wait objects require notification index 1"
+#endif
+
+typedef struct {
+    TaskHandle_t waiting_task;
+    volatile aBool_t pending;
+} aOSPrivateWaitObject_t;
 
 static aErrno_t s_pre_scheduler_errno;
 
@@ -71,6 +85,135 @@ uint32_t aOSGetUptimeMs(void)
 
     return (uint32_t)(((uint64_t)ticks * 1000ULL) /
                       (uint64_t)configTICK_RATE_HZ);
+}
+
+aStatus_t aOSWaitObjectCreate(aOSWaitObject_t *object)
+{
+    aOSPrivateWaitObject_t *wait_object;
+
+    if ((object == NULL) || (*object != NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+
+    wait_object = pvPortMalloc(sizeof(*wait_object));
+    if (wait_object == NULL) {
+        return A_STATUS_NO_MEMORY;
+    }
+
+    wait_object->waiting_task = NULL;
+    wait_object->pending = A_FALSE;
+    *object = (aOSWaitObject_t)wait_object;
+    return A_STATUS_OK;
+}
+
+void aOSWaitObjectDestroy(aOSWaitObject_t *object)
+{
+    if ((object == NULL) || (*object == NULL)) {
+        return;
+    }
+
+    vPortFree(*object);
+    *object = NULL;
+}
+
+aStatus_t aOSWaitObjectWait(aOSWaitObject_t object, aTimeout_t timeout)
+{
+    aOSPrivateWaitObject_t *wait_object = object;
+    aTimepoint_t end;
+    TaskHandle_t current_task;
+
+    if ((object == NULL) || !aTimeoutIsValid(timeout)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    end = aTimepointCalc(timeout, aOSGetUptimeMs());
+
+    if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
+        taskENTER_CRITICAL();
+        if (wait_object->pending) {
+            wait_object->pending = A_FALSE;
+            taskEXIT_CRITICAL();
+            return A_STATUS_OK;
+        }
+        taskEXIT_CRITICAL();
+        return ((timeout.type == A_TIMEOUT_TYPE_RELATIVE) &&
+                (timeout.milliseconds == 0U))
+                   ? A_STATUS_BUSY
+                   : A_STATUS_NOT_READY;
+    }
+
+    current_task = xTaskGetCurrentTaskHandle();
+    for (;;) {
+        aTimeout_t remaining;
+        TickType_t ticks;
+
+        taskENTER_CRITICAL();
+        if ((wait_object->waiting_task != NULL) &&
+            (wait_object->waiting_task != current_task)) {
+            taskEXIT_CRITICAL();
+            return A_STATUS_BUSY;
+        }
+        if (wait_object->pending) {
+            wait_object->pending = A_FALSE;
+            wait_object->waiting_task = NULL;
+            taskEXIT_CRITICAL();
+            return A_STATUS_OK;
+        }
+
+        remaining = aTimepointRemaining(&end, aOSGetUptimeMs());
+        if ((remaining.type == A_TIMEOUT_TYPE_RELATIVE) &&
+            (remaining.milliseconds == 0U)) {
+            wait_object->waiting_task = NULL;
+            taskEXIT_CRITICAL();
+            return timeout.milliseconds == 0U ? A_STATUS_BUSY
+                                              : A_STATUS_TIMEOUT;
+        }
+        wait_object->waiting_task = current_task;
+        taskEXIT_CRITICAL();
+
+        ticks = remaining.type == A_TIMEOUT_TYPE_FOREVER
+                    ? portMAX_DELAY
+                    : milliseconds_to_ticks(remaining.milliseconds);
+        (void)ulTaskNotifyTakeIndexed(AOS_WAIT_NOTIFICATION_INDEX,
+                                      pdTRUE, ticks);
+    }
+}
+
+void aOSWaitObjectNotify(aOSWaitObject_t object)
+{
+    aOSPrivateWaitObject_t *wait_object = object;
+
+    if (wait_object == NULL) {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    wait_object->pending = A_TRUE;
+    if (wait_object->waiting_task != NULL) {
+        (void)xTaskNotifyGiveIndexed(wait_object->waiting_task,
+                                     AOS_WAIT_NOTIFICATION_INDEX);
+    }
+    taskEXIT_CRITICAL();
+}
+
+void aOSWaitObjectNotifyFromISR(aOSWaitObject_t object)
+{
+    aOSPrivateWaitObject_t *wait_object = object;
+    BaseType_t higher_priority_task_woken = pdFALSE;
+    UBaseType_t interrupt_mask;
+
+    if (wait_object == NULL) {
+        return;
+    }
+
+    interrupt_mask = taskENTER_CRITICAL_FROM_ISR();
+    wait_object->pending = A_TRUE;
+    if (wait_object->waiting_task != NULL) {
+        vTaskNotifyGiveIndexedFromISR(
+            wait_object->waiting_task, AOS_WAIT_NOTIFICATION_INDEX,
+            &higher_priority_task_woken);
+    }
+    taskEXIT_CRITICAL_FROM_ISR(interrupt_mask);
+    portYIELD_FROM_ISR(higher_priority_task_woken);
 }
 
 aErrno_t aOSGetErrno(void)
