@@ -1,4 +1,5 @@
 set(FLASHDB_SOURCES
+    port/fal_flash25q_port.c
     flashDB/src/fdb.c
     flashDB/src/fdb_kvdb.c
     flashDB/src/fdb_utils.c
@@ -14,13 +15,22 @@ target_include_directories(
     aDataBase
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/port/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/flashDB/inc"
 )
 
 target_link_libraries(
     aDataBase
     PUBLIC
-        aMemory
+        aLib
+    PRIVATE
+        aFlash25q
+)
+
+target_include_directories(
+    aDataBase
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/config"
 )
 
 # FlashDB 是上游代码，不使用本工程对自有代码开启的严格告警升级。

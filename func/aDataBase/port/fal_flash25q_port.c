@@ -1,52 +1,83 @@
 #include "fal.h"
-#include "aDev_flash25q.h"
+#include "aDataBase.h"
+#include "aDatabase_flash_layout.h"
 
 #include <string.h>
 
-#define FLASH_DEVICE_INDEX 0U
-#define FLASH_DEVICE_NAME "flash25"
-#define FLASH_BLOCK_SIZE 4096U
-#define FLASH_OPERATION_TIMEOUT A_TIMEOUT_MS(5000U)
+#define FLASH_OPERATION_TIMEOUT \
+    A_TIMEOUT_MS(ADATABASE_FLASH_OPERATION_TIMEOUT_MS)
 
-#define PART_PARAM_OFFSET 0x00100000U
-#define PART_PARAM_SIZE   0x00020000U
-#define PART_LOG_OFFSET   0x00120000U
-#define PART_LOG_SIZE     0x00080000U
+_Static_assert((ADATABASE_PART_PARAM_OFFSET + ADATABASE_PART_PARAM_SIZE) <=
+                   ADATABASE_PART_LOG_OFFSET,
+               "FAL param and log partitions must not overlap");
+_Static_assert((ADATABASE_PART_LOG_OFFSET + ADATABASE_PART_LOG_SIZE) <=
+                   ADATABASE_FLASH_CAPACITY_BYTES,
+               "FAL partition layout exceeds configured flash capacity");
+_Static_assert((ADATABASE_PART_PARAM_OFFSET % ADATABASE_FLASH_BLOCK_SIZE) == 0U,
+               "FAL param partition must be block aligned");
+_Static_assert((ADATABASE_PART_LOG_OFFSET % ADATABASE_FLASH_BLOCK_SIZE) == 0U,
+               "FAL log partition must be block aligned");
+
+static aDevFlash25qHandle_t *s_flash_handle;
 
 static struct fal_flash_dev s_flash_device = {
-    .name = FLASH_DEVICE_NAME,
+    .name = ADATABASE_FLASH_DEVICE_NAME,
     .addr = 0U,
     .len = 0U,
-    .blk_size = FLASH_BLOCK_SIZE,
+    .blk_size = ADATABASE_FLASH_BLOCK_SIZE,
 };
 
 static const struct fal_partition s_partitions[] = {
     {
-        .name = "param",
-        .flash_name = FLASH_DEVICE_NAME,
+        .name = ADATABASE_PART_PARAM_NAME,
+        .flash_name = ADATABASE_FLASH_DEVICE_NAME,
         .flash_dev = &s_flash_device,
-        .offset = PART_PARAM_OFFSET,
-        .len = PART_PARAM_SIZE,
+        .offset = ADATABASE_PART_PARAM_OFFSET,
+        .len = ADATABASE_PART_PARAM_SIZE,
     },
     {
-        .name = "log",
-        .flash_name = FLASH_DEVICE_NAME,
+        .name = ADATABASE_PART_LOG_NAME,
+        .flash_name = ADATABASE_FLASH_DEVICE_NAME,
         .flash_dev = &s_flash_device,
-        .offset = PART_LOG_OFFSET,
-        .len = PART_LOG_SIZE,
+        .offset = ADATABASE_PART_LOG_OFFSET,
+        .len = ADATABASE_PART_LOG_SIZE,
     },
 };
 
+aStatus_t aDataBaseBindFlash25q(aDevFlash25qHandle_t *handle)
+{
+    if ((handle == NULL) ||
+        (aDevFlash25qHandleIsValid(handle) != A_STATUS_OK) ||
+        (aDevFlash25qGetSize(handle) != ADATABASE_FLASH_CAPACITY_BYTES)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if ((s_flash_handle != NULL) && (s_flash_handle != handle)) {
+        return A_STATUS_BUSY;
+    }
+    s_flash_handle = handle;
+    s_flash_device.len = aDevFlash25qGetSize(handle);
+    return A_STATUS_OK;
+}
+
+aStatus_t aDataBaseUnbindFlash25q(aDevFlash25qHandle_t *handle)
+{
+    if ((handle == NULL) || (s_flash_handle != handle)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    s_flash_handle = NULL;
+    s_flash_device.len = 0U;
+    return A_STATUS_OK;
+}
+
 static aDevFlash25qHandle_t *flash_handle(void)
 {
-    aDevFlash25qHandle_t *handle =
-        aDevFlash25qGetDevice(FLASH_DEVICE_INDEX);
-    if ((handle == NULL) ||
-        (aDevFlash25qHandleIsValid(handle) != A_STATUS_OK)) {
+    if ((s_flash_handle == NULL) ||
+        (aDevFlash25qHandleIsValid(s_flash_handle) != A_STATUS_OK) ||
+        (aDevFlash25qGetSize(s_flash_handle) !=
+         ADATABASE_FLASH_CAPACITY_BYTES)) {
         return NULL;
     }
-    s_flash_device.len = aDevFlash25qGetSize(handle);
-    return handle;
+    return s_flash_handle;
 }
 
 static int partition_range_is_valid(const struct fal_partition *part,
@@ -98,7 +129,10 @@ int fal_partition_read(const struct fal_partition *part, uint32_t address,
         return -1;
     }
     return aDevFlash25qRead(handle, part->offset + address, buffer,
-                            (uint32_t)size) == A_STATUS_OK ? 0 : -1;
+                            (uint32_t)size, FLASH_OPERATION_TIMEOUT) ==
+                   A_STATUS_OK
+               ? 0
+               : -1;
 }
 
 int fal_partition_write(const struct fal_partition *part, uint32_t address,

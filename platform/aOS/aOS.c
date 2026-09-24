@@ -5,6 +5,7 @@
 #include "task.h"
 
 #include <stdint.h>
+#include <stdatomic.h>
 
 #define AOS_ERRNO_TLS_INDEX 0
 #define AOS_WAIT_NOTIFICATION_INDEX 1U
@@ -23,6 +24,7 @@ typedef struct {
 } aOSPrivateWaitObject_t;
 
 static aErrno_t s_pre_scheduler_errno;
+aOSFaultRecord_t g_aOSFaultRecord;
 
 static TickType_t milliseconds_to_ticks(uint32_t milliseconds)
 {
@@ -43,7 +45,45 @@ static TickType_t milliseconds_to_ticks(uint32_t milliseconds)
 aStatus_t aOSInit(void)
 {
     s_pre_scheduler_errno = A_ERRNO_NONE;
+    aOSRecordFault(AOS_FAULT_NONE, A_STATUS_OK, NULL);
     return A_STATUS_OK;
+}
+
+aStatus_t aOSValidateIsrPriority(uint32_t priority)
+{
+    if ((priority > configLIBRARY_LOWEST_INTERRUPT_PRIORITY) ||
+        (priority < configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    return A_STATUS_OK;
+}
+
+void aOSDeleteTask(aOSTaskHandle_t handle)
+{
+    if (handle != NULL) {
+        vTaskDelete((TaskHandle_t)handle);
+    }
+}
+
+void *aOSAlloc(size_t size)
+{
+    return size == 0U ? NULL : pvPortMalloc(size);
+}
+
+void aOSFree(void *memory)
+{
+    if (memory != NULL) {
+        vPortFree(memory);
+    }
+}
+
+void aOSRecordFault(aOSFaultCode_t code, aStatus_t status,
+                    const char *context)
+{
+    g_aOSFaultRecord.status = (int32_t)status;
+    g_aOSFaultRecord.context = context;
+    atomic_thread_fence(memory_order_release);
+    g_aOSFaultRecord.code = (uint32_t)code;
 }
 
 aStatus_t aOSCreateTask(aOSTaskFunction_t function, const char *name,
@@ -281,6 +321,64 @@ aStatus_t aOSMutexUnlock(aOSMutex_t mutex)
                : A_STATUS_ERROR;
 }
 
+aStatus_t aOSRecursiveMutexCreate(aOSRecursiveMutex_t *mutex)
+{
+    SemaphoreHandle_t handle;
+
+    if ((mutex == NULL) || (*mutex != NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    handle = xSemaphoreCreateRecursiveMutex();
+    if (handle == NULL) {
+        return A_STATUS_NO_MEMORY;
+    }
+    *mutex = (aOSRecursiveMutex_t)handle;
+    return A_STATUS_OK;
+}
+
+void aOSRecursiveMutexDestroy(aOSRecursiveMutex_t *mutex)
+{
+    if ((mutex != NULL) && (*mutex != NULL)) {
+        vSemaphoreDelete((SemaphoreHandle_t)*mutex);
+        *mutex = NULL;
+    }
+}
+
+aStatus_t aOSRecursiveMutexLock(aOSRecursiveMutex_t mutex,
+                               aTimeout_t timeout)
+{
+    TickType_t ticks;
+
+    if ((mutex == NULL) || !aTimeoutIsValid(timeout)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if ((xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) &&
+        ((timeout.type == A_TIMEOUT_TYPE_FOREVER) ||
+         (timeout.milliseconds != 0U))) {
+        return A_STATUS_NOT_READY;
+    }
+    ticks = timeout.type == A_TIMEOUT_TYPE_FOREVER
+                ? portMAX_DELAY
+                : milliseconds_to_ticks(timeout.milliseconds);
+    if (xSemaphoreTakeRecursive((SemaphoreHandle_t)mutex, ticks) == pdTRUE) {
+        return A_STATUS_OK;
+    }
+    return ((timeout.type == A_TIMEOUT_TYPE_RELATIVE) &&
+            (timeout.milliseconds == 0U))
+               ? A_STATUS_BUSY
+               : A_STATUS_TIMEOUT;
+}
+
+aStatus_t aOSRecursiveMutexUnlock(aOSRecursiveMutex_t mutex)
+{
+    if (mutex == NULL) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    return xSemaphoreGiveRecursive((SemaphoreHandle_t)mutex) == pdTRUE
+               ? A_STATUS_OK
+               : A_STATUS_ERROR;
+}
+
 aErrno_t aOSGetErrno(void)
 {
     TaskHandle_t task;
@@ -336,6 +434,8 @@ aBool_t aOSPollWaitExpired(const aTimepoint_t *timepoint)
 
 void vApplicationMallocFailedHook(void)
 {
+    aOSRecordFault(AOS_FAULT_MALLOC_FAILED, A_STATUS_NO_MEMORY,
+                   "FreeRTOS malloc failed");
     taskDISABLE_INTERRUPTS();
     for (;;) {
     }
@@ -344,7 +444,7 @@ void vApplicationMallocFailedHook(void)
 void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)
 {
     (void)task;
-    (void)task_name;
+    aOSRecordFault(AOS_FAULT_STACK_OVERFLOW, A_STATUS_ERROR, task_name);
     taskDISABLE_INTERRUPTS();
     for (;;) {
     }

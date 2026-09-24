@@ -48,12 +48,16 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
 
 aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
                                         void *buffer, size_t size,
-                                        uint8_t interrupt_priority)
+                                        uint8_t interrupt_priority,
+                                        aDrvUsartAsyncRxCallback_t callback,
+                                        void *argument)
 {
     (void)handle;
     (void)buffer;
     (void)size;
     (void)interrupt_priority;
+    (void)callback;
+    (void)argument;
     return A_STATUS_UNSUPPORTED;
 }
 

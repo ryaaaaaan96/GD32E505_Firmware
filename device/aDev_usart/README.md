@@ -63,9 +63,9 @@ app task -> aDev read/write -> aDrv non-blocking hardware operation
 `config/aDrv_config.cmake` 独立控制：
 
 ```cmake
-para_set(ADRV_MODULE_USART    1)
-para_set(ADRV_USART_INTERRUPT 1)
-para_set(ADRV_USART_ASYNC     1)
+set(ADRV_MODULE_USART    1)
+set(ADRV_USART_INTERRUPT 1)
+set(ADRV_USART_ASYNC     1)
 ```
 
 `ADRV_USART_ASYNC=1` 会自动启用 `ADRV_MODULE_DMA`。实例选择了未编译或当前芯片

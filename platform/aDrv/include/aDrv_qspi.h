@@ -72,7 +72,5 @@ aStatus_t aDrvQspiTransmit(aDrvQspiHandle_t *handle, const uint8_t *data,
                            uint32_t length);
 aStatus_t aDrvQspiReceive(aDrvQspiHandle_t *handle, uint8_t *data,
                           uint32_t length);
-void aDrvQspiCsManual(aDrvQspiHandle_t *handle, aBool_t low);
-void aDrvQspiCsAuto(aDrvQspiHandle_t *handle);
 
 #endif

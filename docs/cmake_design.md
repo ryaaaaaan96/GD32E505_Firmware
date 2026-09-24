@@ -60,8 +60,9 @@ startup；aCore 使用 OBJECT target，确保 newlib 在库扫描前获得项目
 
 ## aDrv 配置生成
 
-`platform/aDrv/config/aDrv_defaults.cmake` 声明默认值，项目配置使用
-`para_set()` 选择模块。aDrv CMake 对同一组最终值执行：
+`platform/aDrv/config/aDrv_defaults.cmake` 声明普通变量默认值，项目在根配置阶段
+通过 `config/aDrv_config.cmake` 使用普通 `set()` 选择模块。模块配置不进入
+`CMakeCache.txt`，每次 configure 均按源文件配置重新计算。aDrv CMake 对同一组最终值执行：
 
 ```text
 ADRV_MODULE_* 配置
@@ -97,6 +98,10 @@ func 层模块由 `config/aclass_config.cmake` 统一选择。`ASHELL_ENABLED=ON
 Letter Shell 和 OS 适配；设为 `OFF` 时，`aShell` target 改为编译
 `aShell_stub.c`，公共 API 保持不变，同时 aSystem 不再链接 `aDevUsart` 或创建
 Shell 传输资源。业务模块不需要用条件编译包围已有的 `aShellPrint()` 等调用。
+
+`ADATABASE_ENABLED` 和 `AMODBUS_ENABLED` 控制可选功能的默认构建；数据库 target
+内部包含 FlashDB 所需的 FAL/Flash25Q 适配，因此启用数据库要求 QSPI 和 GPIO。所有
+模块开关均为普通 CMake 变量，切换工程配置时不会沿用上次 configure 的 cache 值。
 
 ## 公共规范与状态
 

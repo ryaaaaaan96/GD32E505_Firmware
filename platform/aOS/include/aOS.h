@@ -4,6 +4,7 @@
 #include "aLib.h"
 #include "aStatus.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define AOS_TASK_PRIO_LOWEST 1U
@@ -27,11 +28,33 @@ typedef void *aOSWaitObject_t;
 
 /* Opaque task mutex. A mutex is never acquired or released from an ISR. */
 typedef void *aOSMutex_t;
+typedef void *aOSRecursiveMutex_t;
+
+typedef enum {
+    AOS_FAULT_NONE = 0U,
+    AOS_FAULT_APP_INIT = 1U,
+    AOS_FAULT_SCHEDULER_RETURNED = 2U,
+    AOS_FAULT_MALLOC_FAILED = 3U,
+    AOS_FAULT_STACK_OVERFLOW = 4U,
+} aOSFaultCode_t;
+
+typedef struct {
+    volatile uint32_t code;
+    volatile int32_t status;
+    const char *volatile context;
+} aOSFaultRecord_t;
+
+extern aOSFaultRecord_t g_aOSFaultRecord;
 
 aStatus_t aOSInit(void);
+/* Validate an IRQ priority before enabling an ISR that calls aOS. */
+aStatus_t aOSValidateIsrPriority(uint32_t priority);
 aStatus_t aOSCreateTask(aOSTaskFunction_t function, const char *name,
                         uint16_t stack_words, void *argument,
                         uint32_t priority, aOSTaskHandle_t *handle);
+void aOSDeleteTask(aOSTaskHandle_t handle);
+void *aOSAlloc(size_t size);
+void aOSFree(void *memory);
 void aOSRun(void) ALIB_NORETURN;
 void aOSDelayMs(uint32_t milliseconds);
 void aOSYield(void);
@@ -51,6 +74,13 @@ aStatus_t aOSMutexCreate(aOSMutex_t *mutex);
 void aOSMutexDestroy(aOSMutex_t *mutex);
 aStatus_t aOSMutexLock(aOSMutex_t mutex, aTimeout_t timeout);
 aStatus_t aOSMutexUnlock(aOSMutex_t mutex);
+aStatus_t aOSRecursiveMutexCreate(aOSRecursiveMutex_t *mutex);
+void aOSRecursiveMutexDestroy(aOSRecursiveMutex_t *mutex);
+aStatus_t aOSRecursiveMutexLock(aOSRecursiveMutex_t mutex,
+                               aTimeout_t timeout);
+aStatus_t aOSRecursiveMutexUnlock(aOSRecursiveMutex_t mutex);
+void aOSRecordFault(aOSFaultCode_t code, aStatus_t status,
+                    const char *context);
 
 aErrno_t aOSGetErrno(void);
 void aOSSetErrno(aErrno_t error);

@@ -47,6 +47,8 @@ typedef struct {
     void *argument;
 } aDrvUsartCallback_t;
 
+typedef void (*aDrvUsartAsyncRxCallback_t)(void *argument);
+
 typedef enum {
     ADRV_USART_OWNER_NONE = 0U,
     ADRV_USART_OWNER_INTERRUPT = 1U << 0,
@@ -113,11 +115,15 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
  */
 aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
                                         void *buffer, size_t size,
-                                        uint8_t interrupt_priority);
+                                        uint8_t interrupt_priority,
+                                        aDrvUsartAsyncRxCallback_t callback,
+                                        void *argument);
 
 /*
  * Return the cumulative byte count since CircularStart(). The unsigned count
  * may naturally wrap; callers obtain new bytes with unsigned subtraction.
+ * The GD32 DMA transfer-complete flag is sticky, so service latency must remain
+ * below one full DMA buffer time; multiple unserviced wraps cannot be counted.
  */
 aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
                                            size_t *received);

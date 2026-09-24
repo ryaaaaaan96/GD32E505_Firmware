@@ -4,3 +4,5 @@
 # 继承构建目录中旧的 CMake cache 值。
 
 set(ASHELL_ENABLED ON)
+set(ADATABASE_ENABLED OFF)
+set(AMODBUS_ENABLED OFF)

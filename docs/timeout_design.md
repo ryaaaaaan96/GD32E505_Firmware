@@ -234,6 +234,11 @@ errno 只在线程或任务上下文中使用。ISR 和 aDrv 不读写 errno，�
 `aOSFailWithTimeout()` 在 NO_WAIT 场景设置 `A_EAGAIN`，在有限等待到期时设置
 `A_ETIMEDOUT`，然后返回 `-1`。两者只能在任务或线程上下文调用。
 
+当前 FreeRTOS port 在调度器未运行或被暂停时拒绝有限等待和 FOREVER 锁等待，返回
+`A_STATUS_NOT_READY`；`A_TIMEOUT_NO_WAIT` 仍允许立即检查/尝试。调度器启动前
+`aOSGetUptimeMs()` 的 tick 尚未推进，因此不允许 device 在该阶段启动依赖有限
+deadline 的 polling loop。Yield 只让出执行权，不表示任务进入 Blocked 状态。
+
 对于中断驱动的数据路径，aOS 提供不暴露 FreeRTOS 类型的合并通知等待对象：
 
 ```c
@@ -337,7 +342,8 @@ app 还负责决定超时后的行为，例如重试、记录日志、复位设�
 
 ## 总时间预算
 
-所有多阶段操作必须共享一个截止点。例如一次 RS485 发送包含：
+所有多阶段操作必须共享一个截止点。例如一次 RS485 发送包含以下硬件过程
+（DE 由 aDevUsart 自动管理，应用不直接切换）：
 
 ```text
 拉高 DE
@@ -425,12 +431,13 @@ device 实现。
 - aDrv 已删除系统时基、延时以及 USART/SPI 软件超时轮询；
 - USART/SPI aDrv 接口只尝试一次或查询一次硬件状态，SQPI 特殊命令也已改为
   启动与完成查询分离；
-- USART 和 RS485 流式接口返回长度或 `-1`，具体错误通过 aOS errno 查询；
+- USART 流式接口（含 RS485 可选配置）返回长度或 `-1`，具体错误通过 aOS errno 查询；
 - USART 中断缓冲 TX/RX、DMA buffered TX 和 DMA RX+IDLE 已使用 ISR 通知唤醒阻塞
   任务；纯 polling 继续使用 yield 轮询；
 - USART 的完整 Read/Write 由独立 RX/TX mutex 串行化，等待 mutex 与传输过程共享
   同一个绝对 timepoint；
-- RS485 写入和发送完成使用同一个 timepoint；
+- 协议层若需等待 RS485 发完，应给 Write 与 WaitTransmitComplete 传递同一
+  timepoint 的剩余预算；Write 返回或等待超时不会提前释放 DE，最终 TC 自动换向；
 - Flash25Q 的页写、扇区擦除和整片擦除使用调用者给出的总时间预算；
 - app 已使用 `A_TIMEOUT_*` 明确选择控制台超时；
 - 旧 timeout 接口和兼容别名已经删除。

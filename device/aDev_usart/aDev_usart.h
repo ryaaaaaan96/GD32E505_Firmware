@@ -8,7 +8,7 @@
  * 任务或线程上下文调用，不能在 ISR 中调用。
  *
  * 配置中的所有缓冲区都由调用者提供，模块不会申请或释放缓冲区内存。缓冲区和
- * handle 从 aDevUsartInit() 成功开始到 aDevUsartDeInit() 完成为止必须持续有效。
+ * handle 从静态初始化或动态创建成功开始，到 DeInit/Destroy 完成为止必须持续有效。
  * 已初始化的 handle 还会被中断回调引用，禁止复制、移动或在运行期间释放。
  */
 
@@ -16,7 +16,11 @@
 #define ADEV_USART_H
 
 #include "aDrv_usart.h"
+#include "aDrv_gpio.h"
 #include "aLib.h"
+
+#include <stddef.h>
+#include <stdint.h>
 
 /**
  * @brief USART 数据路径配置字。
@@ -33,6 +37,7 @@ typedef enum {
     ADEV_USART_EVENT_RX_IDLE,
     ADEV_USART_EVENT_TX_SPACE,
     ADEV_USART_EVENT_TX_COMPLETE,
+    ADEV_USART_EVENT_RX_ERROR,
 } aDevUsartEvent_t;
 
 /**
@@ -48,7 +53,6 @@ typedef void (*aDevUsartEventCallback_t)(aDevUsartEvent_t event,
 #define ADEV_USART_TX_MASK                 0x00000003U
 #define ADEV_USART_TX_POLLING              0x00000000U
 #define ADEV_USART_TX_INTERRUPT_BUFFERED   0x00000001U
-#define ADEV_USART_TX_DMA_BUFFERED         0x00000002U
 #define ADEV_USART_TX_DMA_BUFFERED         0x00000002U
 
 /** @brief RX 模式字段及其有效值，三者互斥。 */
@@ -70,12 +74,27 @@ typedef void (*aDevUsartEventCallback_t)(aDevUsartEvent_t event,
     (ADEV_USART_TX_MASK | ADEV_USART_RX_MASK | \
      ADEV_USART_OPTION_RX_IDLE)
 
+/** @brief 可选 RS485 GPIO 方向配置，由应用按板级连接填写。 */
+typedef struct {
+    /** 默认关闭；与 TX/RX 数据模式独立。当前通过 GPIO 控制方向。 */
+    aBool_t enabled;
+    /** 必填 DE 引脚；由 APP 选择，不能与 USART TX/RX 或 RE 重叠。 */
+    aDrvGpioPin_t de_pin;
+    /** 可选接收使能引脚；DE/RE 硬件绑在一起时只填写 de_pin。 */
+    aDrvGpioPin_t re_pin;
+    aDrvGpioLevel_t de_active_level;
+    aDrvGpioLevel_t re_active_level;
+    /** 独立 RE 引脚存在时，是否在发送期间保持接收（可能收到回显）。 */
+    aBool_t receive_during_tx;
+} aDevUsartRS485Config_t;
+
 /**
  * @brief USART 设备初始化配置。
  *
- * 使用 aDevUsartConfigStructInit() 设置默认值后，再填写实例、引脚、波特率、
- * TX/RX 模式、option 和相应缓冲区。配置结构本身只在初始化期间读取，但其中
- * 指向的缓冲区会由设备长期使用。
+ * 先调用 aDevUsartConfigStructInit()，再设置硬件、TX/RX 模式及缓冲区。
+ * 配置结构仅初始化期间读取；其中的缓冲区必须持续有效到 DeInit 完成。
+ * RS485 默认关闭；启用时需要 TC 中断能力，即使 TX 为轮询模式。
+ * 当前不提供自动 DE、方向切换延迟或协议帧间隔配置。
  */
 typedef struct {
     /** aDrv USART 基础配置：逻辑实例、TX/RX 引脚、波特率、校验和停止位。 */
@@ -85,6 +104,9 @@ typedef struct {
      * TX/RX 数据路径与附加选项的组合，默认 TX/RX 均为轮询且不启用 option。
      */
     aDevUsartMode_t mode;
+
+    /** 可选半双工方向管理；Read 不改变方向，最终 TC 自动释放 DE。 */
+    aDevUsartRS485Config_t rs485;
 
     /**
      * USART/DMA 中断优先级，仅中断、循环 DMA 或 IDLE 配置使用；取值必须
@@ -105,8 +127,6 @@ typedef struct {
     size_t rx_buffer_size;
 
     /**
-     * TX 环形缓冲区，中断缓冲和 DMA 缓冲发送模式使用。
-     * aDevUsartWrite() 只把数据复制到该缓冲区，底层再异步排空。
      * TX 环形缓冲区，中断缓冲和 DMA 缓冲发送模式使用。
      * aDevUsartWrite() 只把数据复制到该缓冲区，底层再异步排空。
      */
@@ -140,84 +160,14 @@ typedef enum {
     ADEV_USART_CAP_RX_DIRECT,
 } aDevUsartCapability_t;
 
-/**
- * @brief USART 设备运行句柄。
- *
- * 句柄字段由 aDevUsart 管理并被任务与 ISR 共享。应用可以静态分配句柄，但不应
- * 直接读写内部字段；状态查询应使用本文件提供的公共函数。
- */
-typedef struct {
-    /** 底层 aDrv USART 句柄。 */
-    aDrvUsartHandle_t drv_handle;
-    /** 初始化时选择的 TX/RX 数据路径和附加选项。 */
-    aDevUsartMode_t mode;
+typedef struct aDevUsartHandle aDevUsartHandle_t;
 
-    /** RX 环形缓冲区及容量。 */
-    uint8_t *rx_buffer;
-    size_t rx_buffer_size;
-
-    /** aDev 已观察并提交到 RX 环形队列的 DMA 累计接收量。 */
-    size_t rx_dma_observed;
-
-    /** RX 环形缓冲区写入位置、读取位置和当前有效字节数。 */
-    volatile size_t rx_head;
-    volatile size_t rx_tail;
-    volatile size_t rx_count;
-
-    /** TX 环形缓冲区及容量。 */
-    uint8_t *tx_buffer;
-    size_t tx_buffer_size;
-
-    /** TX 环形缓冲区写入位置、发送位置和当前待发送字节数。 */
-    volatile size_t tx_head;
-    volatile size_t tx_tail;
-    volatile size_t tx_count;
-
-    /** DMA 当前直接从 TX ring 读取的连续块长度；0 表示没有活动块。 */
-    volatile size_t tx_dma_active;
-
-    /** TX/RX 的独立运行状态，允许全双工并行。 */
-    volatile aDevUsartTxState_t tx_state;
-    volatile aDevUsartRxState_t rx_state;
-
-    /** 串行化完整 Read/Write 调用的 aOS mutex。 */
-    void *rx_mutex;
-    void *tx_mutex;
-
-    /** DMA 当前直接从 TX ring 读取的连续块长度；0 表示没有活动块。 */
-    volatile size_t tx_dma_active;
-
-    /** TX/RX 的独立运行状态，允许全双工并行。 */
-    volatile aDevUsartTxState_t tx_state;
-    volatile aDevUsartRxState_t rx_state;
-
-    /** 串行化完整 Read/Write 调用的 aOS mutex。 */
-    void *rx_mutex;
-    void *tx_mutex;
-
-    /** aOS 内部等待对象；保持为 void 指针以避免向公共头文件暴露 OS 类型。 */
-    void *rx_wait_object;
-    void *tx_wait_object;
-
-    /** 通过 aDevUsartRegisterEventCallback() 绑定的业务事件回调。 */
-    aDevUsartEventCallback_t event_callback;
-    void *event_argument;
-
-    /** IDLE 事件累计计数；允许 uint32_t 自然回绕。 */
-    volatile uint32_t idle_event_count;
-
-    /**
-     * 接收异常锁存标志：RX 环形缓冲区被 DMA 追上并覆盖未读数据，或者 DMA
-     * 报告传输错误时置位。
-     */
-    volatile aBool_t rx_overflow;
-
-    /** ISR 中发现的异步 TX 错误，任务接口读取后返回给调用者。 */
-    volatile aStatus_t tx_error;
-
-    /** ISR 中发现的异步 TX 错误，任务接口读取后返回给调用者。 */
-    volatile aStatus_t tx_error;
-} aDevUsartHandle_t;
+/** Static caller-owned storage for an opaque USART handle. */
+#define ADEV_USART_STATIC_STORAGE_SIZE 1024U
+typedef union {
+    max_align_t alignment;
+    uint8_t bytes[ADEV_USART_STATIC_STORAGE_SIZE];
+} aDevUsartStorage_t;
 
 /**
  * @brief 填充 USART 配置默认值。
@@ -237,8 +187,6 @@ void aDevUsartConfigStructInit(aDevUsartConfig_t *config);
  *
  * @param[out] handle 设备句柄；为 NULL 时函数不执行任何操作。
  */
-void aDevUsartHandleStructInit(aDevUsartHandle_t *handle);
-
 /**
  * @brief 初始化一个 USART 设备实例。
  *
@@ -255,8 +203,11 @@ void aDevUsartHandleStructInit(aDevUsartHandle_t *handle);
  * @retval A_STATUS_NO_MEMORY 无法创建所需的 aOS 等待对象。
  * @retval A_STATUS_ERROR 其他底层初始化错误。
  */
-aStatus_t aDevUsartInit(const aDevUsartConfig_t *config,
-                        aDevUsartHandle_t *handle);
+aStatus_t aDevUsartInitStatic(const aDevUsartConfig_t *config,
+                              aDevUsartStorage_t *storage,
+                              aDevUsartHandle_t **handle);
+aStatus_t aDevUsartCreate(const aDevUsartConfig_t *config,
+                          aDevUsartHandle_t **handle);
 
 /**
  * @brief 停止传输并反初始化 USART 设备。
@@ -269,6 +220,7 @@ aStatus_t aDevUsartInit(const aDevUsartConfig_t *config,
  * @return A_STATUS_OK 或底层返回的错误状态。
  */
 aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle);
+aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle);
 
 /**
  * @brief 注册或替换 USART 的硬件无关异步事件回调。
@@ -335,7 +287,6 @@ aStatus_t aDevUsartUnregisterEventCallback(
  *         且发生错误；返回 -1 时使用 aOSGetErrno() 查询详细原因。
  *
  * @warning 不是 ISR 安全接口；模块内部会用 RX mutex 串行化多读取者。
- * @warning 不是 ISR 安全接口；模块内部会用 RX mutex 串行化多读取者。
  */
 aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
                        size_t buffer_size, aTimeout_t timeout);
@@ -359,8 +310,6 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
  * @return 正数表示实际提交长度，0 表示请求长度为 0，-1 表示未提交任何数据
  *         且发生错误；返回 -1 时使用 aOSGetErrno() 查询详细原因。
  *
- * @warning 不是 ISR 安全接口；模块内部会用 TX mutex 保证一次 Write 的数据
- *          不会与另一个写入者按字节交错。
  * @warning 不是 ISR 安全接口；模块内部会用 TX mutex 保证一次 Write 的数据
  *          不会与另一个写入者按字节交错。
  */
@@ -396,7 +345,9 @@ aBool_t aDevUsartIsSupported(const aDevUsartHandle_t *handle,
 /**
  * @brief 等待软件 TX 队列清空且 USART 硬件报告发送完成。
  *
- * 本接口用于确认最后一个停止位已经由外设发送，适合 RS485 切换收发方向等
+ * 本接口用于确认最后一个停止位已经由外设发送；启用 RS485 时也确认方向已释放。
+ * RS485 方向由设备自动管理，调用方不得自行修改 DE/RE。
+ * 适合需要确认线路排空等
  * 场景。它直接返回 aStatus_t，不设置 errno。
  *
  * @param[in,out] handle 已初始化的设备句柄。
@@ -436,5 +387,6 @@ aBool_t aDevUsartHasRxOverflowed(const aDevUsartHandle_t *handle);
  * handle 为 NULL 时不执行任何操作。
  */
 void aDevUsartClearRxOverflow(aDevUsartHandle_t *handle);
+aStatus_t aDevUsartGetRxError(const aDevUsartHandle_t *handle);
 
 #endif

@@ -1,9 +1,7 @@
 #include "aShell.h"
 #include "shell.h"
 
-#include "FreeRTOS.h"
-#include "semphr.h"
-#include "task.h"
+#include "aOS.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -12,22 +10,24 @@
 #define ASHELL_PRINT_BUFFER_SIZE 256U
 #define ASHELL_MIN_BUFFER_SIZE 64U
 
-static SemaphoreHandle_t s_shell_mutex;
-static uint32_t s_shell_count;
+static Shell *s_shell;
+static char *s_shell_buffer;
+static aOSTaskHandle_t s_shell_task;
+static aOSRecursiveMutex_t s_shell_mutex;
 
 static int shell_lock(Shell *shell)
 {
     (void)shell;
-    if (s_shell_mutex == NULL) return -1;
-    return xSemaphoreTakeRecursive(s_shell_mutex, portMAX_DELAY) == pdTRUE ?
-           0 : -1;
+    return aOSRecursiveMutexLock(s_shell_mutex, A_TIMEOUT_FOREVER) ==
+                   A_STATUS_OK
+               ? 0
+               : -1;
 }
 
 static int shell_unlock(Shell *shell)
 {
     (void)shell;
-    if (s_shell_mutex == NULL) return -1;
-    return xSemaphoreGiveRecursive(s_shell_mutex) == pdTRUE ? 0 : -1;
+    return aOSRecursiveMutexUnlock(s_shell_mutex) == A_STATUS_OK ? 0 : -1;
 }
 
 void aShellConfigStructInit(aShellConfig_t *config)
@@ -37,44 +37,36 @@ void aShellConfigStructInit(aShellConfig_t *config)
     config->write = NULL;
     config->buffer_size = 256U;
     config->task_stack_size = 512U;
-    config->task_priority = (uint32_t)(tskIDLE_PRIORITY + 2U);
+    config->task_priority = AOS_TASK_PRIO_LOW;
 }
 
-void aShellHandleStructInit(aShellHandle_t *handle)
+aStatus_t aShellInit(const aShellConfig_t *config)
 {
-    if (handle == NULL) return;
-    handle->shell_obj = NULL;
-    handle->buffer = NULL;
-    handle->task_handle = NULL;
-}
+    aStatus_t status;
+    Shell *shell;
+    char *buffer;
 
-aStatus_t aShellInit(aShellHandle_t *handle,
-                     const aShellConfig_t *config)
-{
-    if ((handle == NULL) || (config == NULL) || (config->read == NULL) ||
+    if ((config == NULL) || (config->read == NULL) ||
         (config->write == NULL) ||
         (config->buffer_size < ASHELL_MIN_BUFFER_SIZE) ||
-        (config->task_stack_size == 0U) ||
-        (config->task_priority >= configMAX_PRIORITIES)) {
+        (config->task_stack_size == 0U)) {
         return A_STATUS_INVALID_PARAM;
     }
-
-    aShellHandleStructInit(handle);
-    Shell *shell = pvPortMalloc(sizeof(*shell));
-    if (shell == NULL) return A_STATUS_NO_MEMORY;
-    char *buffer = pvPortMalloc(config->buffer_size);
-    if (buffer == NULL) {
-        vPortFree(shell);
-        return A_STATUS_NO_MEMORY;
+    if (s_shell != NULL) {
+        return A_STATUS_BUSY;
     }
 
     if (s_shell_mutex == NULL) {
-        s_shell_mutex = xSemaphoreCreateRecursiveMutex();
-        if (s_shell_mutex == NULL) {
-            vPortFree(buffer);
-            vPortFree(shell);
-            return A_STATUS_NO_MEMORY;
-        }
+        status = aOSRecursiveMutexCreate(&s_shell_mutex);
+        if (status != A_STATUS_OK) return status;
+    }
+
+    shell = aOSAlloc(sizeof(*shell));
+    if (shell == NULL) return A_STATUS_NO_MEMORY;
+    buffer = aOSAlloc(config->buffer_size);
+    if (buffer == NULL) {
+        aOSFree(shell);
+        return A_STATUS_NO_MEMORY;
     }
 
     memset(shell, 0, sizeof(*shell));
@@ -84,45 +76,40 @@ aStatus_t aShellInit(aShellHandle_t *handle,
     shell->write = config->write;
     shellInit(shell, buffer, config->buffer_size);
 
-    TaskHandle_t task = NULL;
-    if (xTaskCreate(shellTask, "shell", config->task_stack_size, shell,
-                    (UBaseType_t)config->task_priority, &task) != pdPASS) {
+    status = aOSCreateTask(shellTask, "shell", config->task_stack_size,
+                           shell, config->task_priority, &s_shell_task);
+    if (status != A_STATUS_OK) {
         shellRemove(shell);
-        vPortFree(buffer);
-        vPortFree(shell);
-        if (s_shell_count == 0U) {
-            vSemaphoreDelete(s_shell_mutex);
-            s_shell_mutex = NULL;
-        }
-        return A_STATUS_NO_MEMORY;
+        aOSFree(buffer);
+        aOSFree(shell);
+        s_shell_task = NULL;
+        return status;
     }
 
-    handle->shell_obj = shell;
-    handle->buffer = buffer;
-    handle->task_handle = task;
-    ++s_shell_count;
+    s_shell = shell;
+    s_shell_buffer = buffer;
     return A_STATUS_OK;
 }
 
-aStatus_t aShellDeInit(aShellHandle_t *handle)
+aStatus_t aShellDeInit(void)
 {
-    if (handle == NULL) return A_STATUS_INVALID_PARAM;
-    if (handle->shell_obj == NULL) return A_STATUS_NOT_READY;
+    Shell *shell;
+    aStatus_t status;
 
-    Shell *shell = (Shell *)handle->shell_obj;
-    if (handle->task_handle != NULL) {
-        vTaskDelete((TaskHandle_t)handle->task_handle);
-    }
+    if (s_shell == NULL) return A_STATUS_NOT_READY;
+    status = aOSRecursiveMutexLock(s_shell_mutex, A_TIMEOUT_FOREVER);
+    if (status != A_STATUS_OK) return status;
+
+    shell = s_shell;
+    s_shell = NULL;
+    aOSDeleteTask(s_shell_task);
+    s_shell_task = NULL;
     shellRemove(shell);
-    vPortFree(handle->buffer);
-    vPortFree(shell);
-    aShellHandleStructInit(handle);
+    aOSFree(s_shell_buffer);
+    aOSFree(shell);
+    s_shell_buffer = NULL;
 
-    if (s_shell_count > 0U) --s_shell_count;
-    if ((s_shell_count == 0U) && (s_shell_mutex != NULL)) {
-        vSemaphoreDelete(s_shell_mutex);
-        s_shell_mutex = NULL;
-    }
+    (void)aOSRecursiveMutexUnlock(s_shell_mutex);
     return A_STATUS_OK;
 }
 
@@ -131,21 +118,20 @@ aBool_t aShellIsEnabled(void)
     return A_TRUE;
 }
 
-void aShellPrint(aShellHandle_t *handle, const char *format, ...)
+void aShellPrint(const char *format, ...)
 {
-    if ((handle == NULL) || (handle->shell_obj == NULL) ||
-        (format == NULL)) return;
-
     char buffer[ASHELL_PRINT_BUFFER_SIZE];
     va_list arguments;
+    int count;
+
+    if (format == NULL) return;
     va_start(arguments, format);
-    const int count = vsnprintf(buffer, sizeof(buffer), format, arguments);
+    count = vsnprintf(buffer, sizeof(buffer), format, arguments);
     va_end(arguments);
     if (count <= 0) return;
     buffer[sizeof(buffer) - 1U] = '\0';
 
-    Shell *shell = (Shell *)handle->shell_obj;
-    (void)SHELL_LOCK(shell);
-    shellWriteString(shell, buffer);
-    (void)SHELL_UNLOCK(shell);
+    if ((s_shell == NULL) || (shell_lock(s_shell) != 0)) return;
+    if (s_shell != NULL) shellWriteString(s_shell, buffer);
+    (void)shell_unlock(s_shell);
 }

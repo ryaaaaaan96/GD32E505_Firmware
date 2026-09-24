@@ -13,9 +13,9 @@ uint16_t aModbusCrc16(const uint8_t *data, size_t length)
     return crc;
 }
 
-int aModbusRtuFrameValid(const uint8_t *frame, size_t length)
+aBool_t aModbusRtuFrameValid(const uint8_t *frame, size_t length)
 {
-    if ((frame == NULL) || (length < 4U)) return 0;
+    if ((frame == NULL) || (length < 4U)) return A_FALSE;
     const uint16_t expected = (uint16_t)frame[length - 2U] | ((uint16_t)frame[length - 1U] << 8U);
-    return aModbusCrc16(frame, length - 2U) == expected ? 1 : 0;
+    return aModbusCrc16(frame, length - 2U) == expected ? A_TRUE : A_FALSE;
 }

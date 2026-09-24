@@ -23,12 +23,6 @@ if(ASHELL_ENABLED)
             SHELL_CFG_USER="shell_cfg_user.h"
     )
 
-    target_link_libraries(
-        aShell
-        PRIVATE
-            aOS
-    )
-
     set_source_files_properties(
         ${LETTER_SHELL_SOURCES}
         PROPERTIES
@@ -60,4 +54,6 @@ target_link_libraries(
     aShell
     PUBLIC
         aLib
+    PRIVATE
+        aOS
 )

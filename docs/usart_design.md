@@ -1,5 +1,9 @@
 # aDevUsart 整体设计
 
+> 状态说明：本文第 1–17 节描述目标接口和目标架构，不代表所有接口已经存在于
+> 当前源码。当前实现范围见文末“当前实现状态”；规划 API 在加入源码前不得被
+> 应用代码调用。
+
 ## 1. 目标与边界
 
 `aDevUsart` 对 app、func 提供与具体 MCU 无关的串口接口，并在 aDrv 的非阻塞
@@ -29,7 +33,7 @@ app / func
 | 模块 | 职责 |
 |---|---|
 | aDrv | USART 寄存器、IRQ、DMA 路由和一次非阻塞硬件操作 |
-| aDevUsart | 模式校验、流式缓冲、单次 Direct/Async 操作、状态与超时 |
+| aDevUsart | 模式校验、流式缓冲、当前已实现的 Direct 操作、状态与超时 |
 | aUsartTxQueue | 多个零拷贝 TX 请求的严格 FIFO 调度 |
 | aOS | mutex、等待对象、单调时基、deadline timer 和 ISR-safe 同步 |
 | app/func | 硬件参数、静态存储、业务 callback 和协议处理 |
@@ -393,7 +397,8 @@ handle 的 Write、WriteDirect 或 WriteAsync。RX 方向保持独立，可以�
 | queue drained | FIFO 为空且 USART TC，最后停止位已经发出 |
 
 DMA 完成后可立即启动下一个 buffer，不在每个请求之间等待 USART TC，避免产生发送
-间隙。RS485 方向切换使用 `aUsartTxQueueWaitDrained()`。
+间隙。RS485 方向由 aDevUsart 内部在最终 TC 后自动切换；等待接口仅用于确认
+线路排空，不由应用手动切换方向。当前实现与配置见 [RS485 统一设计](usart_rs485.md)。
 
 ## 11. TX/RX 状态和冲突
 
@@ -512,3 +517,17 @@ ISR 不能获取任务 mutex，也不能替任务释放 mutex。异步函数返�
 ReadDirect/WriteDirect、Direct 能力查询、内部 IRQ callback、aOS 等待对象、TX/RX
 mutex 和独立方向状态。完整 Async、RX session、deadline timer 以及 aUsartTxQueue
 仍是后续实施项；尚未实现的功能不加入只返回失败的空壳接口。
+
+当前实际接口状态：
+
+| 能力 | 源码状态 | 当前边界 |
+|---|---|---|
+| 普通 `Read/Write` | 已实现 | polling、interrupt buffered、DMA buffered 由 TX/RX flag 选择 |
+| DMA circular RX | 已实现 | DMA 半满、满传和错误会提交 RX 状态并唤醒等待者；IDLE 为附加事件 |
+| `ReadDirect/WriteDirect` | 已实现 | 当前 GD32 通过 DMA 能力实现；无对应路由返回 unsupported |
+| `WriteAsync` / RX session | 未实现 | 本文接口表是设计目标，不可在代码中调用 |
+| `aUsartTxQueue` | 未实现 | 作为后续功能，不创建占位 target 或空接口 |
+
+`aDevUsart` 的 RX 错误通过 `ADEV_USART_EVENT_RX_ERROR` 通知，并可由
+`aDevUsartGetRxError()` 查询；DMA RX 计数快照短暂不稳定时返回 `BUSY` 并重试，
+不将计数竞争误报为硬件错误。

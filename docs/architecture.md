@@ -8,9 +8,9 @@
 | aCore | 通用 Arm CMSIS Core 和按工具链选择的 C 运行库适配 |
 | aDrv/include | 稳定的硬件无关驱动接口与类型 |
 | aDrv/src | GD32E505 的分模块驱动实现及少量私有共享声明 |
-| aOS | FreeRTOS 的硬件无关封装 |
+| aOS | FreeRTOS 后端的硬件无关封装、等待/锁/时基/errno 与故障记录 |
 | device | 组合 USART、RS485、Flash25Q 等设备语义 |
-| func | 组合 device/aOS，提供数据库、Modbus、Shell 等功能 |
+| func | 组合 device/aOS，提供数据库（含其存储适配）、Modbus、Shell 等功能 |
 | app | `main()`、资源配置、显式初始化、任务创建和测试 |
 
 ```text
@@ -25,6 +25,10 @@ all stable layers -------------------------------------> aLib
 aCore 的 GCC runtime 适配 newlib syscall 和 heap，不包含芯片向量表。其默认
 read/write 钩子不依赖任何设备；app 可以提供强定义连接具体控制台。芯片相关的
 startup、CMSIS Device 和 `SystemInit()` 仍由 aDrv 管理。
+
+`aShell` 是进程内唯一实例，通过 aOS 的任务、内存和递归锁接口运行；关闭时保留
+无操作 stub。`aOS` 后端和上游 FreeRTOS source set 的归属见
+[aOS 目录说明](../platform/aOS/README.md)。
 
 ## aDrv 边界
 
@@ -89,9 +93,11 @@ GCC startup 的中断向量顺序来自官方 V1.7.0 的 CL 启动文件，GNU �
 
 ## device、func 与 app
 
-device 提供硬件无关的设备组合，例如 `RS485 = USART + DE GPIO`、
-`Flash25Q = SPI/QSPI + CS GPIO`。device 依赖 aOS 的单调时基实现软件超时，但
-aDrv 不依赖 aOS。func 在其上构成 aMemory、aDataBase、aModbus 和 aShell 等功能。
+device 提供硬件无关的设备组合，例如 `RS485 = USART + DE GPIO`（作为
+aDevUsart 可选配置，统一收发接口，详见 [RS485 设计](usart_rs485.md)）、
+`Flash25Q = QSPI + Flash 操作语义`。device 依赖 aOS 的单调时基实现软件超时，但
+aDrv 不依赖 aOS。func 在其上构成 aDataBase（含 FlashDB 所需 FAL 适配）、aModbus
+和 aShell 等功能。
 
 工程不设置集中式 board 目录。引脚、外部器件型号、总线参数和设备句柄由使用它
 们的应用模块持有。platform 不提供 `main()` 或自动初始化注册表。

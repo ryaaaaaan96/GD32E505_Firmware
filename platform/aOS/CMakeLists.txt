@@ -28,6 +28,12 @@ if(NOT FREERTOS_USE_MUTEXES)
     )
 endif()
 
+if(NOT FREERTOS_USE_RECURSIVE_MUTEXES)
+    message(FATAL_ERROR
+        "aOS recursive mutex services require FreeRTOS recursive mutex support"
+    )
+endif()
+
 set(FREERTOS_PORT_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/portable/${FREERTOS_PORT}"
 )
@@ -46,6 +52,7 @@ configure_file(
     @ONLY
 )
 
+# 上游 FreeRTOS Kernel source set；与本项目的 aOS.c backend 明确分组。
 set(FREERTOS_SOURCES
     tasks.c
     queue.c
@@ -56,6 +63,7 @@ set(FREERTOS_SOURCES
     croutine.c
 )
 
+# 上游 FreeRTOS heap 与 Cortex-M33 port source set。
 set(FREERTOS_PORT_SOURCES
     "portable/MemMang/heap_${FREERTOS_HEAP_IMPLEMENTATION}.c"
     "${FREERTOS_PORT_DIR}/port.c"

@@ -2,9 +2,8 @@
 #define A_SHELL_H
 
 #include "aLib.h"
-#include <stdint.h>
 
-struct shell_def;
+#include <stdint.h>
 
 typedef int16_t (*aShellRead_t)(char *buffer, uint16_t size);
 typedef int16_t (*aShellWrite_t)(char *buffer, uint16_t size);
@@ -17,18 +16,10 @@ typedef struct {
     uint32_t task_priority;
 } aShellConfig_t;
 
-typedef struct {
-    struct shell_def *shell_obj;
-    char *buffer;
-    void *task_handle;
-} aShellHandle_t;
-
 void aShellConfigStructInit(aShellConfig_t *config);
-void aShellHandleStructInit(aShellHandle_t *handle);
-aStatus_t aShellInit(aShellHandle_t *handle,
-                     const aShellConfig_t *config);
-aStatus_t aShellDeInit(aShellHandle_t *handle);
+aStatus_t aShellInit(const aShellConfig_t *config);
+aStatus_t aShellDeInit(void);
 aBool_t aShellIsEnabled(void);
-void aShellPrint(aShellHandle_t *handle, const char *format, ...);
+void aShellPrint(const char *format, ...);
 
 #endif

@@ -57,15 +57,15 @@ static aStatus_t statusInit(void)
 
 #if ASHELL_ENABLED
 
-static aDevUsartHandle_t s_shell_usart;
-static aShellHandle_t s_shell;
+static aDevUsartStorage_t s_shell_usart_storage;
+static aDevUsartHandle_t *s_shell_usart;
 static uint8_t s_shell_rx_buffer[ASYSTEM_SHELL_RX_BUFFER_SIZE];
 static uint8_t s_shell_tx_buffer[ASYSTEM_SHELL_TX_BUFFER_SIZE];
 
 static int16_t shellWrite(char *buffer, uint16_t size)
 {
     const aSSize_t result = aDevUsartWrite(
-        &s_shell_usart, buffer, size, ASYSTEM_SHELL_IO_TIMEOUT);
+        s_shell_usart, buffer, size, ASYSTEM_SHELL_IO_TIMEOUT);
 
     return result < 0 ? -1 : (int16_t)result;
 }
@@ -73,7 +73,7 @@ static int16_t shellWrite(char *buffer, uint16_t size)
 static int16_t shellRead(char *buffer, uint16_t size)
 {
     const aSSize_t result = aDevUsartRead(
-        &s_shell_usart, buffer, size, ASYSTEM_SHELL_IO_TIMEOUT);
+        s_shell_usart, buffer, size, ASYSTEM_SHELL_IO_TIMEOUT);
 
     return result < 0 ? -1 : (int16_t)result;
 }
@@ -83,7 +83,6 @@ static aStatus_t shellUsartInit(void)
     aDevUsartConfig_t config;
 
     aDevUsartConfigStructInit(&config);
-    aDevUsartHandleStructInit(&s_shell_usart);
     config.drv_config.id = ASYSTEM_SHELL_USART;
     config.drv_config.tx_pin = ASYSTEM_SHELL_TX_PIN;
     config.drv_config.rx_pin = ASYSTEM_SHELL_RX_PIN;
@@ -95,7 +94,8 @@ static aStatus_t shellUsartInit(void)
     config.tx_buffer = s_shell_tx_buffer;
     config.tx_buffer_size = sizeof(s_shell_tx_buffer);
 
-    return aDevUsartInit(&config, &s_shell_usart);
+    return aDevUsartInitStatic(&config, &s_shell_usart_storage,
+                               &s_shell_usart);
 }
 
 static aStatus_t shellInit(void)
@@ -110,19 +110,18 @@ static aStatus_t shellInit(void)
     }
 
     aShellConfigStructInit(&config);
-    aShellHandleStructInit(&s_shell);
     config.read = shellRead;
     config.write = shellWrite;
 
-    status = aShellInit(&s_shell, &config);
+    status = aShellInit(&config);
     if (status != A_STATUS_OK) {
         return status;
     }
 
     core_clock_hz = aDrvGetCoreClockHz();
-    aShellPrint(&s_shell, "\r\nsystem clock: %lu Hz\r\n",
+    aShellPrint("\r\nsystem clock: %lu Hz\r\n",
                 (unsigned long)core_clock_hz);
-    aShellPrint(&s_shell, "system peripherals initialized\r\n");
+    aShellPrint("system peripherals initialized\r\n");
 
     return A_STATUS_OK;
 }

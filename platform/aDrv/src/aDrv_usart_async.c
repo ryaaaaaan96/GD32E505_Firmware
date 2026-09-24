@@ -26,6 +26,8 @@ typedef struct {
     volatile size_t rx_wrap_count;
     IRQn_Type rx_dma_irq;
     uint8_t rx_irq_priority;
+    aDrvUsartAsyncRxCallback_t rx_callback;
+    void *rx_callback_argument;
     aBool_t tx_busy;
     aBool_t tx_error;
     aBool_t rx_busy;
@@ -139,6 +141,9 @@ static void rx_dma_flags_service(aDrvPrivateUsartAsyncState_t *state)
         dma_flag_clear(controller, channel, DMA_FLAG_FTF);
         ++state->rx_wrap_count;
     }
+    if (dma_flag_get(controller, channel, DMA_FLAG_HTF) != RESET) {
+        dma_flag_clear(controller, channel, DMA_FLAG_HTF);
+    }
     if (dma_flag_get(controller, channel, DMA_FLAG_ERR) != RESET) {
         dma_flag_clear(controller, channel, DMA_FLAG_ERR);
         state->rx_error = A_TRUE;
@@ -153,7 +158,13 @@ static void rx_dma_irq_dispatch(aDrvUsartId_t id)
         nvic_irq_disable(state->rx_dma_irq);
         return;
     }
+    const uint32_t controller = (uint32_t)state->rx_dma.controller;
+    const dma_channel_enum channel = (dma_channel_enum)state->rx_dma.channel;
+    const uint32_t pending = dma_flag_get(controller, channel, DMA_FLAG_G);
     rx_dma_flags_service(state);
+    if ((pending != RESET) && (state->rx_callback != NULL)) {
+        state->rx_callback(state->rx_callback_argument);
+    }
 }
 
 static void tx_stop(aDrvUsartHandle_t *handle,
@@ -390,13 +401,16 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
 
 aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
                                         void *buffer, size_t size,
-                                        uint8_t interrupt_priority)
+                                        uint8_t interrupt_priority,
+                                        aDrvUsartAsyncRxCallback_t callback,
+                                        void *argument)
 {
     aDrvPrivateUsartAsyncState_t *state;
     aDrvDmaChannel_t channel;
     aStatus_t status;
 
     if ((handle == NULL) || (buffer == NULL) || (size < 2U) ||
+        (callback == NULL) ||
         (size > ADRV_USART_ASYNC_MAX_TRANSFER) ||
         (interrupt_priority > 15U)) {
         return A_STATUS_INVALID_PARAM;
@@ -451,6 +465,8 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
     state->rx_wrap_count = 0U;
     state->rx_dma_irq = dma_irq_get(&state->rx_dma);
     state->rx_irq_priority = interrupt_priority;
+    state->rx_callback = callback;
+    state->rx_callback_argument = argument;
     state->rx_circular = A_TRUE;
     state->rx_error = A_FALSE;
     state->rx_busy = A_TRUE;
@@ -459,7 +475,7 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
                    (dma_channel_enum)state->rx_dma.channel, DMA_FLAG_G);
     dma_interrupt_enable((uint32_t)state->rx_dma.controller,
                          (dma_channel_enum)state->rx_dma.channel,
-                         DMA_INT_FTF | DMA_INT_ERR);
+                         DMA_INT_HTF | DMA_INT_FTF | DMA_INT_ERR);
     nvic_irq_enable(state->rx_dma_irq, interrupt_priority, 0U);
     usart_dma_receive_config((uint32_t)handle->instance,
                              USART_RECEIVE_DMA_ENABLE);
@@ -467,7 +483,7 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
     if (status != A_STATUS_OK) {
         dma_interrupt_disable((uint32_t)state->rx_dma.controller,
                               (dma_channel_enum)state->rx_dma.channel,
-                              DMA_INT_FTF | DMA_INT_ERR);
+                              DMA_INT_HTF | DMA_INT_FTF | DMA_INT_ERR);
         nvic_irq_disable(state->rx_dma_irq);
         state->rx_busy = A_FALSE;
         state->rx_circular = A_FALSE;
@@ -480,7 +496,8 @@ aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
                                            size_t *received)
 {
     aDrvPrivateUsartAsyncState_t *state;
-    size_t remaining;
+    size_t remaining_before;
+    size_t remaining_after;
     aBool_t error;
 
     if ((handle == NULL) || (received == NULL)) {
@@ -496,15 +513,32 @@ aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
         return A_STATUS_NOT_READY;
     }
 
+    /* DMA keeps running while its IRQ is masked. Retry if the counter changes
+     * across a possible reload so the wrap count and position are coherent. */
+    for (uint32_t attempt = 0U; attempt < 8U; ++attempt) {
+        nvic_irq_disable(state->rx_dma_irq);
+        rx_dma_flags_service(state);
+        remaining_before = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
+        __DMB();
+        remaining_after = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
+        if ((remaining_after <= remaining_before) &&
+            ((remaining_before - remaining_after) < state->rx_size / 2U)) {
+            *received = state->rx_wrap_count * state->rx_size +
+                        (state->rx_size - remaining_after);
+            nvic_irq_enable(state->rx_dma_irq, state->rx_irq_priority, 0U);
+            error = state->rx_error;
+            return error != 0U ? A_STATUS_ERROR : A_STATUS_OK;
+        }
+        nvic_irq_enable(state->rx_dma_irq, state->rx_irq_priority, 0U);
+    }
     nvic_irq_disable(state->rx_dma_irq);
     rx_dma_flags_service(state);
-    remaining = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
+    remaining_after = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
     *received = state->rx_wrap_count * state->rx_size +
-                (state->rx_size - remaining);
+                (state->rx_size - remaining_after);
     error = state->rx_error;
     nvic_irq_enable(state->rx_dma_irq, state->rx_irq_priority, 0U);
-
-    return error != 0U ? A_STATUS_ERROR : A_STATUS_OK;
+    return error != 0U ? A_STATUS_ERROR : A_STATUS_BUSY;
 }
 
 aStatus_t aDrvUsartAsyncRxGetRemaining(aDrvUsartHandle_t *handle,
@@ -565,7 +599,7 @@ aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
         rx_dma_flags_service(state);
         dma_interrupt_disable((uint32_t)state->rx_dma.controller,
                               (dma_channel_enum)state->rx_dma.channel,
-                              DMA_INT_FTF | DMA_INT_ERR);
+                              DMA_INT_HTF | DMA_INT_FTF | DMA_INT_ERR);
     }
     if (received != NULL) {
         *received = state->rx_wrap_count * state->rx_size +
@@ -597,6 +631,8 @@ aStatus_t aDrvUsartAsyncRxAbort(aDrvUsartHandle_t *handle)
         state->rx_size = 0U;
         state->rx_wrap_count = 0U;
         state->rx_irq_priority = 0U;
+        state->rx_callback = NULL;
+        state->rx_callback_argument = NULL;
         state->rx_circular = A_FALSE;
         state->rx_error = A_FALSE;
     }

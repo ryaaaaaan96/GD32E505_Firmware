@@ -24,6 +24,24 @@ static const dmaMapping_t dma_mappings[] = {
     {DMA1, DMA_CH6},
 };
 
+static const void *s_dma_owners[ADRV_ARRAY_COUNT(dma_mappings)];
+
+static uint32_t dma_critical_enter(void)
+{
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    __DMB();
+    return primask;
+}
+
+static void dma_critical_exit(uint32_t primask)
+{
+    __DMB();
+    if ((primask & 1U) == 0U) {
+        __enable_irq();
+    }
+}
+
 static aStatus_t resolve_dma(aDrvDmaChannel_t channel, dmaMapping_t *mapping)
 {
     if ((mapping == NULL) ||
@@ -101,6 +119,7 @@ aStatus_t aDrvDmaInitStatic(const aDrvDmaConfig_t *config,
     };
     dma_parameter_struct parameters;
     dmaMapping_t mapping;
+    uint32_t critical_state;
 
     if ((config == NULL) || (handle == NULL) ||
         ((size_t)config->priority >= ADRV_ARRAY_COUNT(priorities)) ||
@@ -112,6 +131,14 @@ aStatus_t aDrvDmaInitStatic(const aDrvDmaConfig_t *config,
     }
 
     rcu_periph_clock_enable(mapping.controller == DMA0 ? RCU_DMA0 : RCU_DMA1);
+
+    critical_state = dma_critical_enter();
+    if (s_dma_owners[config->channel] != NULL) {
+        dma_critical_exit(critical_state);
+        return A_STATUS_BUSY;
+    }
+    s_dma_owners[config->channel] = handle;
+    dma_critical_exit(critical_state);
 
     dma_struct_para_init(&parameters);
     parameters.periph_width = peripheral_width(config->periphWidth);
@@ -149,6 +176,9 @@ aStatus_t aDrvDmaInitStatic(const aDrvDmaConfig_t *config,
 
 aStatus_t aDrvDmaDeInitStatic(aDrvDmaHandle_t *handle)
 {
+    uint32_t channel_index;
+    uint32_t critical_state;
+
     if (handle == NULL) {
         return A_STATUS_INVALID_PARAM;
     }
@@ -156,8 +186,22 @@ aStatus_t aDrvDmaDeInitStatic(aDrvDmaHandle_t *handle)
         return A_STATUS_NOT_READY;
     }
 
+    channel_index = (handle->controller == DMA0 ? 0U : 7U) +
+                    (uint32_t)handle->channel;
+    critical_state = dma_critical_enter();
+    if ((channel_index >= ADRV_ARRAY_COUNT(dma_mappings)) ||
+        (s_dma_owners[channel_index] != handle) ||
+        (dma_mappings[channel_index].controller != handle->controller) ||
+        (dma_mappings[channel_index].channel != handle->channel)) {
+        dma_critical_exit(critical_state);
+        return A_STATUS_ERROR;
+    }
+    dma_channel_disable((uint32_t)handle->controller,
+                        (dma_channel_enum)handle->channel);
     dma_deinit((uint32_t)handle->controller,
                (dma_channel_enum)handle->channel);
+    s_dma_owners[channel_index] = NULL;
+    dma_critical_exit(critical_state);
     aDrvDmaHandleStructInit(handle);
     return A_STATUS_OK;
 }

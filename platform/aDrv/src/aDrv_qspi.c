@@ -264,14 +264,3 @@ aStatus_t aDrvQspiReceive(aDrvQspiHandle_t *handle, uint8_t *data,
     }
     return A_STATUS_OK;
 }
-
-void aDrvQspiCsManual(aDrvQspiHandle_t *handle, aBool_t low)
-{
-    (void)handle;
-    (void)low;
-}
-
-void aDrvQspiCsAuto(aDrvQspiHandle_t *handle)
-{
-    (void)handle;
-}

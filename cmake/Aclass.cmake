@@ -2,16 +2,6 @@
 
 include_guard(GLOBAL)
 
-# Override a cache-backed default from a project config file.  Defaults must
-# be declared before para_set() is used.
-macro(para_set variable value)
-    if(NOT DEFINED CACHE{${variable}})
-        message(FATAL_ERROR
-            "para_set cannot override undefined parameter: ${variable}")
-    endif()
-    set_property(CACHE ${variable} PROPERTY VALUE ${value})
-endmacro()
-
 # 使用 macro 是为了让 MCU profile 中的变量保留在顶层目录作用域，并确保
 # toolchain、CPU/FPU 参数在 project() 启用编译器之前生效。
 macro(aclass_select)

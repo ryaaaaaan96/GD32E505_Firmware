@@ -1,18 +1,5 @@
 include("${CMAKE_CURRENT_SOURCE_DIR}/config/aDrv_defaults.cmake")
 
-set(
-    ADRV_CONFIG
-    "${CMAKE_SOURCE_DIR}/config/aDrv_config.cmake"
-    CACHE FILEPATH
-    "aDrv module configuration"
-)
-
-if(NOT EXISTS "${ADRV_CONFIG}")
-    message(FATAL_ERROR "aDrv configuration does not exist: ${ADRV_CONFIG}")
-endif()
-
-include("${ADRV_CONFIG}")
-
 if(ADRV_USART_INTERRUPT AND NOT ADRV_MODULE_USART)
     message(FATAL_ERROR
         "ADRV_USART_INTERRUPT requires ADRV_MODULE_USART"
@@ -27,7 +14,7 @@ endif()
 
 # Like Zephyr's UART_ASYNC_API, asynchronous USART support selects DMA.
 if(ADRV_USART_ASYNC)
-    set(ADRV_MODULE_DMA 1 CACHE BOOL "Enable the aDrv DMA module" FORCE)
+    set(ADRV_MODULE_DMA ON)
 endif()
 
 if(NOT DEFINED BOARD_HXTAL_HZ OR BOARD_HXTAL_HZ LESS_EQUAL 0)
