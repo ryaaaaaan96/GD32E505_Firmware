@@ -4,6 +4,15 @@
 #include "aDrv.h"
 #include "aDrv_gpio.h"
 
+/* aDrv's CMake target exports the capabilities present in this build. */
+#ifndef ADRV_USART_HAS_INTERRUPT
+#define ADRV_USART_HAS_INTERRUPT 0
+#endif
+
+#ifndef ADRV_USART_HAS_ASYNC
+#define ADRV_USART_HAS_ASYNC 0
+#endif
+
 typedef enum {
     ADRV_USART_0,
     ADRV_USART_1,
@@ -47,7 +56,8 @@ typedef struct {
     void *argument;
 } aDrvUsartCallback_t;
 
-typedef void (*aDrvUsartAsyncRxCallback_t)(void *argument);
+/* Internal completion hook; the GD32 port invokes it in DMA ISR context. */
+typedef void (*aDrvUsartDmaCallback_t)(void *argument);
 
 typedef enum {
     ADRV_USART_OWNER_NONE = 0U,
@@ -86,6 +96,7 @@ aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *handle, uint8_t data);
 aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *handle, uint8_t *data);
 aStatus_t aDrvUsartIsTransmitComplete(
     const aDrvUsartHandle_t *handle, aBool_t *complete);
+#if ADRV_USART_HAS_INTERRUPT
 aStatus_t aDrvUsartRegisterCallback(
     aDrvUsartHandle_t *handle, const aDrvUsartExtiConfig_t *config);
 aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
@@ -96,6 +107,9 @@ aStatus_t aDrvUsartSetInterruptEnabled(aDrvUsartHandle_t *handle,
 aBool_t aDrvUsartInterruptIsSupported(void);
 void aDrvUsartEnableInterrupt(aDrvUsartHandle_t *handle);
 void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *handle);
+#endif
+
+#if ADRV_USART_HAS_ASYNC
 aBool_t aDrvUsartAsyncTxIsSupported(const aDrvUsartHandle_t *handle);
 aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *handle,
                                 const void *data, size_t size,
@@ -108,6 +122,10 @@ aBool_t aDrvUsartAsyncRxIsSupported(const aDrvUsartHandle_t *handle);
 /* Start one finite DMA reception. Use Stop() to obtain its received length. */
 aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
                                 void *buffer, size_t size);
+aStatus_t aDrvUsartRxDmaStart(
+    aDrvUsartHandle_t *handle, void *buffer, size_t size,
+    uint8_t interrupt_priority, aDrvUsartDmaCallback_t callback,
+    void *argument);
 
 /*
  * Start continuous circular DMA reception directly into buffer. The buffer is
@@ -116,7 +134,7 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
 aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
                                         void *buffer, size_t size,
                                         uint8_t interrupt_priority,
-                                        aDrvUsartAsyncRxCallback_t callback,
+                                        aDrvUsartDmaCallback_t callback,
                                         void *argument);
 
 /*
@@ -132,6 +150,8 @@ aStatus_t aDrvUsartAsyncRxGetRemaining(aDrvUsartHandle_t *handle,
 aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
                                size_t *received);
 aStatus_t aDrvUsartAsyncRxAbort(aDrvUsartHandle_t *handle);
+#endif
+
 aStatus_t aDrvUsartSetBaudrate(aDrvUsartHandle_t *handle, uint32_t baud_rate);
 void aDrvUsartGetBaudrate(const aDrvUsartHandle_t *handle,
                           uint32_t *baud_rate);

@@ -10,26 +10,12 @@ aclass_select(
     TOOLCHAIN GCC
 )
 
-include(config/aclass_config.cmake)
-include(config/aDrv_config.cmake)
-
-if(ASHELL_ENABLED AND
-   (NOT ADRV_MODULE_USART OR NOT ADRV_USART_INTERRUPT OR NOT ADRV_USART_ASYNC))
-    message(FATAL_ERROR
-        "ASHELL_ENABLED requires USART, USART interrupts, and asynchronous DMA RX"
-    )
+# Optional configuration profile for reproducible product/matrix builds.
+if(NOT DEFINED ACLASS_CONFIG_FILE)
+    set(ACLASS_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/config/aclass_config.cmake")
 endif()
-
-if(ADATABASE_ENABLED AND
-   (NOT ADRV_MODULE_QSPI OR NOT ADRV_MODULE_GPIO))
-    message(FATAL_ERROR
-        "ADATABASE_ENABLED requires ADRV_MODULE_QSPI and ADRV_MODULE_GPIO"
-    )
-endif()
-
-# Board clock: a 20 MHz external active oscillator drives HXTAL_IN.
-set(BOARD_HXTAL_HZ 20000000)
-set(BOARD_HXTAL_BYPASS ON)
+include("${ACLASS_CONFIG_FILE}")
+include(cmake/aclass_resolve.cmake)
 
 project(
     ${FIRMWARE_NAME}
@@ -38,8 +24,6 @@ project(
 )
 
 aclass_initialize()
-
-message(STATUS "aClass modules: aShell=${ASHELL_ENABLED}")
 
 add_subdirectory(platform)
 add_subdirectory(device)

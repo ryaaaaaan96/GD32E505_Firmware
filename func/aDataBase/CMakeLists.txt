@@ -27,12 +27,6 @@ target_link_libraries(
         aFlash25q
 )
 
-target_include_directories(
-    aDataBase
-    PRIVATE
-        "${CMAKE_SOURCE_DIR}/config"
-)
-
 # FlashDB 是上游代码，不使用本工程对自有代码开启的严格告警升级。
 set_source_files_properties(
     ${FLASHDB_SOURCES}

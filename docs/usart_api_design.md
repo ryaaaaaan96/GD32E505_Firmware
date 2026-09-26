@@ -1,10 +1,9 @@
-# aDevUsart 接口问题与重构计划
+# aDevUsart API 设计与实现说明
 
 ## 1. 文档目的
 
-本文记录当前 `aDevUsart` 公共接口存在的问题、已经确认的接口语义，以及后续实现
-Direct/Async/Queue 时必须遵守的规则。本文用于代码评审和重构跟踪；完整目标架构仍
-参见 `docs/usart_design.md`。
+本文记录 `aDevUsart` 公共接口的设计选择、实现语义与后续优化项。Async、DMA 异步 RX
+和 TX queue 已实现；当前实现状态及准确调用语义以 `docs/usart_design.md` 和公共头文件为准。
 
 ## 2. 已经确认的接口定位
 
@@ -14,7 +13,7 @@ USART 对外提供三种不同的数据所有权模型：
 |---|---|---:|---|
 | 普通流式 | `aDevUsartRead/Write` | 使用内部 ring，有一次拷贝 | 函数返回长度 |
 | 同步 Direct | `aDevUsartReadDirect/WriteDirect` | 零拷贝 | DMA 停止访问 buffer 后返回 |
-| 异步 Direct | `aDevUsartWriteAsync`、RX session | 零拷贝 | callback 归还 buffer |
+| 异步 | `aDevUsartWriteAsync`、`aDevUsartReadAsync` | TX 零拷贝；RX 借用共享 ring | callback |
 
 本项目中的 Direct 强调 payload 不经过 aDev 内部 ring，也不调用 `memcpy()`。GD32E505
 port 使用 DMA 实现 Direct；USART 实例没有对应 DMA 路由时，公共接口仍然存在，但
@@ -36,8 +35,8 @@ DMA complete 和 USART TC 不是同一个完成条件：
 因此：
 
 - `WriteDirect()` 在 DMA complete 后即可返回；
-- `WriteAsync()` 在 DMA complete 后调用完成 callback；
-- TX queue 在 DMA complete 后立即启动下一请求，不逐项等待 TC；
+- 当前 `WriteAsync()` 在 USART TC 确认物理发送完成后调用 callback；
+- `aDevUsartTxQueue` 在请求 callback 的任务上下文启动下一请求，因此按 TC 顺序发送；
 - `aDevUsartWaitTransmitComplete()` 单独等待 USART TC；
 - 不能用 USART TC 代替每个 DMA buffer 的所有权归还事件。
 
@@ -54,21 +53,17 @@ aSSize_t aDevUsartWriteDirect(...);
 
 aBool_t aDevUsartIsSupported(...);
 aStatus_t aDevUsartWaitTransmitComplete(...);
+aStatus_t aDevUsartWriteAsync(...);
+aStatus_t aDevUsartReadAsync(...);
+aStatus_t aDevUsartReadAsyncCancel(...);
+aStatus_t aDevUsartTxQueueSubmit(...);
 ```
 
-当前尚未实现，不能提前增加只返回失败的空壳：
-
-```c
-aDevUsartWriteAsync();
-aDevUsartWriteAsyncCancel();
-aDevUsartRxStart();
-aDevUsartRxBufferQueue();
-aDevUsartRxStop();
-```
-
+异步 RX 使用初始化提供的 DMA ring；多个 one-shot waiter 通过 token 管理，不配置
+每请求 DMA buffer，也没有由 callback 返回值控制的循环模式。
 ## 5. 当前主要问题
 
-### 5.1 aDrv 缺少 TX DMA 完成通知
+### 5.1 TX DMA 完成通知与 USART TC
 
 当前同步 `WriteDirect()` 通过查询 DMA remaining 判断完成，因此 payload 已经零拷贝，
 但任务等待期间仍是协作式查询。普通 DMA buffered TX 也使用 USART TC 回调推进 ring
@@ -79,12 +74,15 @@ aDevUsartRxStop();
 - Direct 等待期间不能真正进入 Blocked；
 - DMA buffered 分块之间需要等待 TC，可能产生发送间隙；
 - DMA error 不能通过统一完成事件立即上报；
-- 无法在此基础上可靠实现 `WriteAsync()` 和无间隙 TX queue。
+- Async TX 与队列目前可用，但 DMA error 与 USART TC 仍共享设备层查询流程，
+  后续可考虑拆分硬件 DMA 完成和物理线路完成事件。
 
-需要由 aDrv 增加一次硬件传输的 complete/error callback。callback 表示 DMA 已经停止
-访问 buffer，不表示线路 TC。
+当前 Async TX 由 aDev 在 TC IRQ 查询 DMA remaining，并在线路发送完成后完成请求；
+因此用户 buffer 持有时间比“DMA 已停止读取”更长，但语义简单且适合队列串行发送。
+如果未来需要 DMA 完成即归还 buffer、同时允许线路并行移出，还需增加明确的 DMA
+complete/error 硬件事件，并调整 RS485/TC 状态机，不能把 TC 与 DMA 完成混为一谈。
 
-### 5.2 WriteAsync 的能力语义尚未落地
+### 5.2 WriteAsync 能力语义
 
 GD32E505 的 `WriteAsync()` 必须使用 DMA，成功后直接持有用户 buffer，直到 complete、
 error、timeout 或 cancel callback。没有 DMA 路由时返回
@@ -146,13 +144,12 @@ engine state: IDLE / DMA_ACTIVE / WAIT_TC / ERROR
 
 Direct 启动前还必须检查 stream ring 和 DMA active 状态，不能仅检查 owner state。
 
-### 5.6 Direct 与默认 RX circular DMA 冲突
+### 5.6 Read 与 ReadDirect 的边界
 
-循环 DMA RX 从初始化成功后持续拥有 RX DMA。此时 `ReadDirect()` 不能在不丢失字节流
-边界的情况下临时抢占 DMA，因此当前返回 `A_STATUS_BUSY` 是有意设计，不是能力缺失。
-
-如果应用需要 Direct RX，应选择 polling/interrupt buffered 默认 RX，或者直接使用
-未来的异步 RX session，不应让 `ReadDirect()` 隐式停止和重启 circular DMA。
+Read 支持轮询、中断 ring 或 DMA ring，读取当前可用内容后返回。DMA buffered RX
+使用初始化提供的共享 ring，Read 与 ReadAsync 共用一个消费游标；异步 callback 借用
+最多 64 字节的稳定节点快照；复制前后检查生产游标，覆盖时报告 ERROR。ReadDirect 使用 DMA 写入调用者 buffer；DMA buffered RX 持续占用通道，
+所以两者不能同时使用。其他 RX 模式下 ReadDirect 返回前停止 DMA。
 
 ### 5.7 DeInit 生命周期保护不足
 
@@ -201,7 +198,7 @@ aDev_usart_internal.h  私有状态和内部函数
 - 应用不得读取或修改 DMA 正在写入的区域；
 - 函数返回实际接收长度；
 - timeout 前收到部分数据时返回部分长度；
-- RX ring 有未读数据或 circular DMA RX 正在运行时返回 `BUSY`。
+- RX ring 有未读数据或其他 RX 请求活动时返回 `BUSY`。
 
 ### 6.3 Cache 与 DMA 可访问性
 
@@ -209,16 +206,12 @@ aDev_usart_internal.h  私有状态和内部函数
 边界处理 cache clean/invalidate，并校验 buffer 所在内存是否能被 DMA 访问。aDev
 公共接口不能包含芯片 cache API。
 
-## 7. WriteAsync 目标接口
+## 7. WriteAsync 接口语义
 
 ```c
 aStatus_t aDevUsartWriteAsync(
     aDevUsartHandle_t *handle,
-    const void *buffer,
-    size_t size,
-    aTimeout_t timeout,
-    aDevUsartTxCallback_t callback,
-    void *argument);
+    const aDevUsartWriteRequest_t *request);
 
 aStatus_t aDevUsartWriteAsyncCancel(
     aDevUsartHandle_t *handle);
@@ -234,28 +227,36 @@ aDev/DMA 拥有 buffer
 应用重新获得 buffer
 ```
 
-同一个 aDev handle 同时只执行一个 Async TX。多 buffer 排队由后续
-`aUsartTxQueue` 完成，aDev 不在单请求接口中隐藏动态队列。
+同一个 aDev handle 同时只执行一个 Async TX。多 buffer 排队由 `aDevUsartTxQueue`
+完成，aDev 不在单请求接口中隐藏动态队列。
 
 异步 timeout 从提交成功开始，覆盖 DMA 等待时间。`A_TIMEOUT_NO_WAIT` 不能表示有效
 的异步完成期限，应返回 `A_STATUS_INVALID_PARAM`；调用者应使用有限 timeout 或
 `A_TIMEOUT_FOREVER`。
 
-## 8. 推荐实施顺序
+## 8. 已实施与后续验证
 
-1. 给 aDrv TX DMA 增加 complete/error callback，并区分 DMA complete 与 USART TC；
-2. 修正 DMA buffered TX 的错误回滚、错误事件和恢复路径；
-3. 拆分 `aDev_usart.c`，建立明确的 owner/engine 状态机；
-4. 实现单请求零拷贝 `WriteAsync/Cancel`；
-5. 让同步 `WriteDirect` 复用 Async 引擎和 aOS 等待对象；
-6. 完成异步 RX session 和多 buffer 所有权管理；
-7. 在 func 层实现 `aUsartTxQueue`，只存描述符、不复制 payload；
-8. 增加 DMA error、timeout、cancel、ring 回绕、并发和 callback-once 测试；
-9. 完成目标板上的 Direct/Async 实际 DMA 验证。
+已实现单请求 Async TX、DMA buffered RX FIFO waiter、静态 FIFO `aDevUsartTxQueue`、
+超时/取消结果 callback。后续仍应增加目标板 DMA 实测，以及更系统的队列满、
+timeout、CancelAll 与 DMA 错误测试。
 
 ## 9. 当前结论
 
-普通流式接口和同步 Direct 的职责已经分开，Direct 也已经实现 payload 零拷贝。
-当前最大的接口基础问题是缺少独立的 TX DMA complete/error 通知。在解决该问题前，
-不应直接叠加 `WriteAsync()` 或 `aUsartTxQueue`，否则会把 USART TC、buffer 归还和线路
+普通流式接口、同步 Direct 和异步接口的职责已经分开。当前 TX Async callback
+使用 USART TC 作为终结点，因此 buffer 到物理发送完成才归还；ReadAsync 在初始化
+提供的共享 DMA ring 上排队等待，每个 token 只收到一次数据、超时或取消 callback。
+Read 与异步请求竞争同一数据流，数据只交给一个消费者。是否增加“DMA complete 即归还”的更高吞吐 TX 语义，
+应在目标硬件验证后单独讨论，避免把 USART TC、buffer 归还和线路
 排空三种不同语义继续耦合在一起。
+
+## 异步请求参数约定
+
+ReadAsync 使用 `aDevUsartReadRequest_t`（timeout、callback、argument），并通过
+`aDevUsartReadToken_t` 输出请求 token；RX DMA ring 在 `aDevUsartConfig_t` 初始化时提供；
+WriteAsync 使用 `aDevUsartWriteRequest_t`（buffer、size、timeout、callback、argument）。
+TxQueueSubmit 使用 `aDevUsartTxQueueRequest_t`（buffer、size、timeout），request_id 单独作为输出参数；
+队列回调仍在队列初始化配置中设置。内部 WriteAsyncQueued 复用 WriteRequest。
+
+所有请求结构体在提交期间复制所需字段，不保存其地址，可以是局部变量；提交返回后可修改或销毁
+结构体本身。TX buffer 及 argument 必须保持有效直到完成回调；TX payload 不复制，RX Async 使用稳定节点快照。
+NULL 请求返回 INVALID_PARAM。同步 Read/Write/Direct 保留原有简短签名。

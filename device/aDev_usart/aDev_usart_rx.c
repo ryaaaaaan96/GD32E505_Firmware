@@ -2,6 +2,7 @@
 
 #include "aOS.h"
 
+#if ADEV_USART_HAS_INTERRUPT
 static void irq_receive(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
@@ -22,85 +23,38 @@ static void irq_receive(void *argument)
     aDevUsartNotifyEvent(handle, ADEV_USART_EVENT_RX_READY);
 }
 
+#endif
+
+#if ADEV_USART_HAS_INTERRUPT
 static void irq_idle(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
 
     ++handle->idle_event_count;
+#if ADEV_USART_HAS_DMA
+    if ((handle->mode & ADEV_USART_RX_MASK) == ADEV_USART_RX_DMA_BUFFERED)
+        aDevUsartRxDmaNotifyFromISR(handle);
+#endif
     aOSWaitObjectNotifyFromISR(handle->rx_wait_object);
     aDevUsartNotifyEvent(handle, ADEV_USART_EVENT_RX_IDLE);
 }
 
-aStatus_t aDevUsartDmaRxCommit(aDevUsartHandle_t *handle)
-{
-    size_t received = handle->rx_dma_observed;
-    size_t added;
-    size_t free_space;
-    aStatus_t status;
+#endif
 
-    status = aDrvUsartAsyncRxGetReceivedCount(&handle->drv_handle,
-                                              &received);
-    added = received - handle->rx_dma_observed;
-    handle->rx_dma_observed = received;
-
-    if (added == 0U) {
-        if ((status != A_STATUS_OK) && (status != A_STATUS_BUSY)) {
-            handle->rx_error = status;
-        }
-        return status;
-    }
-
-    free_space = handle->rx_buffer_size - handle->rx_count;
-    if (added >= handle->rx_buffer_size) {
-        handle->rx_tail = received % handle->rx_buffer_size;
-        handle->rx_count = handle->rx_buffer_size;
-        handle->rx_overflow = A_TRUE;
-    } else if (added > free_space) {
-        const size_t discarded = added - free_space;
-
-        handle->rx_tail =
-            (handle->rx_tail + discarded) % handle->rx_buffer_size;
-        handle->rx_count = handle->rx_buffer_size;
-        handle->rx_overflow = A_TRUE;
-    } else {
-        handle->rx_count += added;
-    }
-    handle->rx_head = received % handle->rx_buffer_size;
-
-    if ((status != A_STATUS_OK) && (status != A_STATUS_BUSY)) {
-        handle->rx_error = status;
-    }
-    return status;
-}
-
-static void dma_rx_idle(void *argument)
+#if ADEV_USART_HAS_DMA && ADEV_USART_HAS_INTERRUPT
+static void rx_dma_idle(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
-    const aStatus_t status = aDevUsartDmaRxCommit(handle);
 
     ++handle->idle_event_count;
+    aDevUsartRxDmaNotifyFromISR(handle);
     aOSWaitObjectNotifyFromISR(handle->rx_wait_object);
-    if ((status == A_STATUS_OK) || (status == A_STATUS_BUSY)) {
-        aDevUsartNotifyEvent(handle, ADEV_USART_EVENT_RX_READY);
-    } else {
-        aDevUsartNotifyEvent(handle, ADEV_USART_EVENT_RX_ERROR);
-    }
     aDevUsartNotifyEvent(handle, ADEV_USART_EVENT_RX_IDLE);
 }
 
-static void dma_rx_progress(void *argument)
-{
-    aDevUsartHandle_t *handle = argument;
-    const aStatus_t status = aDevUsartDmaRxCommit(handle);
+#endif
 
-    aOSWaitObjectNotifyFromISR(handle->rx_wait_object);
-    if ((status == A_STATUS_OK) || (status == A_STATUS_BUSY)) {
-        aDevUsartNotifyEvent(handle, ADEV_USART_EVENT_RX_READY);
-    } else {
-        aDevUsartNotifyEvent(handle, ADEV_USART_EVENT_RX_ERROR);
-    }
-}
-
+#if ADEV_USART_HAS_INTERRUPT
 static aStatus_t rx_idle_detection_enable(
     aDevUsartHandle_t *handle, const aDevUsartConfig_t *config)
 {
@@ -109,24 +63,25 @@ static aStatus_t rx_idle_detection_enable(
     if (!aDrvUsartInterruptIsSupported()) {
         return A_STATUS_UNSUPPORTED;
     }
-    if ((config->mode & ADEV_USART_RX_MASK) ==
-        ADEV_USART_RX_DMA_CIRCULAR) {
-        callback = dma_rx_idle;
-    }
+
     return aDevUsartRegisterIrqCallback(
         handle, ADRV_USART_EXTI_IDLE, callback,
         config->interrupt_priority, A_TRUE);
 }
 
+#endif
+
 aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
                               const aDevUsartConfig_t *config)
 {
     aStatus_t status;
+    (void)handle;
 
     switch (config->mode & ADEV_USART_RX_MASK) {
     case ADEV_USART_RX_POLLING:
         status = A_STATUS_OK;
         break;
+#if ADEV_USART_HAS_INTERRUPT
     case ADEV_USART_RX_INTERRUPT_BUFFERED:
         if (!aDrvUsartInterruptIsSupported()) {
             return A_STATUS_UNSUPPORTED;
@@ -141,29 +96,53 @@ aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
             handle, ADRV_USART_EXTI_RXNE, irq_receive,
             config->interrupt_priority, A_TRUE);
         break;
-    case ADEV_USART_RX_DMA_CIRCULAR:
-        if (!aDrvUsartAsyncRxIsSupported(&handle->drv_handle)) {
+#endif
+
+#if ADEV_USART_HAS_DMA
+    case ADEV_USART_RX_DMA_BUFFERED:
+        if (!ADEV_USART_HAS_DMA ||
+            !aDrvUsartAsyncRxIsSupported(&handle->drv_handle)) {
             return A_STATUS_UNSUPPORTED;
         }
-        if ((config->rx_buffer == NULL) ||
-            (config->rx_buffer_size < 2U) ||
+        if ((config->rx_buffer == NULL) || (config->rx_buffer_size < 2U) ||
             (config->rx_buffer_size > 65535U)) {
             return A_STATUS_INVALID_PARAM;
+        }
+        if ((config->mode & ADEV_USART_OPTION_RX_IDLE) != 0U &&
+            !aDrvUsartInterruptIsSupported()) {
+            return A_STATUS_UNSUPPORTED;
         }
         handle->rx_buffer = config->rx_buffer;
         handle->rx_buffer_size = config->rx_buffer_size;
         status = aDrvUsartAsyncRxCircularStart(
-            &handle->drv_handle, handle->rx_buffer,
-            handle->rx_buffer_size, config->interrupt_priority,
-            dma_rx_progress, handle);
+            &handle->drv_handle, handle->rx_buffer, handle->rx_buffer_size,
+            config->interrupt_priority, aDevUsartRxDmaComplete, handle);
+        if (status == A_STATUS_OK) {
+            handle->rx_dma_active = A_TRUE;
+        }
         break;
+#endif
+
     default:
         return A_STATUS_INVALID_PARAM;
     }
 
+#if ADEV_USART_HAS_INTERRUPT
     if ((status == A_STATUS_OK) &&
         ((config->mode & ADEV_USART_OPTION_RX_IDLE) != 0U)) {
-        status = rx_idle_detection_enable(handle, config);
+#if ADEV_USART_HAS_DMA
+        if ((config->mode & ADEV_USART_RX_MASK) ==
+            ADEV_USART_RX_DMA_BUFFERED) {
+            status = aDevUsartRegisterIrqCallback(
+                handle, ADRV_USART_EXTI_IDLE, rx_dma_idle,
+                config->interrupt_priority, A_TRUE);
+        } else
+#endif
+        {
+            status = rx_idle_detection_enable(handle, config);
+        }
     }
+#endif
+
     return status;
 }

@@ -8,6 +8,10 @@ macro(aclass_select)
     cmake_parse_arguments(ACLASS ""
         "NAME;VERSION;MCU;LINKER_SCRIPT;TOOLCHAIN" "" ${ARGN})
 
+    if(ACLASS_UNPARSED_ARGUMENTS OR ACLASS_KEYWORDS_MISSING_VALUES)
+        message(FATAL_ERROR "Invalid aclass_select arguments: ${ACLASS_UNPARSED_ARGUMENTS}; ${ACLASS_KEYWORDS_MISSING_VALUES}")
+    endif()
+
     foreach(required NAME MCU LINKER_SCRIPT)
         if(NOT ACLASS_${required})
             message(FATAL_ERROR "aclass_select requires ${required}")
@@ -20,9 +24,9 @@ macro(aclass_select)
         set(ACLASS_TOOLCHAIN GCC)
     endif()
 
-    set(FIRMWARE_NAME "${ACLASS_NAME}" CACHE STRING "Firmware target name" FORCE)
+    set(FIRMWARE_NAME "${ACLASS_NAME}")
     set(FIRMWARE_VERSION "${ACLASS_VERSION}")
-    set(MCU_NAME "${ACLASS_MCU}" CACHE STRING "MCU configuration name" FORCE)
+    set(MCU_NAME "${ACLASS_MCU}")
     set(MCU_CONFIG
         "${CMAKE_SOURCE_DIR}/config/mcu_${MCU_NAME}.cmake")
 
@@ -32,15 +36,22 @@ macro(aclass_select)
         set(_ACLASS_LINKER_SCRIPT
             "${CMAKE_SOURCE_DIR}/${ACLASS_LINKER_SCRIPT}")
     endif()
-    set(LINKER_SCRIPT "${_ACLASS_LINKER_SCRIPT}"
-        CACHE FILEPATH "Firmware linker script" FORCE)
+    set(LINKER_SCRIPT "${_ACLASS_LINKER_SCRIPT}")
 
     string(TOUPPER "${ACLASS_TOOLCHAIN}" ACLASS_TOOLCHAIN_NAME)
-    set(TOOLCHAIN_NAME "${ACLASS_TOOLCHAIN_NAME}"
-        CACHE STRING "AClass toolchain name" FORCE)
+    set(TOOLCHAIN_NAME "${ACLASS_TOOLCHAIN_NAME}")
+    set(_ACLASS_SELECTION "${MCU_NAME}|${TOOLCHAIN_NAME}")
+    if(DEFINED ACLASS_BUILD_SELECTION AND
+       NOT ACLASS_BUILD_SELECTION STREQUAL _ACLASS_SELECTION)
+        message(FATAL_ERROR
+            "MCU/toolchain changed in an existing build directory. "
+            "Use a new build directory to avoid stale compiler flags.")
+    endif()
+    set(ACLASS_BUILD_SELECTION "${_ACLASS_SELECTION}"
+        CACHE INTERNAL "Configured MCU/toolchain identity")
+
     set(CMAKE_TOOLCHAIN_FILE
-        "${CMAKE_SOURCE_DIR}/cmake/toolchains/${TOOLCHAIN_NAME}.cmake"
-        CACHE FILEPATH "Toolchain file" FORCE)
+        "${CMAKE_SOURCE_DIR}/cmake/toolchains/${TOOLCHAIN_NAME}.cmake")
 
     if(NOT EXISTS "${MCU_CONFIG}")
         message(FATAL_ERROR "MCU configuration does not exist: ${MCU_CONFIG}")

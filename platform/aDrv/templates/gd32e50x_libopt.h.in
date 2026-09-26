@@ -1,7 +1,7 @@
 #ifndef GD32E50X_LIBOPT_H
 #define GD32E50X_LIBOPT_H
 
-/* Auto-generated from config/aDrv_config.cmake.  Do not edit. */
+/* Auto-generated from resolved aClass driver configuration. Do not edit. */
 
 /* Required by system_gd32e50x.c and the always-enabled basic chip support. */
 #include "gd32e50x_misc.h"

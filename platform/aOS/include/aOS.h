@@ -29,6 +29,20 @@ typedef void *aOSWaitObject_t;
 /* Opaque task mutex. A mutex is never acquired or released from an ISR. */
 typedef void *aOSMutex_t;
 typedef void *aOSRecursiveMutex_t;
+typedef void *aOSTimer_t;
+typedef void (*aOSTimerCallback_t)(void *argument);
+typedef uintptr_t aOSCriticalState_t;
+
+typedef struct aOSWorkItem aOSWorkItem_t;
+typedef void (*aOSWorkFunction_t)(void *argument);
+
+struct aOSWorkItem {
+    aOSWorkItem_t *next;
+    aOSWorkFunction_t function;
+    void *argument;
+    aBool_t queued;
+    aBool_t running;
+};
 
 typedef enum {
     AOS_FAULT_NONE = 0U,
@@ -68,6 +82,28 @@ void aOSWaitObjectNotify(aOSWaitObject_t object);
 
 /* ISR-only notification; the aOS port performs any required reschedule. */
 void aOSWaitObjectNotifyFromISR(aOSWaitObject_t object);
+
+/* Bounded-by-caller deferred callback queue; callbacks always run in task context. */
+void aOSWorkItemInit(aOSWorkItem_t *item);
+aStatus_t aOSWorkSubmit(aOSWorkItem_t *item,
+                        aOSWorkFunction_t function, void *argument);
+aStatus_t aOSWorkSubmitFromISR(aOSWorkItem_t *item,
+                               aOSWorkFunction_t function, void *argument);
+/* Task-context lifetime barrier; do not call from the item's own callback. */
+aStatus_t aOSWorkWaitIdle(aOSWorkItem_t *item, aTimeout_t timeout);
+
+/* One-shot timer; callback executes in the OS timer-service task/thread. */
+aStatus_t aOSTimerCreate(aOSTimer_t *timer, aOSTimerCallback_t callback,
+                         void *argument);
+aStatus_t aOSTimerStart(aOSTimer_t timer, uint32_t milliseconds);
+void aOSTimerStop(aOSTimer_t timer);
+void aOSTimerDestroy(aOSTimer_t *timer);
+
+/* Short non-blocking critical sections; the ISR variant saves/restores mask. */
+void aOSCriticalEnter(void);
+void aOSCriticalExit(void);
+aOSCriticalState_t aOSCriticalEnterFromISR(void);
+void aOSCriticalExitFromISR(aOSCriticalState_t state);
 
 /* Task-context mutex operations with the same timeout model as wait objects. */
 aStatus_t aOSMutexCreate(aOSMutex_t *mutex);

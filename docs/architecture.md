@@ -39,10 +39,11 @@ platform/aDrv/
 │   ├── aDrv.c
 │   ├── aDrv_basic.c
 │   ├── aDrv_gpio.c
-│   ├── aDrv_usart.c
-│   ├── aDrv_usart_irq.c / irq_stub.c
-│   ├── aDrv_usart_async.c / async_stub.c
-│   ├── aDrv_usart_internal.h
+│   ├── usart/
+│   │   ├── aDrv_usart.c
+│   │   ├── aDrv_usart_irq.c (按配置选择)
+│   │   ├── aDrv_usart_async.c (按配置选择)
+│   │   └── aDrv_usart_internal.h
 │   ├── aDrv_dma.c
 │   ├── aDrv_spi.c
 │   ├── aDrv_qspi.c
@@ -55,15 +56,16 @@ platform/aDrv/
 
 普通外设保持一个独立 `.c`。USART 按基础轮询、可选中断、可选异步 DMA 收发拆分，
 避免基础 USART 对 DMA 形成硬依赖；私有共享状态只通过
-`aDrv_usart_internal.h` 连接。公共头文件不出现 GD32 寄存器类型或 DMA 通道映射。
+`usart/aDrv_usart_internal.h` 连接。公共头文件不出现 GD32 寄存器类型或 DMA 通道映射。
 
-`config/aDrv_config.cmake` 的 `ADRV_MODULE_*` 开关同步选择生成的
-`gd32e50x_libopt.h`、SPL 源文件和 aDrv 实现源文件。system 固有依赖由 aDrv
-CMake 自动加入，USART/SPI/QSPI 对 GPIO 的依赖在配置阶段校验。
+`cmake/aclass_resolve.cmake` 集中计算产品、aDev 与 aDrv 之间的依赖。各层
+CMakeLists 只消费有效配置：aDev 选择是否加入设备 target，aDrv 选择生成的
+`gd32e50x_libopt.h`、SPL 源文件和驱动实现源文件，不在本层推导或改写依赖。
 
-`ADRV_USART_INTERRUPT` 和 `ADRV_USART_ASYNC` 分别控制 USART 可选能力。异步能力
-启用时自动选择 DMA；关闭异步能力时编译轻量 stub，因此公共接口稳定，但最终
-固件不包含 DMA 驱动和 SPL DMA 源码。不支持的实例或未编译能力返回
+`ADRV_USART_INTERRUPT` 和 `ADRV_USART_ASYNC` 是 resolver 输出的有效能力。异步能力
+依赖 DMA；关闭某项能力时不编译对应实现，aDrv target 通过 public compile
+definition 隐藏该能力的头文件 API。完整 aDev USART 当前依赖 IRQ 和 Async，
+只启用基础 aDrv USART 则可以不编入这些源码。不支持的实例仍返回
 `A_STATUS_UNSUPPORTED`。
 
 芯片实际拥有的 USART、SPI、DMA 通道和 GPIO 端口由各实现文件的私有映射表
@@ -81,7 +83,8 @@ GCC startup 的中断向量顺序来自官方 V1.7.0 的 CL 启动文件，GNU �
   超时轮询。
 - 公共结构体不得出现 GD32 类型或厂商 handle。
 - 引脚使用 `ADRV_PIN(port, pin)` 编码，寄存器映射留在 aDrv 实现中。
-- 初始化使用调用者提供 handle 的静态模型，驱动内部不动态分配内存。
+- aDrv 初始化使用调用者提供 handle 的静态模型，驱动内部不动态分配内存；device
+  可按模块契约提供静态不透明存储与动态创建两种方式。
 - 资源初始化状态由真正拥有该资源生命周期的层保存，并且只能有一个权威状态。
   纯转发或薄包装层不得重复保存下层的 `initialized`；只有管理多个资源、存在独立
   初始化/反初始化过程或部分初始化回滚的组合对象，才保存本层生命周期状态。

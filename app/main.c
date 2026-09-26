@@ -1,6 +1,6 @@
 #include "aDrv.h"
 #include "aOS.h"
-#include "aclass_system.h"
+#include "system.h"
 
 static void appFatal(aOSFaultCode_t code, aStatus_t status,
                      const char *context)

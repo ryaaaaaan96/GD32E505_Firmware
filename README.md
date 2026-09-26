@@ -11,7 +11,7 @@ system、startup、完整标准外设库和驱动实现全部由 `aDrv` 管理�
 - HXTAL_IN 接入 20 MHz 外部有源时钟，使用 bypass 模式，系统时钟为 180 MHz；
 - USART0 使用 PA9(TX)/PA10(RX)，115200-8-N-1，作为 Shell 控制台；
 - PA8 通过 `aDevLed` 设备驱动，每 500 ms 翻转一次；
-- LED 暂按低电平点亮配置，实物极性不同时只需修改 `app/system/system_config.h`。
+- LED 暂按低电平点亮配置，实物极性不同时只需修改 `app/task/system/aclass_system_config.h`。
 
 app 不再链接 Flash、数据库和 Modbus；RS485 已合并为 aDevUsart 的可选功能，
 默认关闭，详见 [USART / RS485 统一设计](docs/usart_rs485.md)。当前工程也只启用 GPIO 与 USART
@@ -40,8 +40,9 @@ app                 main()、项目配置、显式初始化和测试
 
 ## aDrv 配置
 
-`config/aDrv_config.cmake` 是本项目驱动模块选择的唯一入口。其
-`ADRV_MODULE_GPIO/USART/DMA/SPI/QSPI` 开关同时控制：
+产品功能、device 能力和直接 driver 请求统一写在
+`config/aclass_config.cmake` 的分区中。`cmake/aclass_resolve.cmake` 集中推导
+跨层依赖，输出的有效配置控制：
 
 - 构建目录中 `gd32e50x_libopt.h` 的内容；
 - 实际参与编译的 GD32 SPL 源文件；
@@ -50,9 +51,11 @@ app                 main()、项目配置、显式初始化和测试
 GD32 拥有的外设实例和通道由对应 `.c` 内的私有映射表描述，不通过 CMake 注入
 `COUNT` 宏。具体使用哪个实例、哪些引脚以及波特率等参数均由 app 配置。
 
-USART 的 `ADRV_USART_INTERRUPT` 与 `ADRV_USART_ASYNC` 是独立能力开关；只有
-Async-DMA 收发能力会自动引入 DMA，基础轮询和中断模式不依赖 DMA。当前 Shell
-采用缓冲中断发送、DMA 接收和 IDLE 分帧。
+配置依赖必须显式开启：USART Async 依赖 DMA，LED 依赖 GPIO，
+Flash25Q 依赖 QSPI。缺少依赖时 configure 报错并指出需要开启的选项。
+`*_REQUESTED` 是配置输入，普通变量且不进入 CMake cache；层级
+CMakeLists 只消费 resolver 生成的有效值，不在各自目录改写配置。当前 Shell 采用
+缓冲中断发送、中断接收和 IDLE 通知。
 
 完整 SPL 的 28 个头文件和 28 个源文件保持官方 V1.7.0 原貌。Examples、Docs 和
 USB 库不纳入工程。
@@ -86,7 +89,7 @@ Shell 是可裁剪的 aClass 功能模块，由 `config/aclass_config.cmake` 统
 量产配置中将模块关闭：
 
 ```cmake
-set(ASHELL_ENABLED OFF)
+set(ASHELL_REQUESTED OFF)
 ```
 
 重新配置并构建后，`aShell` target 和公共 API 继续存在，但实现切换为不创建任务、
@@ -130,3 +133,9 @@ GDB 路径及生成的命令。远程主机的防火墙应仅向可信网络开�
 详细边界见 [架构说明](docs/architecture.md)，构建职责见
 [CMake 设计](docs/cmake_design.md)，统一时间与超时规则见
 [超时方案](docs/timeout_design.md)。
+
+### 设备初始化与跨文件访问
+
+设备配置和编号映射位于 app/devices，业务模块在 aDrv/aOS 就绪后按实例调用 Init(id, &handle)。
+业务通过 appUsartInit / appLedInit 借用私有静态句柄；无需设备注册宏或链接段。
+详见 [应用设备映射与分层](docs/device_registry.md)。

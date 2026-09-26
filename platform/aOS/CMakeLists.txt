@@ -15,10 +15,10 @@ if(NOT FREERTOS_USE_TASK_NOTIFICATIONS)
     )
 endif()
 
-if(FREERTOS_TASK_NOTIFICATION_ARRAY_ENTRIES LESS 2)
+if(FREERTOS_TASK_NOTIFICATION_ARRAY_ENTRIES LESS 3)
     message(FATAL_ERROR
-        "aOS reserves task notification index 1; "
-        "FREERTOS_TASK_NOTIFICATION_ARRAY_ENTRIES must be at least 2"
+        "aOS reserves notification indexes 1 (wait) and 2 (work queue); "
+        "FREERTOS_TASK_NOTIFICATION_ARRAY_ENTRIES must be at least 3"
     )
 endif()
 
@@ -47,7 +47,7 @@ file(MAKE_DIRECTORY
 )
 
 configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/config/FreeRTOSConfig.h.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/templates/FreeRTOSConfig.h.in"
     "${FREERTOS_CONFIG_DIR}/FreeRTOSConfig.h"
     @ONLY
 )
@@ -81,8 +81,9 @@ add_library(
 target_include_directories(
     aOS
     PUBLIC
-        "${FREERTOS_CONFIG_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE
+        "${FREERTOS_CONFIG_DIR}"
         "${FREERTOS_PORT_DIR}"
 )
 
@@ -90,6 +91,7 @@ target_link_libraries(
     aOS
     PUBLIC
         aLib
+    PRIVATE
         aCore
 )
 

@@ -57,7 +57,7 @@ TX_COMPLETE 时方向已释放。Read 可以等待对端响应，但不会通过
 - 无独立 RX 使能控制时，软件不模拟关闭接收，也不丢弃回显。
 - 硬件异常锁存在 tx_error，由等待接口报告；已停止且释放方向后可以 DeInit/Init
   恢复。若硬件故障导致 TC 永远不出现，不保证自动释放线路，不强行截断尾字节。
-- Async 请求和 aUsartTxQueue 仍是设计规划，不在当前源码中；本次没有新增虚假接口。
+- Async TX 和发送队列已实现；队列归属 aDevUsart，接口见 `aDev_usart_tx_queue.h`。
 
 内部文件：aDev_usart.c 管理发送状态与 TC，aDev_usart_rs485.c 管理 GPIO，
 aDev_usart_internal.h 仅供模块内部使用；公共接口仍只有 aDev_usart.h。

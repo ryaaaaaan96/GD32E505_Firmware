@@ -1,5 +1,82 @@
 # GD32E505_Firmware 架构与接口问题讨论稿
 
+
+## 应用设备映射：显式初始化
+
+设备映射已移至 app/devices，使用普通 C 配置与 switch，不再使用分散注册。
+appUsartInit/appLedInit 按实例初始化并返回私有静态句柄。跨设备资源冲突不在运行时检查，未来可加入构建期告警。
+device 层仅保留通用设备初始化及操作。失败不回滚，重复初始化不重试；启动前单线程调用。
+详见 [应用设备映射设计](docs/device_registry.md)。
+
+## 2026-09-25：构建体系与模块边界复审
+
+本节描述本轮实际修改与剩余问题。下方保留之前的讨论和用户回复作为历史记录；
+其中 aMemory、RX session、独立 aUsartTxQueue 等描述不代表当前结构。
+
+### 本轮结论与修改
+
+| 问题 | 判断与处理 |
+|---|---|
+| func/aUsartTxQueue 专门调度 USART，device 却公开配套 owner 接口 | 属于设备发送管理，移入 device/aDev_usart；删除独立 library、目录内容及 REQUESTED 开关 |
+| 移动后如何使用队列 | 编入 aDevUsart；扩展头 aDev_usart_tx_queue.h，API 改为 aDevUsartTxQueue*；旧接口不保留。FIFO 能力保留，队列对象暂仍显式初始化 |
+| 跨模块内部接口公开 | Claim/Release/Queued 提交接口移入 aDev_usart_internal.h，只供同一模块源文件使用 |
+| resolver 混入产品绑定 | LED 必选、Shell 使用串口等检查移入 app/devices；Shell 模块本身不绑定 USART |
+| 配置边读取边检查，错误可能被前置依赖掩盖 | 两阶段处理：所有输入先校验并归一，再按模块检查依赖；缺失、非法配置显式失败 |
+| 子模块依赖 resolver 私有循环变量 | USART CMake 自行声明其消费的能力组，不读取 _ADEV_USART_FEATURES |
+| aclass_select 使用 CACHE FORCE | 工程选择改为普通变量，保留必要的编译器路径 cache 和构建身份记录；拒绝已有构建目录切换 MCU/toolchain |
+| 后端 include 沿 PUBLIC 链传播 | aOS 的生成配置/port 改 PRIVATE，aOS/aDrv 对 aCore 改 PRIVATE；公共头实际使用的 aLib/aDrv 类型仍保留 PUBLIC |
+
+队列不再是 func 功能模块，但本轮没有强行把所有 Submit 融入 WriteAsync：
+现有有界 FIFO、独占 TX、取消等行为继续保留。将队列对象完全收进 USART handle
+还需统一容量、超时起点、关闭等待以及回调重入语义，不能只移动结构体就宣布完成。
+
+### 仍需解决的问题（按优先级）
+
+1. **能力裁剪已修复。** 源文件与公共状态机按 INTERRUPT/DMA/ASYNC/RS485 裁剪；
+   纯轮询不再要求 IRQ/DMA。关闭能力时 Direct/Async 声明与实现同时移除，无 stub。
+2. **队列上下文已统一。** Submit/CancelAll 只登记并投递工作，正常完成、启动失败、
+   排队超时和取消均在 aOS worker 回调。回调执行计入 pending，DeInit 会等待工作项退出；
+   生命周期仍由一个外部所有者管理，销毁不能与新调用并发。
+3. **RX 借用覆盖风险已修复。** 异步节点包含最多 64 字节稳定快照；不向回调出借活跃
+   DMA ring。Read/ReadAsync 复制前后检查 DMA 游标，覆盖期间复制的字节不发布。
+   消费太慢仍可能丢数据并锁存 overflow；硬件中断不能长时间饿死，不能承诺无限流无损。
+4. **旧测试已迁移并通过。** RX 测试改用共享 ring/token，包含取消、超时、快照稳定性、
+   复制期间覆盖检测和 Read/Direct 互斥；保留 TX/RS485 回归，补充队列失败路径测试。
+5. **aOS 只有 FreeRTOS 实现。** 接口无 FreeRTOS 类型是基础，但 Linux/裸机适配还需要
+   定义等待对象、时间回绕、worker 退出和线程安全契约；尚不能宣称已跨 OS 验证。
+6. **上游与公共接口尚未物理隔离。** aOS/include 同时放置 aOS.h 和 FreeRTOS 头；
+   aCore 同时负责 CMSIS 与 GCC runtime；aDataBase 固定包含 Flash25Q adapter。
+   当前可用，但 Linux/其他存储后端接入时应按 backend 拆分，避免新增无实际用途的层。
+7. **构建仍有项目级硬编码。** GCC 规则、GD32 vendor 路径、FreeRTOS port 与 MCU
+   profile 绑定，debug.py 固定 ELF 名；全局告警选项也作用于上游。后续应提取后端
+   选择和固件产物信息，按目标区分自有代码与上游策略。
+8. **配置验证已扩充。** 六种 USART 配置分别构建并检查库符号，覆盖纯轮询、中断、
+   DMA、异步、RS485、全功能，矩阵使用 Shell OFF。数据库 ON 不属于本轮修改范围。
+
+### 通用 FIFO 的最终归属
+
+`platform/aLib/include/aFifo.h` 提供调用者存储、有界 FIFO、按值复制元素的通用容器，
+不包含 USART、DMA、aOS、锁或动态分配。USART 队列复用它保存请求描述符，
+payload 不复制；回调、取消、deadline、TX 独占与工作项仍属于 device。
+
+### 边界原则
+
+- aLib：通用类型、状态、时间计算，不依赖 OS 或硬件。
+- aCore/aDrv：架构适配和硬件操作，不管理业务请求排队。
+- aOS：等待、互斥、时基、内存及 deferred work 的平台适配。
+- device：设备实例、缓冲、同步/异步请求、TX 排队、RS485 收发方向。
+- func：协议、Shell、数据库；通过设备接口或注入的传输接口使用资源。
+- app：板级资源选择、初始化顺序和业务任务。
+
+### 本轮验证
+
+- Debug 固件构建通过；配置解析正反例通过。
+- 主机 USART/RS485/队列和通用 FIFO 测试通过；六种能力配置构建/符号检查通过。未进行硬件验证。
+
+---
+
+## 历史讨论（保留用户回复）
+
 本文根据当前工作区整理，供架构 review 和后续修改排期使用。只讨论分层、模块边界、公开接口及文档一致性，不是本轮代码修改清单；列出的问题不代表都必须按某一种方案实现。
 
 ## 总体判断
@@ -46,9 +123,9 @@
 
 ### 3. USART 业务事件回调固定运行在 ISR 上下文
 
-现状：[`aDev_usart.h`](device/aDev_usart/aDev_usart.h) 说明事件回调在 ISR 上下文执行；回调从 USART 或 DMA 中断路径触发。调用方必须只执行 ISR-safe 操作，通常还需要自行唤醒业务任务。
+现状：USART/DMA ISR 更新设备状态后，通过 aOS work item 将业务事件投递到任务上下文；回调事件位可能合并。当前实际后端是 FreeRTOS worker，其他 OS 后端尚未实现。
 
-影响：这是明确的 MCU/RTOS 执行上下文契约。它方便低延迟通知，但也把中断限制传递给应用；Linux 等线程模型不一定能提供同样的回调上下文和语义，因而“硬件/OS 无关”的 API 目标需要进一步定义。
+影响：回调不需要承担 ISR-safe 限制，但 deferred-work 生命周期、资源开销和 OS 端口契约必须明确。若未来增加 ISR 回调，应使用显式 ISR API，不应改变当前回调语义。
 
 待讨论：
 
@@ -68,18 +145,24 @@
 - 是否应由 aDevUsart 定义自己的公共配置，再在内部转换到 aDrv？
 - 若拆分，哪些是通用设备属性（波特率、数据位等），哪些应继续由 app 作为硬件资源映射提供（实例、引脚）？
 
-推荐方案是什么样呢，
+推荐保留当前嵌套：`aDrvUsartConfig_t` 表达由应用选择的硬件实例、引脚和线路参数，
+`aDevUsartConfig_t` 管理设备级 TX/RX 模式、缓冲区和 RS485 行为。aDrv 配置是本仓库的
+跨芯片契约，不是 GD32 类型；重复定义并逐字段转换会形成两份需要同步演进的结构。
+只有当 aDev 承诺不暴露实例/引脚等硬件资源，或要支持非 USART 后端时，再抽离独立配置。
 
 ### 5. USART 设计文档混合了规划接口与当前接口
 
-现状：[`docs/usart_design.md`](docs/usart_design.md) 的接口总表列有 `aDevUsartWriteAsync()`、RX session 和 `aUsartTxQueue` 等目标接口；文档后续章节又说明这些接口尚未实现。当前接口状态另见 [`docs/usart_interface_review.md`](docs/usart_interface_review.md)。
+现状：USART 的同步、异步和队列接口都已落入源码；设计边界与剩余硬件验证项见
+[`docs/usart_design.md`](docs/usart_design.md) 和 [`docs/usart_api_design.md`](docs/usart_api_design.md)。
 
 影响：读者可能把设计目标误认为现有可调用 API，进而按不存在的接口编写应用，或者误判实现完成度。
 
 待讨论：是否把文档拆成“当前实现/API”和“目标设计/待实现”，并让每个 API 表只描述一个状态？
 
-我的答复：按本设计文档将待实现 API 全部落地，包括单请求异步 TX、RX session 和
-aUsartTxQueue；实现必须遵守文档中的 buffer 所有权、队列 FIFO、取消和错误语义。
+我的答复：按设计文档落地单请求异步 TX、RX session 和 aUsartTxQueue；实现必须遵守
+buffer 所有权、队列 FIFO、取消和错误语义。当前已实现，详细接口状态与实现边界见
+[`docs/usart_design.md`](docs/usart_design.md)。回调采用任务/线程上下文；需要 ISR
+回调时另设显式 API。
 
 ### 6. aModbus 模块名与当前功能范围
 
@@ -93,7 +176,7 @@ aModbus后面再后见，先不做
 
 ### 7. aDrv 配置文档与实际 CMake 写法不一致
 
-现状：[`config/aDrv_config.cmake`](config/aDrv_config.cmake) 采用普通 `set()` 配置；[`docs/usart_design.md`](docs/usart_design.md) 的配置示例仍展示 `para_set()`。
+现状：产品与各层功能请求集中在 [`config/aclass_config.cmake`](config/aclass_config.cmake)，跨层依赖由 [`cmake/aclass_resolve.cmake`](cmake/aclass_resolve.cmake) 统一解析；USART 配置示例以 resolver 的有效配置为准。
 
 影响：同一配置入口出现不同写法，读者不易判断项目是否支持/要求 `para_set()`，也可能复制出已不符合当前构建方案的配置。
 
@@ -115,5 +198,5 @@ aModbus后面再后见，先不做
 ## 本文边界
 
 - 本文聚焦架构和对外接口，不重复列出 DMA 计数、ISR 优先级、Flash 事务锁等实现级审查项。
-- 本文没有要求新增 Async/队列 API，也没有要求立即支持 Linux 或裸机后端。
+- Async/队列 API 是已选定的目标，但需按可验证阶段实现；Linux/裸机 aOS 后端仍不在本轮。
 - 所有结论基于当前工作区文件；如果后续接口或文档有改动，应在讨论决策后同步更新本文。

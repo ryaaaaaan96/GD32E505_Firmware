@@ -1,6 +1,9 @@
 #ifndef ADEV_LED_H
 #define ADEV_LED_H
 
+/* Typed LED operations intentionally remain distinct from stream Read/Write.
+ * Common API rules: docs/interface_contract.md. */
+
 #include "aDrv_gpio.h"
 #include "aLib.h"
 

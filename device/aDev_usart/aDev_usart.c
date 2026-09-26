@@ -6,17 +6,93 @@
 #include <limits.h>
 #include <string.h>
 
+#if ADEV_USART_HAS_DMA
 static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle);
+#endif
+static void rs485_complete(aDevUsartHandle_t *handle);
+#if ADEV_USART_HAS_ASYNC
+static void async_tx_complete(aDevUsartHandle_t *handle, aStatus_t status,
+                              size_t transferred, aBool_t from_isr)
+{
+    if (atomic_exchange_explicit(&handle->tx_completion_claimed, A_TRUE,
+                                 memory_order_acq_rel)) {
+        return;
+    }
+    handle->tx_completion_event.buffer = handle->tx_async_buffer;
+    handle->tx_completion_event.requested = handle->tx_async_size;
+    handle->tx_completion_event.transferred = transferred;
+    handle->tx_completion_event.status = status;
+    handle->tx_async_status = status;
+    handle->tx_dma_active = 0U;
+    handle->tx_state = handle->tx_queue_owner != NULL
+                           ? ADEV_USART_TX_QUEUE : ADEV_USART_TX_IDLE;
+    if (from_isr) {
+        (void)aOSWorkSubmitFromISR(&handle->tx_completion_work,
+                                   aDevUsartAsyncTxWork, handle);
+    } else {
+        (void)aOSWorkSubmit(&handle->tx_completion_work,
+                            aDevUsartAsyncTxWork, handle);
+    }
+}
+
+void aDevUsartAsyncTxWork(void *argument)
+{
+    aDevUsartHandle_t *handle = argument;
+    const aDevUsartTxEvent_t event = handle->tx_completion_event;
+    aDevUsartTxCallback_t callback = handle->tx_callback;
+    void *callback_argument = handle->tx_callback_argument;
+
+    handle->tx_callback = NULL;
+    handle->tx_callback_argument = NULL;
+    handle->tx_async_buffer = NULL;
+    handle->tx_async_size = 0U;
+    if (callback != NULL) {
+        callback(handle, &event, callback_argument);
+    }
+}
+
+void aDevUsartAsyncTxTimeout(void *argument)
+{
+    aDevUsartHandle_t *handle = argument;
+    size_t remaining = handle->tx_async_size;
+    size_t transferred = 0U;
+
+    if (aOSMutexLock(handle->tx_mutex, A_TIMEOUT_FOREVER) != A_STATUS_OK) {
+        return;
+    }
+    if (handle->tx_state != ADEV_USART_TX_ASYNC) {
+        (void)aOSMutexUnlock(handle->tx_mutex);
+        return;
+    }
+    if (aDrvUsartAsyncTxGetRemaining(&handle->drv_handle, &remaining) ==
+        A_STATUS_OK) {
+        transferred = handle->tx_async_size - remaining;
+    }
+    (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
+    if (!handle->rs485.enabled) {
+        (void)aDrvUsartSetInterruptEnabled(&handle->drv_handle,
+                                           ADRV_USART_EXTI_TC, A_FALSE);
+    }
+    async_tx_complete(handle, A_STATUS_TIMEOUT, transferred, A_FALSE);
+    (void)aOSMutexUnlock(handle->tx_mutex);
+}
+
+#endif
 
 /* 调用者已屏蔽 USART IRQ，或正在 USART ISR 内。 */
 static void rs485_complete(aDevUsartHandle_t *handle)
 {
+#if ADEV_USART_HAS_RS485
     const aStatus_t status = aDevUsartRS485Complete(handle);
     if (status != A_STATUS_OK) {
         handle->tx_error = status;
     }
+#else
+    (void)handle;
+#endif
 }
 
+#if ADEV_USART_HAS_RS485
 void aDevUsartRs485ArmComplete(aDevUsartHandle_t *handle)
 {
     if (handle->rs485_transmitting) {
@@ -28,14 +104,48 @@ void aDevUsartRs485ArmComplete(aDevUsartHandle_t *handle)
     }
 }
 
-void aDevUsartNotifyEvent(aDevUsartHandle_t *handle,
-                          aDevUsartEvent_t event)
+#endif
+
+void aDevUsartEventWork(void *argument)
 {
-    if (handle->event_callback != NULL) {
-        handle->event_callback(event, handle->event_argument);
+    aDevUsartHandle_t *handle = argument;
+
+    for (;;) {
+        uint32_t events = atomic_exchange_explicit(
+            &handle->pending_events, 0U, memory_order_acquire);
+        aDevUsartEventCallback_t callback;
+        void *callback_argument;
+
+        if (events == 0U) return;
+        if (aOSMutexLock(handle->event_mutex, A_TIMEOUT_FOREVER) !=
+            A_STATUS_OK) {
+            continue;
+        }
+        callback = handle->event_callback;
+        callback_argument = handle->event_argument;
+        (void)aOSMutexUnlock(handle->event_mutex);
+        if (callback == NULL) continue;
+
+        for (uint32_t event = 0U; event <= ADEV_USART_EVENT_RX_ERROR;
+             ++event) {
+            if ((events & (1UL << event)) != 0U) {
+                callback((aDevUsartEvent_t)event, callback_argument);
+            }
+        }
     }
 }
 
+void aDevUsartNotifyEvent(aDevUsartHandle_t *handle,
+                          aDevUsartEvent_t event)
+{
+    const uint32_t event_bit = 1UL << (uint32_t)event;
+    atomic_fetch_or_explicit(&handle->pending_events, event_bit,
+                             memory_order_release);
+    (void)aOSWorkSubmitFromISR(&handle->event_work,
+                               aDevUsartEventWork, handle);
+}
+
+#if ADEV_USART_HAS_INTERRUPT
 static void irq_transmit(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
@@ -64,10 +174,36 @@ static void irq_transmit(void *argument)
     }
 }
 
+#endif
+
+#if ADEV_USART_NEEDS_IRQ
 static void irq_transmit_complete(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
 
+#if ADEV_USART_HAS_ASYNC
+    if (handle->tx_state == ADEV_USART_TX_ASYNC) {
+        size_t remaining = handle->tx_async_size;
+        const aStatus_t status = aDrvUsartAsyncTxGetRemaining(
+            &handle->drv_handle, &remaining);
+
+        if ((status == A_STATUS_OK) && (remaining != 0U)) {
+            return;
+        }
+        (void)aDrvUsartSetInterruptEnabled(
+            &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+        rs485_complete(handle);
+        async_tx_complete(handle, status,
+                          status == A_STATUS_OK
+                              ? handle->tx_async_size - remaining : 0U,
+                          A_TRUE);
+        aOSWaitObjectNotifyFromISR(handle->tx_wait_object);
+        return;
+    }
+
+#endif
+
+#if ADEV_USART_HAS_DMA
     if ((handle->mode & ADEV_USART_TX_MASK) ==
         ADEV_USART_TX_DMA_BUFFERED) {
         size_t remaining = 0U;
@@ -115,6 +251,8 @@ static void irq_transmit_complete(void *argument)
         return;
     }
 
+#endif
+
     (void)aDrvUsartSetInterruptEnabled(
         &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
     rs485_complete(handle);
@@ -136,6 +274,8 @@ aStatus_t aDevUsartRegisterIrqCallback(aDevUsartHandle_t *handle,
     config.enabled = enabled;
     return aDrvUsartRegisterCallback(&handle->drv_handle, &config);
 }
+
+#endif
 
 static aBool_t mode_is_valid(aDevUsartMode_t mode)
 {
@@ -161,7 +301,7 @@ static aBool_t mode_is_valid(aDevUsartMode_t mode)
     switch (rx_mode) {
     case ADEV_USART_RX_POLLING:
     case ADEV_USART_RX_INTERRUPT_BUFFERED:
-    case ADEV_USART_RX_DMA_CIRCULAR:
+    case ADEV_USART_RX_DMA_BUFFERED:
         return A_TRUE;
     default:
         return A_FALSE;
@@ -173,11 +313,15 @@ static aStatus_t tx_mode_init(aDevUsartHandle_t *handle,
 {
     switch (config->mode & ADEV_USART_TX_MASK) {
     case ADEV_USART_TX_POLLING:
-        return config->rs485.enabled
-                   ? aDevUsartRegisterIrqCallback(
-                         handle, ADRV_USART_EXTI_TC, irq_transmit_complete,
-                         config->interrupt_priority, A_FALSE)
-                   : A_STATUS_OK;
+#if ADEV_USART_NEEDS_IRQ
+        if (config->rs485.enabled || ADEV_USART_HAS_ASYNC)
+            return aDevUsartRegisterIrqCallback(
+                handle, ADRV_USART_EXTI_TC, irq_transmit_complete,
+                config->interrupt_priority, A_FALSE);
+#endif
+        (void)handle;
+        return A_STATUS_OK;
+#if ADEV_USART_HAS_INTERRUPT
     case ADEV_USART_TX_INTERRUPT_BUFFERED: {
         aStatus_t status;
 
@@ -200,6 +344,9 @@ static aStatus_t tx_mode_init(aDevUsartHandle_t *handle,
             handle, ADRV_USART_EXTI_TC, irq_transmit_complete,
             config->interrupt_priority, A_FALSE);
     }
+#endif
+
+#if ADEV_USART_HAS_DMA
     case ADEV_USART_TX_DMA_BUFFERED: {
         aStatus_t status;
 
@@ -218,6 +365,8 @@ static aStatus_t tx_mode_init(aDevUsartHandle_t *handle,
             config->interrupt_priority, A_FALSE);
         return status;
     }
+#endif
+
     default:
         return A_STATUS_INVALID_PARAM;
     }
@@ -237,10 +386,10 @@ static aStatus_t wait_objects_create(aDevUsartHandle_t *handle)
         }
     }
 
-    if (((handle->mode & ADEV_USART_RX_MASK) ==
-         ADEV_USART_RX_INTERRUPT_BUFFERED) ||
-        ((handle->mode & ADEV_USART_RX_MASK) ==
-         ADEV_USART_RX_DMA_CIRCULAR)) {
+    if ((handle->mode & ADEV_USART_RX_MASK) ==
+            ADEV_USART_RX_INTERRUPT_BUFFERED ||
+        (handle->mode & ADEV_USART_RX_MASK) ==
+            ADEV_USART_RX_DMA_BUFFERED) {
         status = aOSWaitObjectCreate(&handle->rx_wait_object);
         if (status != A_STATUS_OK) {
             aOSWaitObjectDestroy(&handle->tx_wait_object);
@@ -267,6 +416,12 @@ static aStatus_t mutexes_create(aDevUsartHandle_t *handle)
     status = aOSMutexCreate(&handle->rx_mutex);
     if (status != A_STATUS_OK) {
         aOSMutexDestroy(&handle->tx_mutex);
+        return status;
+    }
+    status = aOSMutexCreate(&handle->event_mutex);
+    if (status != A_STATUS_OK) {
+        aOSMutexDestroy(&handle->rx_mutex);
+        aOSMutexDestroy(&handle->tx_mutex);
     }
     return status;
 }
@@ -275,6 +430,7 @@ static void mutexes_destroy(aDevUsartHandle_t *handle)
 {
     aOSMutexDestroy(&handle->rx_mutex);
     aOSMutexDestroy(&handle->tx_mutex);
+    aOSMutexDestroy(&handle->event_mutex);
 }
 
 void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
@@ -305,6 +461,11 @@ static void handle_struct_init(aDevUsartHandle_t *handle, aBool_t dynamic)
     aDrvGpioHandleStructInit(&handle->de_gpio);
     aDrvGpioHandleStructInit(&handle->re_gpio);
     handle->mode = ADEV_USART_TX_POLLING | ADEV_USART_RX_POLLING;
+    aOSWorkItemInit(&handle->event_work);
+    aOSWorkItemInit(&handle->tx_completion_work);
+    aOSWorkItemInit(&handle->rx_completion_work);
+    atomic_init(&handle->pending_events, 0U);
+    atomic_init(&handle->tx_completion_claimed, A_TRUE);
     handle->dynamic_storage = dynamic;
 }
 
@@ -312,20 +473,25 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
                              aDevUsartHandle_t *handle)
 {
     aStatus_t status;
-    const aBool_t irq_required =
-        (((config != NULL) &&
-          ((config->mode & ADEV_USART_TX_MASK) != ADEV_USART_TX_POLLING)) ||
-         ((config != NULL) &&
-          ((config->mode & ADEV_USART_RX_MASK) != ADEV_USART_RX_POLLING)) ||
-         ((config != NULL) &&
-          ((config->mode & ADEV_USART_OPTION_RX_IDLE) != 0U)) ||
-         ((config != NULL) && config->rs485.enabled));
-
     if ((config == NULL) || !mode_is_valid(config->mode)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (irq_required &&
-        (aOSValidateIsrPriority(config->interrupt_priority) != A_STATUS_OK)) {
+    /* Product capabilities are checked before allocating or touching hardware. */
+    const aDevUsartMode_t tx = config->mode & ADEV_USART_TX_MASK;
+    const aDevUsartMode_t rx = config->mode & ADEV_USART_RX_MASK;
+    if (((tx == ADEV_USART_TX_INTERRUPT_BUFFERED) &&
+         !ADEV_USART_HAS_INTERRUPT) ||
+        ((tx == ADEV_USART_TX_DMA_BUFFERED) && !ADEV_USART_HAS_DMA) ||
+        ((rx == ADEV_USART_RX_INTERRUPT_BUFFERED) &&
+         !ADEV_USART_HAS_INTERRUPT) ||
+        ((rx == ADEV_USART_RX_DMA_BUFFERED) &&
+         !ADEV_USART_HAS_DMA) ||
+        ((config->mode & ADEV_USART_OPTION_RX_IDLE) &&
+         !ADEV_USART_HAS_INTERRUPT) ||
+        (config->rs485.enabled && !ADEV_USART_HAS_RS485)) {
+        return A_STATUS_UNSUPPORTED;
+    }
+    if (aOSValidateIsrPriority(config->interrupt_priority) != A_STATUS_OK) {
         return A_STATUS_INVALID_PARAM;
     }
 
@@ -344,7 +510,9 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
     }
     handle->mode = config->mode;
 
+#if ADEV_USART_HAS_RS485
     status = aDevUsartRS485Init(handle, &config->rs485);
+#endif
     if (status == A_STATUS_OK) {
         status = mutexes_create(handle);
     }
@@ -360,7 +528,9 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
 
     if (status != A_STATUS_OK) {
         (void)aDrvUsartDeInitStatic(&handle->drv_handle);
+#if ADEV_USART_HAS_RS485
         (void)aDevUsartRS485DeInit(handle);
+#endif
         wait_objects_destroy(handle);
         mutexes_destroy(handle);
         const aBool_t dynamic = handle->dynamic_storage;
@@ -426,15 +596,48 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
     }
     if ((handle->tx_state != ADEV_USART_TX_IDLE) ||
         (handle->rx_state != ADEV_USART_RX_IDLE) ||
+        (handle->rx_request_head != NULL) ||
+        (handle->rx_complete_head != NULL) ||
         handle->rs485_transmitting ||
         ((handle->tx_count != 0U) && (handle->tx_error == A_STATUS_OK)) ||
         (handle->tx_dma_active != 0U)) {
         return A_STATUS_BUSY;
     }
 
-    status = aDrvUsartDeInitStatic(&handle->drv_handle);
+#if ADEV_USART_HAS_DMA
+    if (handle->rx_dma_active) {
+        (void)aDrvUsartSetInterruptEnabled(
+            &handle->drv_handle, ADRV_USART_EXTI_IDLE, A_FALSE);
+        status = aDrvUsartAsyncRxAbort(&handle->drv_handle);
+        if (status != A_STATUS_OK) return status;
+        handle->rx_dma_active = A_FALSE;
+    }
+
+#endif
+
+    aOSTimerStop(handle->tx_deadline_timer);
+    aOSTimerStop(handle->rx_deadline_timer);
+    status = aOSWorkWaitIdle(&handle->tx_completion_work,
+                             A_TIMEOUT_FOREVER);
     if (status == A_STATUS_OK) {
+        status = aOSWorkWaitIdle(&handle->rx_completion_work,
+                                 A_TIMEOUT_FOREVER);
+    }
+    if (status != A_STATUS_OK) return status;
+    aOSTimerDestroy(&handle->tx_deadline_timer);
+    aOSTimerDestroy(&handle->rx_deadline_timer);
+
+    status = aDevUsartUnregisterEventCallback(handle);
+    if (status == A_STATUS_OK) {
+        status = aDrvUsartDeInitStatic(&handle->drv_handle);
+    }
+    if (status == A_STATUS_OK) {
+        status = aOSWorkWaitIdle(&handle->event_work, A_TIMEOUT_FOREVER);
+    }
+    if (status == A_STATUS_OK) {
+#if ADEV_USART_HAS_RS485
         status = aDevUsartRS485DeInit(handle);
+#endif
         wait_objects_destroy(handle);
         mutexes_destroy(handle);
         const aBool_t dynamic = handle->dynamic_storage;
@@ -450,7 +653,9 @@ aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle)
     if ((handle == NULL) || !handle->dynamic_storage) {
         return A_STATUS_INVALID_PARAM;
     }
-    status = aDevUsartDeInit(handle);
+    status = handle->drv_handle.initialized
+                 ? aDevUsartDeInit(handle)
+                 : A_STATUS_OK;
     if (status == A_STATUS_OK) {
         aOSFree(handle);
     }
@@ -469,11 +674,14 @@ aStatus_t aDevUsartRegisterEventCallback(
         return A_STATUS_NOT_READY;
     }
 
-    aDrvUsartDisableInterrupt(&handle->drv_handle);
+    const aStatus_t status = aOSMutexLock(
+        handle->event_mutex, A_TIMEOUT_FOREVER);
+    if (status != A_STATUS_OK) return status;
+    atomic_store_explicit(&handle->pending_events, 0U, memory_order_release);
     handle->event_argument = argument;
     handle->event_callback = callback;
-    aDrvUsartEnableInterrupt(&handle->drv_handle);
-    return A_STATUS_OK;
+    (void)aOSMutexUnlock(handle->event_mutex);
+    return status;
 }
 
 aStatus_t aDevUsartUnregisterEventCallback(
@@ -486,19 +694,25 @@ aStatus_t aDevUsartUnregisterEventCallback(
         return A_STATUS_NOT_READY;
     }
 
-    aDrvUsartDisableInterrupt(&handle->drv_handle);
+    const aStatus_t status = aOSMutexLock(
+        handle->event_mutex, A_TIMEOUT_FOREVER);
+    if (status != A_STATUS_OK) return status;
+    atomic_store_explicit(&handle->pending_events, 0U, memory_order_release);
     handle->event_callback = NULL;
     handle->event_argument = NULL;
-    aDrvUsartEnableInterrupt(&handle->drv_handle);
-    return A_STATUS_OK;
+    (void)aOSMutexUnlock(handle->event_mutex);
+    return status;
 }
 
+#if ADEV_USART_HAS_DMA || ADEV_USART_HAS_INTERRUPT
 static aStatus_t wait_for_event(void *wait_object,
                                 const aTimepoint_t *end)
 {
     return aOSWaitObjectWait(
         wait_object, aTimepointRemaining(end, aOSGetUptimeMs()));
 }
+
+#endif
 
 static aSSize_t fail_with_wait_status(aStatus_t status,
                                       aTimeout_t timeout)
@@ -521,17 +735,18 @@ static aSSize_t polling_read(aDevUsartHandle_t *handle, void *buffer,
 
         if (status == A_STATUS_OK) {
             ++count;
+        } else if (count != 0U) {
+            return (aSSize_t)count;
         } else if (status != A_STATUS_BUSY) {
-            return count != 0U ? (aSSize_t)count
-                               : aOSFailWithStatus(status);
+            return aOSFailWithStatus(status);
         } else if (aOSPollWaitExpired(end)) {
-            return count != 0U ? (aSSize_t)count
-                               : aOSFailWithTimeout(original_timeout);
+            return aOSFailWithTimeout(original_timeout);
         }
     }
     return (aSSize_t)count;
 }
 
+#if ADEV_USART_HAS_INTERRUPT
 static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
                               size_t buffer_size,
                               const aTimepoint_t *end,
@@ -543,41 +758,71 @@ static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
         aBool_t available;
         aStatus_t status = A_STATUS_OK;
 
-        aDrvUsartDisableInterrupt(&handle->drv_handle);
-        if ((handle->mode & ADEV_USART_RX_MASK) ==
-            ADEV_USART_RX_DMA_CIRCULAR) {
-            status = aDevUsartDmaRxCommit(handle);
-        }
+        aOSCriticalEnter();
         available = handle->rx_count != 0U;
         if (available) {
             ((uint8_t *)buffer)[count] = handle->rx_buffer[handle->rx_tail];
             handle->rx_tail = (handle->rx_tail + 1U) % handle->rx_buffer_size;
             --handle->rx_count;
         }
-        aDrvUsartEnableInterrupt(&handle->drv_handle);
+        aOSCriticalExit();
 
         if (available) {
             ++count;
-        } else if ((status != A_STATUS_OK) &&
-                   (status != A_STATUS_BUSY)) {
-            return count != 0U ? (aSSize_t)count
-                               : aOSFailWithStatus(status);
-        } else if (status == A_STATUS_BUSY) {
-            aOSYield();
+        } else if (count != 0U) {
+            return (aSSize_t)count;
         } else if (handle->rx_wait_object != NULL) {
             status = wait_for_event(handle->rx_wait_object, end);
             if (status != A_STATUS_OK) {
-                return count != 0U ? (aSSize_t)count
-                                   : fail_with_wait_status(
-                                         status, original_timeout);
+                return fail_with_wait_status(status, original_timeout);
             }
         } else if (aOSPollWaitExpired(end)) {
-            return count != 0U ? (aSSize_t)count
-                               : aOSFailWithTimeout(original_timeout);
+            return aOSFailWithTimeout(original_timeout);
         }
     }
     return (aSSize_t)count;
 }
+
+#endif
+
+#if ADEV_USART_HAS_DMA
+static aSSize_t dma_buffered_read(aDevUsartHandle_t *handle, void *buffer,
+                                  size_t buffer_size,
+                                  const aTimepoint_t *end,
+                                  aTimeout_t original_timeout)
+{
+    size_t count = 0U;
+
+    while (count < buffer_size) {
+        size_t copied = 0U;
+        aStatus_t status = aDevUsartDmaRxCopy(
+            handle, (uint8_t *)buffer + count, buffer_size - count, &copied);
+        count += copied;
+
+        if (count == buffer_size) break;
+        if (count != 0U) return (aSSize_t)count;
+        if (status != A_STATUS_OK && status != A_STATUS_BUSY) {
+            return aOSFailWithStatus(status);
+        }
+        if (handle->rx_wait_object != NULL) {
+            (void)aOSMutexUnlock(handle->rx_mutex);
+            status = wait_for_event(handle->rx_wait_object, end);
+            const aStatus_t lock_status = aOSMutexLock(
+                handle->rx_mutex, A_TIMEOUT_FOREVER);
+            if (lock_status != A_STATUS_OK) {
+                return aOSFailWithStatus(lock_status);
+            }
+            if (status != A_STATUS_OK) {
+                return fail_with_wait_status(status, original_timeout);
+            }
+        } else if (aOSPollWaitExpired(end)) {
+            return aOSFailWithTimeout(original_timeout);
+        }
+    }
+    return (aSSize_t)count;
+}
+
+#endif
 
 aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
                        size_t buffer_size, aTimeout_t timeout)
@@ -605,18 +850,28 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
     if (status != A_STATUS_OK) {
         return fail_with_wait_status(status, timeout);
     }
-    if (handle->rx_state != ADEV_USART_RX_IDLE) {
+    const aDevUsartMode_t rx_mode = handle->mode & ADEV_USART_RX_MASK;
+    if ((handle->rx_state != ADEV_USART_RX_IDLE) ||
+        ((rx_mode != ADEV_USART_RX_DMA_BUFFERED) &&
+         (handle->rx_request_head != NULL))) {
         (void)aOSMutexUnlock(handle->rx_mutex);
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
 
     handle->rx_state = ADEV_USART_RX_STREAM;
-    result = ((handle->mode & ADEV_USART_RX_MASK) !=
-              ADEV_USART_RX_POLLING)
-                 ? buffered_read(handle, buffer, buffer_size, &end,
-                                 timeout)
-                 : polling_read(handle, buffer, buffer_size, &end,
-                                timeout);
+#if ADEV_USART_HAS_DMA
+    if (rx_mode == ADEV_USART_RX_DMA_BUFFERED) {
+        result = dma_buffered_read(handle, buffer, buffer_size, &end, timeout);
+    } else
+#endif
+#if ADEV_USART_HAS_INTERRUPT
+    if (rx_mode == ADEV_USART_RX_INTERRUPT_BUFFERED) {
+        result = buffered_read(handle, buffer, buffer_size, &end, timeout);
+    } else
+#endif
+    {
+        result = polling_read(handle, buffer, buffer_size, &end, timeout);
+    }
     handle->rx_state = ADEV_USART_RX_IDLE;
     (void)aOSMutexUnlock(handle->rx_mutex);
     return result;
@@ -646,6 +901,7 @@ static aSSize_t polling_write(aDevUsartHandle_t *handle, const void *data,
     return (aSSize_t)count;
 }
 
+#if ADEV_USART_HAS_DMA
 static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
 {
     size_t contiguous;
@@ -660,7 +916,10 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
     if (contiguous > handle->tx_count) {
         contiguous = handle->tx_count;
     }
+    status = A_STATUS_OK;
+#if ADEV_USART_HAS_RS485
     status = aDevUsartRS485Begin(handle);
+#endif
     if (status != A_STATUS_OK) {
         return status;
     }
@@ -668,7 +927,9 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
         &handle->drv_handle, &handle->tx_buffer[handle->tx_tail],
         contiguous, &started);
     if (status != A_STATUS_OK) {
+#if ADEV_USART_HAS_RS485
         aDevUsartRs485ArmComplete(handle);
+#endif
         return status;
     }
 
@@ -678,11 +939,16 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
     if (status != A_STATUS_OK) {
         (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
         handle->tx_dma_active = 0U;
+#if ADEV_USART_HAS_RS485
         aDevUsartRs485ArmComplete(handle);
+#endif
     }
     return status;
 }
 
+#endif
+
+#if ADEV_USART_HAS_DMA
 static size_t ring_write(aDevUsartHandle_t *handle, const uint8_t *data,
                          size_t size)
 {
@@ -705,6 +971,9 @@ static size_t ring_write(aDevUsartHandle_t *handle, const uint8_t *data,
     return writable;
 }
 
+#endif
+
+#if ADEV_USART_HAS_DMA
 static aSSize_t dma_buffered_write(aDevUsartHandle_t *handle,
                                    const void *data, size_t data_size,
                                    const aTimepoint_t *end,
@@ -716,7 +985,7 @@ static aSSize_t dma_buffered_write(aDevUsartHandle_t *handle,
         size_t accepted = 0U;
         aStatus_t status;
 
-        aDrvUsartDisableInterrupt(&handle->drv_handle);
+        aOSCriticalEnter();
         status = handle->tx_error;
         if (status == A_STATUS_OK) {
             accepted = ring_write(
@@ -727,7 +996,7 @@ static aSSize_t dma_buffered_write(aDevUsartHandle_t *handle,
                 handle->tx_error = status;
             }
         }
-        aDrvUsartEnableInterrupt(&handle->drv_handle);
+        aOSCriticalExit();
 
         count += accepted;
         if (status != A_STATUS_OK) {
@@ -746,6 +1015,9 @@ static aSSize_t dma_buffered_write(aDevUsartHandle_t *handle,
     return (aSSize_t)count;
 }
 
+#endif
+
+#if ADEV_USART_HAS_INTERRUPT
 static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
                                 size_t data_size,
                                 const aTimepoint_t *end,
@@ -757,14 +1029,16 @@ static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
         aBool_t space_available;
         aStatus_t status = A_STATUS_OK;
 
-        aDrvUsartDisableInterrupt(&handle->drv_handle);
+        aOSCriticalEnter();
         space_available = handle->tx_count < handle->tx_buffer_size;
         status = handle->tx_error;
         if (space_available && (status == A_STATUS_OK)) {
+#if ADEV_USART_HAS_RS485
             status = aDevUsartRS485Begin(handle);
+#endif
         }
         if (status != A_STATUS_OK) {
-            aDrvUsartEnableInterrupt(&handle->drv_handle);
+            aOSCriticalExit();
             return count != 0U ? (aSSize_t)count : aOSFailWithStatus(status);
         }
         if (space_available) {
@@ -776,7 +1050,7 @@ static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
             (void)aDrvUsartSetInterruptEnabled(
                 &handle->drv_handle, ADRV_USART_EXTI_TXE, A_TRUE);
         }
-        aDrvUsartEnableInterrupt(&handle->drv_handle);
+        aOSCriticalExit();
 
         if (space_available) {
             ++count;
@@ -791,6 +1065,8 @@ static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
     }
     return (aSSize_t)count;
 }
+
+#endif
 
 aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
                         size_t data_size, aTimeout_t timeout)
@@ -818,39 +1094,53 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
     if (status != A_STATUS_OK) {
         return fail_with_wait_status(status, timeout);
     }
-    if (handle->tx_state != ADEV_USART_TX_IDLE) {
+    if ((handle->tx_state != ADEV_USART_TX_IDLE) ||
+        (handle->tx_callback != NULL) || (handle->tx_queue_owner != NULL)) {
         (void)aOSMutexUnlock(handle->tx_mutex);
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
 
     handle->tx_state = ADEV_USART_TX_STREAM;
     switch (handle->mode & ADEV_USART_TX_MASK) {
+#if ADEV_USART_HAS_DMA
     case ADEV_USART_TX_DMA_BUFFERED:
         result = dma_buffered_write(handle, data, data_size, &end,
                                     timeout);
         break;
+#endif
+
+#if ADEV_USART_HAS_INTERRUPT
     case ADEV_USART_TX_INTERRUPT_BUFFERED:
         result = interrupt_write(handle, data, data_size, &end,
                                  timeout);
         break;
+#endif
+
     case ADEV_USART_TX_POLLING:
     default:
-        aDrvUsartDisableInterrupt(&handle->drv_handle);
+        aOSCriticalEnter();
         status = handle->tx_error;
         if (status == A_STATUS_OK) {
+#if ADEV_USART_HAS_RS485
             status = aDevUsartRS485Begin(handle);
+#endif
         }
+#if ADEV_USART_HAS_RS485
         if (handle->rs485.enabled) {
             (void)aDrvUsartSetInterruptEnabled(
                 &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
         }
-        aDrvUsartEnableInterrupt(&handle->drv_handle);
+#endif
+
+        aOSCriticalExit();
         result = status == A_STATUS_OK
                      ? polling_write(handle, data, data_size, &end, timeout)
                      : aOSFailWithStatus(status);
-        aDrvUsartDisableInterrupt(&handle->drv_handle);
+        aOSCriticalEnter();
+#if ADEV_USART_HAS_RS485
         aDevUsartRs485ArmComplete(handle);
-        aDrvUsartEnableInterrupt(&handle->drv_handle);
+#endif
+        aOSCriticalExit();
         break;
     }
     handle->tx_state = ADEV_USART_TX_IDLE;
@@ -880,11 +1170,12 @@ static aStatus_t wait_transmit_complete_locked(
               ADEV_USART_TX_POLLING) ||
              ((handle->tx_count == 0U) &&
               (handle->tx_dma_active == 0U)))) {
-            aDrvUsartDisableInterrupt(&handle->drv_handle);
+            aOSCriticalEnter();
             rs485_complete(handle);
-            aDrvUsartEnableInterrupt(&handle->drv_handle);
+            aOSCriticalExit();
             return handle->tx_error;
         }
+#if ADEV_USART_HAS_DMA || ADEV_USART_HAS_INTERRUPT
         if (((handle->mode & ADEV_USART_TX_MASK) ==
              ADEV_USART_TX_INTERRUPT_BUFFERED) ||
             ((handle->mode & ADEV_USART_TX_MASK) ==
@@ -907,6 +1198,8 @@ static aStatus_t wait_transmit_complete_locked(
             }
             continue;
         }
+#endif
+
         if (aOSPollWaitExpired(end)) {
             return original_timeout.milliseconds == 0U
                        ? A_STATUS_BUSY
@@ -916,7 +1209,7 @@ static aStatus_t wait_transmit_complete_locked(
 }
 
 aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
-                                         aTimeout_t timeout)
+                                        aTimeout_t timeout)
 {
     aTimepoint_t end;
     aStatus_t status;
@@ -937,17 +1230,223 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
                    ? A_STATUS_TIMEOUT
                    : status;
     }
-    if (handle->tx_state != ADEV_USART_TX_IDLE) {
+    if ((handle->tx_state != ADEV_USART_TX_IDLE) &&
+        (handle->tx_state != ADEV_USART_TX_QUEUE)) {
         (void)aOSMutexUnlock(handle->tx_mutex);
         return A_STATUS_BUSY;
     }
 
-    handle->tx_state = ADEV_USART_TX_STREAM;
+    const aBool_t queue_claimed =
+        handle->tx_state == ADEV_USART_TX_QUEUE ? A_TRUE : A_FALSE;
+    if (!queue_claimed) handle->tx_state = ADEV_USART_TX_STREAM;
     status = wait_transmit_complete_locked(handle, &end, timeout);
-    handle->tx_state = ADEV_USART_TX_IDLE;
+    if (!queue_claimed) handle->tx_state = ADEV_USART_TX_IDLE;
     (void)aOSMutexUnlock(handle->tx_mutex);
     return status;
 }
+
+#if ADEV_USART_HAS_ASYNC
+static aStatus_t write_async_submit(aDevUsartHandle_t *handle,
+                                    const void *owner,
+                                    const aDevUsartWriteRequest_t *request)
+{
+    if (request == NULL) return A_STATUS_INVALID_PARAM;
+    const void *buffer = request->buffer;
+    const size_t size = request->size;
+    const aTimeout_t timeout = request->timeout;
+    const aDevUsartTxCallback_t callback = request->callback;
+    void *argument = request->argument;
+    aStatus_t status;
+    size_t started = 0U;
+
+    if ((handle == NULL) || (buffer == NULL) || (size == 0U) ||
+        (size > 65535U) || !aTimeoutIsValid(timeout) ||
+        (timeout.type == A_TIMEOUT_TYPE_RELATIVE &&
+         timeout.milliseconds == 0U) || (callback == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (!handle->drv_handle.initialized) return A_STATUS_NOT_READY;
+    if (!ADEV_USART_HAS_ASYNC ||
+        !aDrvUsartAsyncTxIsSupported(&handle->drv_handle)) {
+        return A_STATUS_UNSUPPORTED;
+    }
+    status = aOSMutexLock(handle->tx_mutex, A_TIMEOUT_FOREVER);
+    if (status != A_STATUS_OK) return status;
+    if (((owner == NULL) &&
+         ((handle->tx_state != ADEV_USART_TX_IDLE) ||
+          (handle->tx_queue_owner != NULL))) ||
+        ((owner != NULL) &&
+         ((owner != handle->tx_queue_owner) ||
+          (handle->tx_state != ADEV_USART_TX_QUEUE))) ||
+        (handle->tx_callback != NULL) ||
+        (handle->tx_count != 0U) || (handle->tx_dma_active != 0U)) {
+        (void)aOSMutexUnlock(handle->tx_mutex);
+        return A_STATUS_BUSY;
+    }
+
+    if (timeout.type != A_TIMEOUT_TYPE_FOREVER) {
+        if (handle->tx_deadline_timer == NULL) {
+            status = aOSTimerCreate(&handle->tx_deadline_timer,
+                                    aDevUsartAsyncTxTimeout, handle);
+            if (status != A_STATUS_OK) {
+                (void)aOSMutexUnlock(handle->tx_mutex);
+                return status;
+            }
+        }
+    }
+
+    status = A_STATUS_OK;
+#if ADEV_USART_HAS_RS485
+    status = aDevUsartRS485Begin(handle);
+#endif
+    if (status != A_STATUS_OK) {
+        (void)aOSMutexUnlock(handle->tx_mutex);
+        return status;
+    }
+    handle->tx_async_buffer = buffer;
+    handle->tx_async_size = size;
+    handle->tx_callback = callback;
+    handle->tx_callback_argument = argument;
+    handle->tx_state = ADEV_USART_TX_ASYNC;
+    atomic_store_explicit(&handle->tx_completion_claimed, A_FALSE,
+                          memory_order_release);
+    status = aDrvUsartAsyncTxStart(&handle->drv_handle, buffer, size,
+                                   &started);
+    if ((status == A_STATUS_OK) && (started != size)) {
+        status = A_STATUS_ERROR;
+        (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
+    }
+    if (status == A_STATUS_OK) {
+        handle->tx_dma_active = size;
+        status = aDrvUsartSetInterruptEnabled(
+            &handle->drv_handle, ADRV_USART_EXTI_TC, A_TRUE);
+    }
+    if ((status == A_STATUS_OK) &&
+        (timeout.type != A_TIMEOUT_TYPE_FOREVER)) {
+        status = aOSTimerStart(handle->tx_deadline_timer,
+                               timeout.milliseconds);
+    }
+    if (status != A_STATUS_OK) {
+        (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
+        (void)aDrvUsartSetInterruptEnabled(
+            &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+        rs485_complete(handle);
+        handle->tx_state = ADEV_USART_TX_IDLE;
+        handle->tx_dma_active = 0U;
+        handle->tx_callback = NULL;
+        handle->tx_callback_argument = NULL;
+        handle->tx_async_buffer = NULL;
+        handle->tx_async_size = 0U;
+    }
+    (void)aOSMutexUnlock(handle->tx_mutex);
+    return status;
+}
+
+aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
+                              const aDevUsartWriteRequest_t *request)
+{
+    return write_async_submit(handle, NULL, request);
+}
+
+aStatus_t aDevUsartWriteAsyncQueued(aDevUsartHandle_t *handle,
+                                    const void *owner,
+                                    const aDevUsartWriteRequest_t *request)
+{
+    if (owner == NULL) return A_STATUS_INVALID_PARAM;
+    return write_async_submit(handle, owner, request);
+}
+
+aStatus_t aDevUsartTxQueueClaim(aDevUsartHandle_t *handle,
+                                const void *owner)
+{
+    aStatus_t status;
+
+    if ((handle == NULL) || (owner == NULL)) return A_STATUS_INVALID_PARAM;
+    if (!handle->drv_handle.initialized) return A_STATUS_NOT_READY;
+    status = aOSMutexLock(handle->tx_mutex, A_TIMEOUT_FOREVER);
+    if (status != A_STATUS_OK) return status;
+    if ((handle->tx_state != ADEV_USART_TX_IDLE) ||
+        (handle->tx_callback != NULL) || (handle->tx_count != 0U) ||
+        (handle->tx_dma_active != 0U)) {
+        status = A_STATUS_BUSY;
+    } else {
+        handle->tx_queue_owner = owner;
+        handle->tx_state = ADEV_USART_TX_QUEUE;
+    }
+    (void)aOSMutexUnlock(handle->tx_mutex);
+    return status;
+}
+
+aStatus_t aDevUsartTxQueueRelease(aDevUsartHandle_t *handle,
+                                  const void *owner)
+{
+    aStatus_t status;
+
+    if ((handle == NULL) || (owner == NULL)) return A_STATUS_INVALID_PARAM;
+    status = aOSMutexLock(handle->tx_mutex, A_TIMEOUT_FOREVER);
+    if (status != A_STATUS_OK) return status;
+    if (handle->tx_queue_owner != owner) {
+        status = A_STATUS_INVALID_PARAM;
+    } else if ((handle->tx_state != ADEV_USART_TX_QUEUE) ||
+               (handle->tx_callback != NULL) || (handle->tx_dma_active != 0U)) {
+        status = A_STATUS_BUSY;
+    } else {
+        handle->tx_queue_owner = NULL;
+        handle->tx_state = ADEV_USART_TX_IDLE;
+        status = A_STATUS_OK;
+    }
+    (void)aOSMutexUnlock(handle->tx_mutex);
+    return status;
+}
+
+static aStatus_t write_async_cancel(aDevUsartHandle_t *handle,
+                                    const void *owner)
+{
+    aStatus_t status;
+    size_t remaining = 0U;
+    size_t transferred = 0U;
+
+    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (!handle->drv_handle.initialized) return A_STATUS_NOT_READY;
+    status = aOSMutexLock(handle->tx_mutex, A_TIMEOUT_FOREVER);
+    if (status != A_STATUS_OK) return status;
+    if (((owner == NULL) && (handle->tx_queue_owner != NULL)) ||
+        ((owner != NULL) && (owner != handle->tx_queue_owner))) {
+        (void)aOSMutexUnlock(handle->tx_mutex);
+        return A_STATUS_BUSY;
+    }
+    if (handle->tx_state != ADEV_USART_TX_ASYNC) {
+        (void)aOSMutexUnlock(handle->tx_mutex);
+        return A_STATUS_NOT_READY;
+    }
+    aOSTimerStop(handle->tx_deadline_timer);
+    if (aDrvUsartAsyncTxGetRemaining(&handle->drv_handle, &remaining) ==
+        A_STATUS_OK) {
+        transferred = handle->tx_async_size - remaining;
+    }
+    (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
+    if (!handle->rs485.enabled) {
+        (void)aDrvUsartSetInterruptEnabled(
+            &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+    }
+    async_tx_complete(handle, A_STATUS_CANCELLED, transferred, A_FALSE);
+    (void)aOSMutexUnlock(handle->tx_mutex);
+    return A_STATUS_OK;
+}
+
+aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle)
+{
+    return write_async_cancel(handle, NULL);
+}
+
+aStatus_t aDevUsartWriteAsyncCancelQueued(aDevUsartHandle_t *handle,
+                                          const void *owner)
+{
+    if (owner == NULL) return A_STATUS_INVALID_PARAM;
+    return write_async_cancel(handle, owner);
+}
+
+#endif
 
 uint32_t aDevUsartGetIdleEventCount(const aDevUsartHandle_t *handle)
 {
@@ -975,4 +1474,28 @@ aStatus_t aDevUsartGetRxError(const aDevUsartHandle_t *handle)
         return A_STATUS_NOT_READY;
     }
     return handle->rx_error;
+}
+
+aBool_t aDevUsartIsSupported(const aDevUsartHandle_t *handle,
+                             aDevUsartCapability_t capability)
+{
+    if ((handle == NULL) || !handle->drv_handle.initialized) {
+        return A_FALSE;
+    }
+
+#if ADEV_USART_HAS_DMA
+    switch (capability) {
+    case ADEV_USART_CAP_TX_DIRECT:
+        return ADEV_USART_HAS_DMA &&
+               aDrvUsartAsyncTxIsSupported(&handle->drv_handle);
+    case ADEV_USART_CAP_RX_DIRECT:
+        return ADEV_USART_HAS_DMA &&
+               aDrvUsartAsyncRxIsSupported(&handle->drv_handle);
+    default:
+        return A_FALSE;
+    }
+#else
+    (void)capability;
+    return A_FALSE;
+#endif
 }

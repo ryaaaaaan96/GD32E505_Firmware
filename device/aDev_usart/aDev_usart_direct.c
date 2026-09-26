@@ -12,23 +12,6 @@ static aSSize_t fail_with_wait_status(aStatus_t status,
                : aOSFailWithStatus(status);
 }
 
-aBool_t aDevUsartIsSupported(const aDevUsartHandle_t *handle,
-                             aDevUsartCapability_t capability)
-{
-    if ((handle == NULL) || !handle->drv_handle.initialized) {
-        return A_FALSE;
-    }
-
-    switch (capability) {
-    case ADEV_USART_CAP_TX_DIRECT:
-        return aDrvUsartAsyncTxIsSupported(&handle->drv_handle);
-    case ADEV_USART_CAP_RX_DIRECT:
-        return aDrvUsartAsyncRxIsSupported(&handle->drv_handle);
-    default:
-        return A_FALSE;
-    }
-}
-
 static void direct_tx_interrupts_disable(aDevUsartHandle_t *handle)
 {
     const aDevUsartMode_t tx_mode = handle->mode & ADEV_USART_TX_MASK;
@@ -77,6 +60,8 @@ aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
 
     aDrvUsartDisableInterrupt(&handle->drv_handle);
     if ((handle->tx_state != ADEV_USART_TX_IDLE) ||
+        (handle->tx_queue_owner != NULL) ||
+        (handle->tx_callback != NULL) ||
         (handle->tx_count != 0U) || (handle->tx_dma_active != 0U)) {
         aDrvUsartEnableInterrupt(&handle->drv_handle);
         (void)aOSMutexUnlock(handle->tx_mutex);
@@ -86,7 +71,9 @@ aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
     direct_tx_interrupts_disable(handle);
     status = handle->tx_error;
     if (status == A_STATUS_OK) {
+#if ADEV_USART_HAS_RS485
         status = aDevUsartRS485Begin(handle);
+#endif
     }
     aDrvUsartEnableInterrupt(&handle->drv_handle);
 
@@ -123,7 +110,9 @@ aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
     /* Return only after DMA has stopped accessing the caller's buffer. */
     (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
     aDrvUsartDisableInterrupt(&handle->drv_handle);
+#if ADEV_USART_HAS_RS485
     aDevUsartRs485ArmComplete(handle);
+#endif
     handle->tx_state = ADEV_USART_TX_IDLE;
     aDrvUsartEnableInterrupt(&handle->drv_handle);
     (void)aOSMutexUnlock(handle->tx_mutex);
@@ -173,9 +162,11 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
 
     aDrvUsartDisableInterrupt(&handle->drv_handle);
     if ((handle->rx_state != ADEV_USART_RX_IDLE) ||
-        (handle->rx_count != 0U) ||
+        (handle->rx_request_head != NULL) ||
+        (handle->rx_complete_head != NULL) ||
         ((handle->mode & ADEV_USART_RX_MASK) ==
-         ADEV_USART_RX_DMA_CIRCULAR)) {
+         ADEV_USART_RX_DMA_BUFFERED) ||
+        (handle->rx_count != 0U)) {
         aDrvUsartEnableInterrupt(&handle->drv_handle);
         (void)aOSMutexUnlock(handle->rx_mutex);
         return aOSFailWithStatus(A_STATUS_BUSY);
@@ -202,17 +193,27 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
                 const aBool_t expired =
                     (status == A_STATUS_OK) && (remaining != 0U);
 
-                if (aDrvUsartAsyncRxStop(
-                        &handle->drv_handle, &received) != A_STATUS_OK) {
+                const aStatus_t stop_status = aDrvUsartAsyncRxStop(
+                    &handle->drv_handle, &received);
+                if (stop_status != A_STATUS_OK) {
                     (void)aDrvUsartAsyncRxAbort(&handle->drv_handle);
-                    if (status == A_STATUS_OK) status = A_STATUS_ERROR;
+                    if (status == A_STATUS_OK) status = stop_status;
                 }
-                count += received;
-                if (expired) status = A_STATUS_TIMEOUT;
+                if (received > transfer_size) {
+                    status = A_STATUS_ERROR;
+                } else {
+                    count += received;
+                }
+                if (expired && status == A_STATUS_OK) status = A_STATUS_TIMEOUT;
+                if (status == A_STATUS_OK && received == 0U) status = A_STATUS_ERROR;
                 break;
             }
         }
         if (status != A_STATUS_OK) break;
+        if (count < buffer_size && aTimepointExpired(&end, aOSGetUptimeMs())) {
+            status = A_STATUS_TIMEOUT;
+            break;
+        }
     }
 
     direct_rx_interrupt_set(handle, A_TRUE);

@@ -1,7 +1,8 @@
 target_sources(
     ${APP_TARGET}
     PRIVATE
-        aclass_system.c
+        system.c
+        status.c
 )
 
 target_include_directories(
@@ -13,15 +14,6 @@ target_include_directories(
 target_link_libraries(
     ${APP_TARGET}
     PRIVATE
-        aDevLed
         aOS
         aShell
 )
-
-if(ASHELL_ENABLED)
-    target_link_libraries(
-        ${APP_TARGET}
-        PRIVATE
-            aDevUsart
-    )
-endif()

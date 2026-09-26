@@ -1,12 +1,9 @@
 if(ADATABASE_ENABLED)
     add_subdirectory(aDataBase)
-else()
-    add_subdirectory(aDataBase EXCLUDE_FROM_ALL)
 endif()
 
 if(AMODBUS_ENABLED)
     add_subdirectory(aModbus)
-else()
-    add_subdirectory(aModbus EXCLUDE_FROM_ALL)
 endif()
+
 add_subdirectory(aShell)

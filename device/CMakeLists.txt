@@ -1,7 +1,11 @@
-if(ADATABASE_ENABLED)
+if(ADEV_FLASH25Q_ENABLED)
     add_subdirectory(aDev_Flash25q)
-else()
-    add_subdirectory(aDev_Flash25q EXCLUDE_FROM_ALL)
 endif()
-add_subdirectory(aDev_usart EXCLUDE_FROM_ALL)
-add_subdirectory(aDev_LED)
+
+if(ADEV_USART_ENABLED)
+    add_subdirectory(aDev_usart)
+endif()
+
+if(ADEV_LED_ENABLED)
+    add_subdirectory(aDev_LED)
+endif()

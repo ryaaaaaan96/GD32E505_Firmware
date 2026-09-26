@@ -20,10 +20,10 @@
 #define ASYSTEM_SHELL_BAUD_RATE 115200U
 #define ASYSTEM_SHELL_IO_TIMEOUT A_TIMEOUT_MS(20U)
 
-/* Shell: buffered interrupt TX + circular DMA RX + RX IDLE detection. */
+/* Shell: buffered interrupt TX/RX + optional RX IDLE notification. */
 #define ASYSTEM_SHELL_USART_MODE                    \
     (ADEV_USART_TX_INTERRUPT_BUFFERED |             \
-     ADEV_USART_RX_DMA_CIRCULAR |                   \
+     ADEV_USART_RX_INTERRUPT_BUFFERED |             \
      ADEV_USART_OPTION_RX_IDLE)
 #define ASYSTEM_SHELL_IRQ_PRIORITY 6U
 #define ASYSTEM_SHELL_RX_BUFFER_SIZE 256U

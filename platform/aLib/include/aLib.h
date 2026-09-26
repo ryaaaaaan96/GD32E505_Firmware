@@ -19,6 +19,11 @@
 #define ALIB_NORETURN
 #endif
 
+/* Stream I/O result: >= 0 is the actual byte count, -1 is failure.
+ * Inspect aOS errno only on failure; success need not clear a previous error.
+ * Partial-progress and timeout behavior must be documented by each API.
+ * See docs/interface_contract.md; this type does not mandate Read/Write for
+ * device classes whose operations are not byte streams. */
 typedef ptrdiff_t aSSize_t;
 
 /*
@@ -40,6 +45,7 @@ typedef enum {
     A_ENOTSUP,
     A_EINTR,
     A_ENOMEM,
+    A_ECANCELED,
 } aErrno_t;
 
 static inline aErrno_t aStatusToErrno(aStatus_t status)
@@ -53,12 +59,15 @@ static inline aErrno_t aStatusToErrno(aStatus_t status)
         return A_EAGAIN;
     case A_STATUS_TIMEOUT:
         return A_ETIMEDOUT;
+    case A_STATUS_NOT_FOUND:
     case A_STATUS_NOT_READY:
         return A_ENODEV;
     case A_STATUS_UNSUPPORTED:
         return A_ENOTSUP;
     case A_STATUS_NO_MEMORY:
         return A_ENOMEM;
+    case A_STATUS_CANCELLED:
+        return A_ECANCELED;
     case A_STATUS_ERROR:
     default:
         return A_EIO;

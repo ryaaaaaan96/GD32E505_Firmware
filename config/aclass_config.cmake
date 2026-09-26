@@ -1,8 +1,33 @@
-# aClass 产品功能模块配置。
-#
-# 本文件是 func 层模块选择的唯一来源。模块开关使用普通变量，切换配置时不会
-# 继承构建目录中旧的 CMake cache 值。
+# 产品配置：普通变量；依赖必须显式开启，解析器不覆盖用户选择。
+# 缺少依赖时 cmake/aclass_resolve.cmake 给出配置错误。
 
-set(ASHELL_ENABLED ON)
-set(ADATABASE_ENABLED OFF)
-set(AMODBUS_ENABLED OFF)
+# func
+set(ASHELL_REQUESTED ON)
+set(ADATABASE_REQUESTED OFF)
+set(AMODBUS_REQUESTED OFF)
+
+# Board
+set(BOARD_HXTAL_HZ 20000000)
+set(BOARD_HXTAL_BYPASS ON)
+
+# device / LED
+set(ADEV_LED_REQUESTED ON)
+
+# device / USART：按功能组配置；TX/RX 模式与 IDLE 由 app 初始化选择。
+set(ADEV_USART_REQUESTED ON)
+set(ADEV_USART_INTERRUPT_REQUESTED ON)
+set(ADEV_USART_DMA_REQUESTED ON)
+set(ADEV_USART_ASYNC_REQUESTED ON)
+set(ADEV_USART_RS485_REQUESTED ON)
+
+# device / Flash25Q
+set(ADEV_FLASH25Q_REQUESTED OFF)
+
+# driver：显式启用依赖的底层能力。
+set(ADRV_MODULE_GPIO_REQUESTED ON)
+set(ADRV_MODULE_USART_REQUESTED ON)
+set(ADRV_USART_INTERRUPT_REQUESTED ON)
+set(ADRV_USART_ASYNC_REQUESTED ON)
+set(ADRV_MODULE_DMA_REQUESTED ON)
+set(ADRV_MODULE_SPI_REQUESTED OFF)
+set(ADRV_MODULE_QSPI_REQUESTED OFF)

@@ -22,3 +22,15 @@
 
 FlashDB、FreeRTOS、CMSIS 和 GD32 标准外设库等第三方源码保留各自原始布尔
 类型。项目封装层负责在第三方 API 边界转换，避免修改上游源码。
+
+## aFifo.h
+
+调用者提供固定容量、固定元素大小的存储；Init/Push/Peek/Pop/Count。
+不分配内存，不加锁，调用方必须串行化同一 FIFO 的全部操作。
+队满返回 BUSY，队空返回 NOT_READY，失败不改变索引。
+
+元素按值复制。保存指针的元素只复制指针，不复制或释放 payload。
+USART 使用 FIFO 保存 TX 请求描述符；超时、取消、回调、DMA 调度均留在 device。
+FIFO 不是无锁 SPSC 队列，也不直接向 DMA 出借槽位。
+
+测试：`python3 tests/usart/run.py` 包含 FIFO 空/满、回绕、Peek 和非法容量检查。

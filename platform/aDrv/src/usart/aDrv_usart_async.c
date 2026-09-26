@@ -26,12 +26,13 @@ typedef struct {
     volatile size_t rx_wrap_count;
     IRQn_Type rx_dma_irq;
     uint8_t rx_irq_priority;
-    aDrvUsartAsyncRxCallback_t rx_callback;
+    aDrvUsartDmaCallback_t rx_callback;
     void *rx_callback_argument;
     aBool_t tx_busy;
     aBool_t tx_error;
     aBool_t rx_busy;
     aBool_t rx_circular;
+    aBool_t rx_irq_enabled;
     volatile aBool_t rx_error;
 } aDrvPrivateUsartAsyncState_t;
 
@@ -154,7 +155,7 @@ static void rx_dma_irq_dispatch(aDrvUsartId_t id)
 {
     aDrvPrivateUsartAsyncState_t *state = &s_async_states[id];
 
-    if (!state->rx_busy || !state->rx_circular) {
+    if (!state->rx_busy || !state->rx_irq_enabled) {
         nvic_irq_disable(state->rx_dma_irq);
         return;
     }
@@ -394,15 +395,46 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
     state->rx_size = size;
     state->rx_wrap_count = 0U;
     state->rx_circular = A_FALSE;
+    state->rx_irq_enabled = A_FALSE;
     state->rx_error = A_FALSE;
     state->rx_busy = A_TRUE;
+    return A_STATUS_OK;
+}
+
+aStatus_t aDrvUsartRxDmaStart(
+    aDrvUsartHandle_t *handle, void *buffer, size_t size,
+    uint8_t interrupt_priority, aDrvUsartDmaCallback_t callback,
+    void *argument)
+{
+    aDrvPrivateUsartAsyncState_t *state;
+    aStatus_t status;
+
+    if ((callback == NULL) || (interrupt_priority > 15U)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    status = aDrvUsartAsyncRxStart(handle, buffer, size);
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+    state = &s_async_states[handle->id];
+    state->rx_dma_irq = dma_irq_get(&state->rx_dma);
+    state->rx_irq_priority = interrupt_priority;
+    state->rx_callback = callback;
+    state->rx_callback_argument = argument;
+    state->rx_irq_enabled = A_TRUE;
+    dma_flag_clear((uint32_t)state->rx_dma.controller,
+                   (dma_channel_enum)state->rx_dma.channel, DMA_FLAG_G);
+    dma_interrupt_enable((uint32_t)state->rx_dma.controller,
+                         (dma_channel_enum)state->rx_dma.channel,
+                         DMA_INT_FTF | DMA_INT_ERR);
+    nvic_irq_enable(state->rx_dma_irq, interrupt_priority, 0U);
     return A_STATUS_OK;
 }
 
 aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
                                         void *buffer, size_t size,
                                         uint8_t interrupt_priority,
-                                        aDrvUsartAsyncRxCallback_t callback,
+                                        aDrvUsartDmaCallback_t callback,
                                         void *argument)
 {
     aDrvPrivateUsartAsyncState_t *state;
@@ -468,6 +500,7 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
     state->rx_callback = callback;
     state->rx_callback_argument = argument;
     state->rx_circular = A_TRUE;
+    state->rx_irq_enabled = A_TRUE;
     state->rx_error = A_FALSE;
     state->rx_busy = A_TRUE;
 
@@ -521,8 +554,13 @@ aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
         remaining_before = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
         __DMB();
         remaining_after = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
+        /* A reload after flags_service but before the first count read must
+         * also retry; comparing two decreasing samples alone misses it. */
         if ((remaining_after <= remaining_before) &&
-            ((remaining_before - remaining_after) < state->rx_size / 2U)) {
+            ((remaining_before - remaining_after) < state->rx_size / 2U) &&
+            (dma_flag_get((uint32_t)state->rx_dma.controller,
+                          (dma_channel_enum)state->rx_dma.channel,
+                          DMA_FLAG_FTF) == RESET)) {
             *received = state->rx_wrap_count * state->rx_size +
                         (state->rx_size - remaining_after);
             nvic_irq_enable(state->rx_dma_irq, state->rx_irq_priority, 0U);
@@ -595,15 +633,20 @@ aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *handle,
                              USART_RECEIVE_DMA_DISABLE);
     remaining = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
     if (state->rx_circular) {
-        nvic_irq_disable(state->rx_dma_irq);
         rx_dma_flags_service(state);
+    }
+    if (state->rx_irq_enabled) {
+        nvic_irq_disable(state->rx_dma_irq);
         dma_interrupt_disable((uint32_t)state->rx_dma.controller,
                               (dma_channel_enum)state->rx_dma.channel,
                               DMA_INT_HTF | DMA_INT_FTF | DMA_INT_ERR);
+        state->rx_irq_enabled = A_FALSE;
     }
     if (received != NULL) {
-        *received = state->rx_wrap_count * state->rx_size +
-                    (state->rx_size - remaining);
+        *received = state->rx_circular
+                        ? state->rx_wrap_count * state->rx_size +
+                              (state->rx_size - remaining)
+                        : state->rx_size - remaining;
     }
     state->rx_busy = A_FALSE;
     state->rx_circular = A_FALSE;
@@ -647,10 +690,10 @@ void DMA0_Channel4_IRQHandler(void)
 void DMA1_Channel2_IRQHandler(void)
 {
     if ((s_async_states[ADRV_USART_3].rx_busy != 0U) &&
-        (s_async_states[ADRV_USART_3].rx_circular != 0U)) {
+        (s_async_states[ADRV_USART_3].rx_irq_enabled != 0U)) {
         rx_dma_irq_dispatch(ADRV_USART_3);
     } else if ((s_async_states[ADRV_USART_5].rx_busy != 0U) &&
-               (s_async_states[ADRV_USART_5].rx_circular != 0U)) {
+               (s_async_states[ADRV_USART_5].rx_irq_enabled != 0U)) {
         rx_dma_irq_dispatch(ADRV_USART_5);
     } else {
         nvic_irq_disable(DMA1_Channel2_IRQn);
