@@ -1,4 +1,5 @@
 # FreeRTOS product overrides for this firmware.
+set(FREERTOS_PORT GCC/ARM_CM33_NTZ/non_secure)
 # Reusable defaults and the FreeRTOSConfig.h template are owned by aOS.
 
 set(FREERTOS_CPU_CLOCK_HZ ${MCU_CORE_CLOCK_HZ})

@@ -6,20 +6,29 @@
 aMemory 层。存储链路为：
 
 ```text
-FlashDB KVDB -> 本模块 FAL 适配 -> aDev_Flash25q -> aDrv QSPI
+FlashDB KVDB -> FAL 适配 -> aDataBaseStorage_t 操作表 -> 存储后端
 ```
 
 应用层先初始化 Flash25Q 设备，再显式绑定该句柄，然后使用 `param` 或 `log` 分区名
 初始化 FlashDB：
 
 ```c
+#include "aDataBase_flash25q.h"
 struct fdb_kvdb database = {0};
-aDataBaseBindFlash25q(&flash_handle);
-fdb_kvdb_init(&database, "param_db", "param", NULL, NULL);
+if (aDataBaseBindFlash25q(&flash_handle) == A_STATUS_OK) {
+    fdb_kvdb_init(&database, "param_db", "param", NULL, NULL);
+}
 ```
 
 设备绑定与分区策略由本模块维护。产品分区参数位于本模块的
 `port/include/aDatabase_flash_layout.h`。FlashDB 的 FAL API 仍为上游要求的全局接口，绑定
-操作必须在任何数据库实例初始化之前完成；当前 adapter 绑定一个 Flash25Q 实例。
+操作必须在任何数据库实例初始化之前完成。关闭所有数据库、停止在途调用后才能
+调用 aDataBaseUnbindStorage；生命周期操作由应用串行管理。
 
-当前示例应用没有目标 PCB 的 SQPI 引脚配置，因此只编译 FlashDB，不执行外部 Flash 数据库自检。
+config/aclass_config.cmake 中 ADATABASE_BACKEND=FLASH25Q 构建可选 aDataBaseFlash25q
+适配目标，需要显式启用 ADEV_FLASH25Q_REQUESTED 及 QSPI，使用它的 app 链接此目标。
+ADATABASE_BACKEND=CUSTOM 只构建不依赖 Flash25Q 的 aDataBase 核心，应用通过
+aDataBaseBindStorage 提供 read/write/erase、context 和存储几何参数。操作表会被复制，
+context 必须保持有效到解除绑定。几何参数必须匹配当前 FAL 分区布局；绑定一个存储实例。
+
+当前示例默认关闭数据库，也没有目标 PCB 的 SQPI 引脚配置，不执行外部 Flash 数据库自检。

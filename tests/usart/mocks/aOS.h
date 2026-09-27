@@ -47,4 +47,5 @@ void aOSCriticalExitFromISR(aOSCriticalState_t state);
 aSSize_t aOSFailWithStatus(aStatus_t status);
 aSSize_t aOSFailWithTimeout(aTimeout_t timeout);
 aBool_t aOSPollWaitExpired(const aTimepoint_t *end);
+aBool_t aOSIsWorkContext(void);
 #endif

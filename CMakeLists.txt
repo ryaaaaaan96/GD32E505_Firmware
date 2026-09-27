@@ -5,6 +5,8 @@ include(cmake/Aclass.cmake)
 aclass_select(
     NAME gd32e505vet7_debug
     VERSION 0.1.0
+    PLATFORM Embedded
+    OS FreeRTOS
     MCU gd32e505
     LINKER_SCRIPT GD32E505_flash.ld
     TOOLCHAIN GCC

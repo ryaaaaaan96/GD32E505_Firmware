@@ -16,3 +16,4 @@ target_link_libraries(
         aDrv
         aLib
 )
+target_link_libraries(aDevLed PRIVATE aclass_project_options)

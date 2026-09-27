@@ -4,5 +4,4 @@ target_include_directories(
         "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-add_subdirectory(led)
-add_subdirectory(usart)
+add_subdirectory(system)

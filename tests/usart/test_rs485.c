@@ -1,6 +1,5 @@
 /* Host test: real device implementation, simulated nonblocking driver and OS. */
 #include "aDev_usart_internal.h"
-#include "aDev_usart_tx_queue.h"
 #include "aOS.h"
 #include <assert.h>
 #include <stdio.h>
@@ -32,6 +31,7 @@ static aBool_t rx_dma_circular;
 static size_t rx_dma_produced;
 static aStatus_t rx_dma_progress_status = A_STATUS_OK;
 static aBool_t in_worker;
+static aBool_t complete_rx_on_wait;
 static aBool_t overwrite_in_callback;
 static uint8_t *rx_ring;
 static aBool_t overwrite_during_copy;
@@ -41,9 +41,6 @@ static unsigned int async_rx_callbacks;
 static aDevUsartRxEventType_t async_rx_reason;
 static aStatus_t async_tx_status;
 static size_t async_rx_length;
-static unsigned int queue_callbacks;
-static uint32_t queue_callback_ids[4];
-static aStatus_t queue_callback_statuses[4];
 static aOSWorkItem_t *work_items[16];
 static aOSWorkFunction_t work_functions[16];
 static void *work_arguments[16];
@@ -94,10 +91,22 @@ uint32_t aOSGetUptimeMs(void) { return uptime_ms; }
 aStatus_t aOSValidateIsrPriority(uint32_t priority)
 { return priority >= 5U ? A_STATUS_OK : A_STATUS_INVALID_PARAM; }
 void aOSYield(void) {}
+aBool_t aOSIsWorkContext(void) { return in_worker; }
 aStatus_t aOSWaitObjectCreate(void **p) { *p = p; return A_STATUS_OK; }
 void aOSWaitObjectDestroy(void **p) { *p = NULL; }
 aStatus_t aOSWaitObjectWait(void *p, aTimeout_t t)
-{ (void)p; (void)t; ++rx_waits; return A_STATUS_TIMEOUT; }
+{
+    (void)p; ++rx_waits;
+    if (complete_rx_on_wait) {
+        complete_rx_on_wait = A_FALSE;
+        rx_dma_remaining = 0U;
+        assert(rx_dma_callback != NULL);
+        rx_dma_callback(rx_dma_argument);
+        return A_STATUS_OK;
+    }
+    uptime_ms += t.milliseconds;
+    return A_STATUS_TIMEOUT;
+}
 void aOSWaitObjectNotify(void *p) { (void)p; }
 void aOSWaitObjectNotifyFromISR(void *p) { (void)p; }
 aStatus_t aOSMutexCreate(void **p) { ++mutex_count; *p = p; return A_STATUS_OK; }
@@ -194,8 +203,9 @@ aStatus_t aDrvUsartRxDmaStart(aDrvUsartHandle_t *h, void *p, size_t n,
                               uint8_t priority,
                               aDrvUsartDmaCallback_t callback,
                               void *argument)
-{ (void)h; (void)p; (void)priority; rx_dma_circular = A_FALSE; rx_dma_callback = callback;
-  rx_dma_argument = argument; rx_dma_size = n; rx_dma_remaining = n;
+{ (void)priority; (void)aDrvUsartAsyncRxStart(h, p, n);
+  rx_dma_circular = A_FALSE; rx_dma_callback = callback;
+  rx_dma_argument = argument; rx_dma_size = n;
   return A_STATUS_OK; }
 aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *h, size_t *n)
 { (void)h;
@@ -237,18 +247,6 @@ static void async_rx_callback(aDevUsartHandle_t *handle,
   }
   ++async_rx_callbacks; async_rx_length = event->length;
   async_rx_reason = event->type;
-}
-
-static void queue_callback(aDevUsartTxQueueHandle_t *queue, uint32_t request_id,
-                           const aDevUsartTxEvent_t *event, void *argument)
-{
-    (void)argument;
-    assert(in_worker && locks == 0U);
-    assert(aDevUsartTxQueueDeInit(queue) == A_STATUS_BUSY);
-    assert(!aDevUsartTxQueueIsIdle(queue));
-    assert(queue_callbacks < 4U);
-    queue_callback_ids[queue_callbacks] = request_id;
-    queue_callback_statuses[queue_callbacks++] = event->status;
 }
 
 static void fire(aDevUsartHandle_t *h, aDrvUsartExti_t event)
@@ -374,8 +372,11 @@ int main(void)
     assert(direct_rx_target == read_buffer && read_buffer[0] == 0x5a);
     assert(rx_dma_stops == 1U);
     direct_rx_count = 3U;
+    unsigned waits_before = rx_waits;
+    unsigned polls_before = poll_waits;
     assert(aDevUsartReadDirect(h, read_buffer, sizeof(read_buffer),
                                A_TIMEOUT_MS(10U)) == 3);
+    assert(rx_waits > waits_before && poll_waits == polls_before);
     assert(rx_dma_stops == 2U);
     direct_rx_count = 0U;
     assert(aDevUsartReadDirect(h, read_buffer, sizeof(read_buffer),
@@ -387,6 +388,12 @@ int main(void)
     assert(aDevUsartReadDirect(h, read_buffer, sizeof(read_buffer),
                                A_TIMEOUT_NO_WAIT) == -1);
     assert(rx_dma_stops == 4U);
+    complete_rx_on_wait = A_TRUE;
+    waits_before = rx_waits;
+    assert(aDevUsartReadDirect(h, read_buffer, sizeof(read_buffer),
+                               A_TIMEOUT_FOREVER) == sizeof(read_buffer));
+    assert(!complete_rx_on_wait && rx_waits == waits_before + 1U);
+    rx_dma_stops = 4U; /* Subsequent tests count their own stop operations. */
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
 
     c.mode = ADEV_USART_RX_INTERRUPT_BUFFERED;
@@ -503,98 +510,6 @@ int main(void)
     assert(mutex_count == 0U && locks == 0U);
     aDevUsartConfigStructInit(&c);
     assert(aDevUsartInitStatic(&c, &storage, &h) == A_STATUS_OK);
-    aDevUsartTxRequest_t queue_requests[2];
-    aDevUsartTxQueueConfig_t queue_config;
-    aDevUsartTxQueueHandle_t queue;
-    uint32_t request_a, request_b;
-    aDevUsartTxQueueConfigStructInit(&queue_config);
-    queue_config.usart = h;
-    queue_config.request_storage = queue_requests;
-    queue_config.request_capacity = 2U;
-    queue_config.callback = queue_callback;
-    assert(aDevUsartTxQueueInit(&queue_config, &queue) == A_STATUS_OK);
-    queue_callbacks = 0U;
-    assert(aDevUsartTxQueueSubmit(&queue, NULL, NULL) == A_STATUS_INVALID_PARAM);
-    assert(aDevUsartTxQueueSubmit(&queue, &(aDevUsartTxQueueRequest_t) {
-            .buffer = data,
-            .size = 2U,
-            .timeout = A_TIMEOUT_MS(100U)
-        }, &request_a) == A_STATUS_OK);
-    aDevUsartTxQueueRequest_t queued_request = {
-            .buffer = data + 2U,
-            .size = 2U,
-            .timeout = A_TIMEOUT_MS(100U)
-        };
-    assert(aDevUsartTxQueueSubmit(&queue, &queued_request, &request_b) == A_STATUS_OK);
-    memset(&queued_request, 0, sizeof(queued_request));
-    assert(aDevUsartTxQueueGetPendingCount(&queue) == 2U);
-    drain_work(); /* Queue starts DMA only from the aOS worker. */
-    assert(aDevUsartWrite(h, data, 1U, A_TIMEOUT_NO_WAIT) == -1);
-    assert(last_error == A_STATUS_BUSY);
-    fire(h, ADRV_USART_EXTI_TC);
-    drain_work();
-    assert(queue_callbacks == 1U && queue_callback_ids[0] == request_a);
-    fire(h, ADRV_USART_EXTI_TC);
-    drain_work();
-    assert(queue_callbacks == 2U && queue_callback_ids[1] == request_b);
-    assert(queue_callback_statuses[0] == A_STATUS_OK &&
-           queue_callback_statuses[1] == A_STATUS_OK);
-    assert(aDevUsartTxQueueIsIdle(&queue));
-    assert(aDevUsartTxQueueWaitDrained(&queue, A_TIMEOUT_MS(10U)) == A_STATUS_OK);
-    assert(aDevUsartTxQueueDeInit(&queue) == A_STATUS_OK);
-
-    assert(aDevUsartTxQueueInit(&queue_config, &queue) == A_STATUS_OK);
-    queue_callbacks = 0U;
-    uint32_t request_c, request_d;
-    assert(aDevUsartTxQueueSubmit(&queue, &(aDevUsartTxQueueRequest_t) {
-            .buffer = data,
-            .size = 2U,
-            .timeout = A_TIMEOUT_MS(100U)
-        }, &request_c) == A_STATUS_OK);
-    assert(aDevUsartTxQueueSubmit(&queue, &(aDevUsartTxQueueRequest_t) {
-            .buffer = data + 2U,
-            .size = 2U,
-            .timeout = A_TIMEOUT_MS(100U)
-        }, &request_d) == A_STATUS_OK);
-    assert(aDevUsartTxQueueCancelAll(&queue) == A_STATUS_OK);
-    drain_work();
-    assert(queue_callbacks == 2U);
-    assert(queue_callback_ids[0] == request_c &&
-           queue_callback_ids[1] == request_d);
-    assert(queue_callback_statuses[0] == A_STATUS_CANCELLED &&
-           queue_callback_statuses[1] == A_STATUS_CANCELLED);
-    assert(aDevUsartTxQueueDeInit(&queue) == A_STATUS_OK);
-    /* Failure, queued expiry and cancellation all remain deferred. */
-    assert(aDevUsartTxQueueInit(&queue_config, &queue) == A_STATUS_OK);
-    queue_callbacks = 0U;
-    aDevUsartTxQueueRequest_t late = {
-        .buffer = data, .size = 2U, .timeout = A_TIMEOUT_MS(5U),
-    };
-    assert(aDevUsartTxQueueSubmit(&queue, &late, NULL) == A_STATUS_OK);
-    assert(queue_callbacks == 0U);
-    uptime_ms += 5U;
-    drain_work();
-    assert(queue_callbacks == 1U && queue_callback_statuses[0] == A_STATUS_TIMEOUT);
-    queue_callbacks = 0U;
-    late.timeout = A_TIMEOUT_FOREVER;
-    late.size = 65536U; /* Rejected by device start before accessing payload. */
-    assert(aDevUsartTxQueueSubmit(&queue, &late, NULL) == A_STATUS_OK);
-    assert(queue_callbacks == 0U);
-    drain_work();
-    assert(queue_callbacks == 1U && queue_callback_statuses[0] == A_STATUS_INVALID_PARAM);
-    queue_callbacks = 0U;
-    late.size = 2U;
-    assert(aDevUsartTxQueueSubmit(&queue, &late, NULL) == A_STATUS_OK);
-    assert(aDevUsartTxQueueSubmit(&queue, &late, NULL) == A_STATUS_OK);
-    assert(aDevUsartTxQueueSubmit(&queue, &late, NULL) == A_STATUS_BUSY);
-    drain_work(); /* First DMA is now active. */
-    assert(aDevUsartTxQueueCancelAll(&queue) == A_STATUS_OK);
-    assert(queue_callbacks == 0U);
-    drain_work();
-    assert(queue_callbacks == 2U);
-    assert(queue_callback_statuses[0] == A_STATUS_CANCELLED);
-    assert(queue_callback_statuses[1] == A_STATUS_CANCELLED);
-    assert(aDevUsartTxQueueDeInit(&queue) == A_STATUS_OK);
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
     assert(mutex_count == 0U && locks == 0U);
     puts("RS485 USART tests passed");

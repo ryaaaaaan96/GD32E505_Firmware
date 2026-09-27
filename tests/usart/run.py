@@ -17,15 +17,12 @@ with tempfile.TemporaryDirectory(prefix="aclass-usart-") as directory:
             "INTERRUPT", "DMA", "ASYNC", "RS485",
         )],
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
-        "-Itests/usart/mocks", "-Idevice/aDev_usart",
+        "-Itests/usart/mocks", "-Idevice/aDev_usart/include", "-Idevice/aDev_usart/src",
         "-Iplatform/aLib/include", "-Iplatform/aDrv/include",
-        "tests/usart/test_rs485.c", "device/aDev_usart/aDev_usart.c",
-        "device/aDev_usart/aDev_usart_rx.c",
-        "device/aDev_usart/aDev_usart_async_rx.c",
-        "device/aDev_usart/aDev_usart_dma_rx.c",
-        "device/aDev_usart/aDev_usart_direct.c",
-        "device/aDev_usart/aDev_usart_rs485.c", "-o", executable,
-        "device/aDev_usart/aDev_usart_tx_queue.c",
+        "tests/usart/test_rs485.c", "device/aDev_usart/src/aDev_usart.c",
+        "device/aDev_usart/src/aDev_usart_rx.c",
+        "device/aDev_usart/src/aDev_usart_tx.c",
+        "device/aDev_usart/src/aDev_usart_rs485.c", "-o", executable,
     ]
     subprocess.run(command, cwd=root, check=True)
     subprocess.run([executable], check=True)

@@ -65,13 +65,13 @@ aStatus_t aDevUsartTxQueueSubmit(...);
 
 ### 5.1 TX DMA 完成通知与 USART TC
 
-当前同步 `WriteDirect()` 通过查询 DMA remaining 判断完成，因此 payload 已经零拷贝，
-但任务等待期间仍是协作式查询。普通 DMA buffered TX 也使用 USART TC 回调推进 ring
-分块。
+同步 Direct 已改成等待对象阻塞：RX 由 DMA 完成/错误通知，TX 由 TC 通知；
+TX 保留最多 10 ms 的睡眠式进度检查，以发现没有 TX DMA 错误 IRQ 通知时的故障。
+payload 仍为零拷贝，deadline 覆盖整个调用。普通 DMA buffered TX 使用 TC 推进 ring 分块。
 
 存在的问题：
 
-- Direct 等待期间不能真正进入 Blocked；
+- Direct 已能进入 Blocked，不再使用 yield 忙轮询；
 - DMA buffered 分块之间需要等待 TC，可能产生发送间隙；
 - DMA error 不能通过统一完成事件立即上报；
 - Async TX 与队列目前可用，但 DMA error 与 USART TC 仍共享设备层查询流程，

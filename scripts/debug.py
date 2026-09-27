@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
@@ -29,9 +30,7 @@ import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 BUILD_ROOT = PROJECT_ROOT / "build"
-FIRMWARE_NAME = "gd32e505vet7_debug"
 DEFAULT_GDB_SERVER = "jlink"
-JLINK_DEVICE = "GD32E505VET6"
 DEFAULT_ARM_GCC_ROOT = (
     Path.home() / "Tools/toolchain/mcu_arm_toolchain/arm-none-eabi-15.3"
 )
@@ -40,13 +39,23 @@ DEFAULT_PORT = 2331
 
 
 def find_elf(build_type: str) -> Path:
-    elf = BUILD_ROOT / build_type / "bin" / f"{FIRMWARE_NAME}.elf"
+    elf = Path(build_info(build_type)["elf"])
     if not elf.is_file():
         raise RuntimeError(
             f"ELF not found: {elf}\n"
             f"Run 'python3 scripts/build.py {build_command(build_type)}' first."
         )
     return elf.resolve()
+
+
+def build_info(build_type: str) -> dict:
+    manifest = BUILD_ROOT / build_type / f"firmware-{build_type}.json"
+    if not manifest.is_file():
+        raise RuntimeError(f"Missing build metadata: {manifest}; run scripts/build.py first")
+    info = json.loads(manifest.read_text(encoding="utf-8"))
+    if not isinstance(info, dict) or not isinstance(info.get("elf"), str):
+        raise RuntimeError(f"Invalid build metadata: {manifest}")
+    return info
 
 
 def build_command(build_type: str) -> str:
@@ -93,10 +102,11 @@ def write_gdb_script(
     server: str,
     attach: bool,
     continue_to_main: bool,
+    device: str | None = None,
 ) -> Path:
     script_dir = BUILD_ROOT / ".debug"
     script_dir.mkdir(parents=True, exist_ok=True)
-    script = script_dir / "gd32e505vet7.gdb"
+    script = script_dir / f"{elf.stem}.gdb"
 
     commands = [
         "set pagination off",
@@ -105,8 +115,10 @@ def write_gdb_script(
         f"target remote {endpoint(host, port)}",
     ]
 
-    if server == "jlink":
-        commands.append(f"monitor device {JLINK_DEVICE}")
+    if server == "jlink" and device:
+        if not all(c.isalnum() or c in "_-" for c in device):
+            raise ValueError("Invalid debug device name")
+        commands.append(f"monitor device {device}")
 
     if attach:
         commands.append("monitor halt")
@@ -238,6 +250,8 @@ def parse_args() -> argparse.Namespace:
         default="Debug",
         help="ELF configuration to debug",
     )
+    parser.add_argument("--elf", type=Path, help="override ELF from CMake build metadata")
+    parser.add_argument("--device", help="override the debugger device name")
     parser.add_argument(
         "--build", action="store_true", help="build firmware before connecting"
     )
@@ -274,7 +288,12 @@ def main() -> int:
         if args.build:
             run_build(args.build_type)
 
-        elf = find_elf(args.build_type)
+        elf = args.elf.resolve() if args.elf else find_elf(args.build_type)
+        if not elf.is_file():
+            raise RuntimeError(f"ELF not found: {elf}")
+        device = args.device
+        if device is None and args.elf is None:
+            device = build_info(args.build_type).get("device")
         gdb = find_gdb()
         script = write_gdb_script(
             elf,
@@ -283,6 +302,7 @@ def main() -> int:
             args.server,
             args.attach,
             not args.no_continue,
+            device,
         )
         gdb_args = args.gdb_args
         if gdb_args[:1] == ["--"]:

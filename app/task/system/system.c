@@ -1,16 +1,29 @@
 #include "system.h"
 #include "status.h"
-#include "aclass_system_config.h"
+#include "aOS.h"
 #if ASHELL_ENABLED
-#include "app_usart.h"
+#include "app_system_device.h"
 #include "aDrv_basic.h"
 #include "aShell.h"
 #endif
 
-/* aShell owns its worker; this file supplies the application transport. */
+/* The application owns task scheduling; aShell only processes input. */
 #if ASHELL_ENABLED
 
+#define ASYSTEM_SHELL_IO_TIMEOUT A_TIMEOUT_MS(20U)
+#define ASYSTEM_SHELL_TASK_STACK_WORDS 512U
+
 static aDevUsartHandle_t *s_shell_usart;
+
+static void shellTask(void *argument)
+{
+    (void)argument;
+    for (;;) {
+        (void)aShellProcess();
+        /* Also bounds retries when transport returns immediately on error. */
+        aOSDelayMs(1U);
+    }
+}
 
 static int16_t shellWrite(char *buffer, uint16_t size)
 {
@@ -34,7 +47,7 @@ static aStatus_t shellInit(void)
     aStatus_t status;
     uint32_t core_clock_hz;
 
-    status = appUsartInit(APP_USART_CONSOLE, &s_shell_usart);
+    status = appSystemConsoleInit(APP_USART_CONSOLE, &s_shell_usart);
     if (status != A_STATUS_OK) {
         return status;
     }
@@ -53,7 +66,10 @@ static aStatus_t shellInit(void)
                 (unsigned long)core_clock_hz);
     aShellPrint("system peripherals initialized\r\n");
 
-    return A_STATUS_OK;
+    status = aOSCreateTask(shellTask, "shell", ASYSTEM_SHELL_TASK_STACK_WORDS,
+                          NULL, AOS_TASK_PRIO_LOW, NULL);
+    if (status != A_STATUS_OK) (void)aShellDeInit();
+    return status;
 }
 
 #else

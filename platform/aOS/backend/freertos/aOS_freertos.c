@@ -1,4 +1,5 @@
 #include "aOS.h"
+#include "aOS_config.h"
 
 #include "FreeRTOS.h"
 #include "semphr.h"
@@ -113,8 +114,8 @@ aStatus_t aOSInit(void)
     if (s_work_task != NULL) {
         return A_STATUS_OK;
     }
-    status = aOSCreateTask(work_task, "aOSWork", 256U, NULL,
-                           AOS_TASK_PRIO_NORMAL, &s_work_task);
+    status = aOSCreateTask(work_task, "aOSWork", AOS_WORKER_STACK_WORDS, NULL,
+                           AOS_WORKER_PRIORITY, &s_work_task);
     return status;
 }
 
@@ -386,6 +387,13 @@ aStatus_t aOSWorkSubmitFromISR(aOSWorkItem_t *item,
     return A_STATUS_OK;
 }
 
+aBool_t aOSIsWorkContext(void)
+{
+    return s_work_task != NULL &&
+           xTaskGetSchedulerState() == taskSCHEDULER_RUNNING &&
+           xTaskGetCurrentTaskHandle() == (TaskHandle_t)s_work_task;
+}
+
 aStatus_t aOSWorkWaitIdle(aOSWorkItem_t *item, aTimeout_t timeout)
 {
     aTimepoint_t deadline;
@@ -403,7 +411,8 @@ aStatus_t aOSWorkWaitIdle(aOSWorkItem_t *item, aTimeout_t timeout)
         if (!busy) {
             return A_STATUS_OK;
         }
-        if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
+        if (aOSIsWorkContext() ||
+            xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
             return A_STATUS_BUSY;
         }
         if (aOSPollWaitExpired(&deadline)) {

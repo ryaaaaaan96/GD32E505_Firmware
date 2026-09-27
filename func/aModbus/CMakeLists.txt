@@ -15,3 +15,4 @@ target_link_libraries(
     PUBLIC
         aLib
 )
+target_link_libraries(aModbus PRIVATE aclass_project_options)

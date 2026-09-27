@@ -23,6 +23,7 @@ if(TOOLCHAIN_NAME STREQUAL "GCC")
             aLib
     )
 else()
+    # Other toolchains currently expose CMSIS only.
     add_library(aCore INTERFACE)
 
     target_include_directories(
@@ -30,4 +31,7 @@ else()
         INTERFACE
             "${CMAKE_CURRENT_SOURCE_DIR}/Core/Include"
     )
+endif()
+if(TARGET aCore AND TOOLCHAIN_NAME STREQUAL "GCC")
+    target_link_libraries(aCore PRIVATE aclass_project_options)
 endif()

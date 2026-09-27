@@ -49,7 +49,13 @@ endforeach()
 # ── func / aShell ─────────────────────────────────────────────────────
 
 # ── func / aDataBase ──────────────────────────────────────────────────
-_aclass_requires(ADATABASE_REQUESTED ADEV_FLASH25Q_REQUESTED)
+if(ADATABASE_ENABLED)
+    if(ADATABASE_BACKEND STREQUAL "FLASH25Q")
+        _aclass_requires(ADATABASE_REQUESTED ADEV_FLASH25Q_REQUESTED)
+    elseif(NOT ADATABASE_BACKEND STREQUAL "CUSTOM")
+        message(FATAL_ERROR "ADATABASE_BACKEND must be FLASH25Q or CUSTOM")
+    endif()
+endif()
 
 # ── func / aModbus (transport supplied by caller) ──────────────────────
 

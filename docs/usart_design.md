@@ -238,8 +238,9 @@ aDev 同一时刻只执行一个异步 TX。成功返回后直到 complete/abort
 TX callback 使用 per-operation 绑定，而不是占用整个 USART 唯一事件 callback，
 这样 RX 事件和上层 `aDevUsartTxQueue` 不会互相覆盖。
 
-当前同步 `WriteDirect()` 直接启动 aDrv DMA，并使用统一 deadline 协作式查询 DMA
-remaining；整个过程中 payload 不经过 CPU 复制。同步 Direct 和异步 TX 的所有权
+当前同步 Direct 直接启动 aDrv DMA，使用统一 deadline 和 aOS 等待对象阻塞。
+RX DMA 完成/错误、TX TC 通知唤醒等待者；TX 每次睡眠最多 10 ms，兼顾没有 TX DMA
+错误通知的当前驱动。整个过程中 payload 不经过 CPU 复制。同步 Direct 和异步 TX 的所有权
 互斥由 aDev 的 TX/RX 状态及 mutex 管理。
 
 ## 9. 共享 DMA RX ring 与异步读取
@@ -297,7 +298,8 @@ active:     A
 ```c
 aStatus_t aDevUsartTxQueueInit(
     const aDevUsartTxQueueConfig_t *config,
-    aDevUsartTxQueueHandle_t *handle);
+    aDevUsartTxQueueStorage_t *storage,
+    aDevUsartTxQueueHandle_t **handle_out);
 
 aStatus_t aDevUsartTxQueueSubmit(
     aDevUsartTxQueueHandle_t *handle,

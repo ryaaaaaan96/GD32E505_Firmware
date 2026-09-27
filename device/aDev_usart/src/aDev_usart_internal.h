@@ -7,16 +7,20 @@
 #include <stdatomic.h>
 #define ADEV_USART_NEEDS_IRQ (ADEV_USART_HAS_INTERRUPT || ADEV_USART_HAS_DMA || ADEV_USART_HAS_RS485)
 
-/* Private ownership bridge within aDevUsart. */
-aStatus_t aDevUsartTxQueueClaim(aDevUsartHandle_t *handle,
-                                const void *owner);
-aStatus_t aDevUsartTxQueueRelease(aDevUsartHandle_t *handle,
-                                  const void *owner);
-aStatus_t aDevUsartWriteAsyncQueued(aDevUsartHandle_t *handle,
-                                    const void *owner,
-                                    const aDevUsartWriteRequest_t *request);
-aStatus_t aDevUsartWriteAsyncCancelQueued(aDevUsartHandle_t *handle,
-                                          const void *owner);
+/** @brief TX 方向当前所有权；应用不得直接修改。 */
+typedef enum {
+    ADEV_USART_TX_IDLE,
+    ADEV_USART_TX_STREAM,
+    ADEV_USART_TX_DIRECT,
+    ADEV_USART_TX_ASYNC,
+} aDevUsartTxState_t;
+
+/** @brief RX 方向当前所有权；应用不得直接修改。 */
+typedef enum {
+    ADEV_USART_RX_IDLE,
+    ADEV_USART_RX_STREAM,
+    ADEV_USART_RX_DIRECT,
+} aDevUsartRxState_t;
 
 typedef struct aDevUsartReadNode aDevUsartReadNode_t;
 
@@ -36,6 +40,7 @@ struct aDevUsartHandle {
     aDrvGpioHandle_t re_gpio;
     volatile aBool_t rs485_transmitting;
     aDevUsartMode_t mode;
+    uint8_t interrupt_priority;
     uint8_t *rx_buffer;
     size_t rx_buffer_size;
     volatile size_t rx_head;
@@ -68,7 +73,6 @@ struct aDevUsartHandle {
     aDevUsartTxEvent_t tx_completion_event;
     aDevUsartTxCallback_t tx_callback;
     void *tx_callback_argument;
-    const void *tx_queue_owner;
     const void *tx_async_buffer;
     size_t tx_async_size;
     aStatus_t tx_async_status;
@@ -113,5 +117,47 @@ aStatus_t aDevUsartDmaRxRefresh(aDevUsartHandle_t *handle);
 aStatus_t aDevUsartDmaRxCopy(aDevUsartHandle_t *handle, void *buffer,
                              size_t capacity, size_t *copied);
 void aDevUsartRs485ArmComplete(aDevUsartHandle_t *handle);
+
+aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
+                              const aDevUsartConfig_t *config);
+
+#if ADEV_USART_HAS_DMA || ADEV_USART_HAS_INTERRUPT
+static inline aStatus_t wait_for_event(void *wait_object,
+                                const aTimepoint_t *end)
+{
+    return aOSWaitObjectWait(
+        wait_object, aTimepointRemaining(end, aOSGetUptimeMs()));
+}
+
+#endif
+
+static inline aSSize_t fail_with_wait_status(aStatus_t status,
+                                      aTimeout_t timeout)
+{
+    return ((status == A_STATUS_BUSY) ||
+            (status == A_STATUS_TIMEOUT))
+               ? aOSFailWithTimeout(timeout)
+               : aOSFailWithStatus(status);
+}
+
+
+#if ADEV_USART_HAS_DMA
+/* TC wakes TX and DMA completion/error wakes RX. A bounded sleeping check
+ * also detects TX DMA faults on drivers without a DMA-error IRQ callback. */
+static inline aStatus_t direct_wait(aOSWaitObject_t object, const aTimepoint_t *end,
+                             aBool_t check_tx_error)
+{
+    aTimeout_t remaining = aTimepointRemaining(end, aOSGetUptimeMs());
+    if (aTimepointExpired(end, aOSGetUptimeMs())) return A_STATUS_TIMEOUT;
+    if (check_tx_error && (remaining.type == A_TIMEOUT_TYPE_FOREVER ||
+                          remaining.milliseconds > 10U))
+        remaining = A_TIMEOUT_MS(10U);
+    const aStatus_t status = aOSWaitObjectWait(object, remaining);
+    if (status == A_STATUS_TIMEOUT && !aTimepointExpired(end, aOSGetUptimeMs()))
+        return A_STATUS_OK;
+    return status;
+}
+
+#endif
 
 #endif

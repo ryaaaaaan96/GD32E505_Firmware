@@ -6,7 +6,7 @@ include_guard(GLOBAL)
 # toolchain、CPU/FPU 参数在 project() 启用编译器之前生效。
 macro(aclass_select)
     cmake_parse_arguments(ACLASS ""
-        "NAME;VERSION;MCU;LINKER_SCRIPT;TOOLCHAIN" "" ${ARGN})
+        "NAME;VERSION;PLATFORM;OS;MCU;LINKER_SCRIPT;TOOLCHAIN" "" ${ARGN})
 
     if(ACLASS_UNPARSED_ARGUMENTS OR ACLASS_KEYWORDS_MISSING_VALUES)
         message(FATAL_ERROR "Invalid aclass_select arguments: ${ACLASS_UNPARSED_ARGUMENTS}; ${ACLASS_KEYWORDS_MISSING_VALUES}")
@@ -22,6 +22,16 @@ macro(aclass_select)
     endif()
     if(NOT ACLASS_TOOLCHAIN)
         set(ACLASS_TOOLCHAIN GCC)
+    endif()
+    if(NOT ACLASS_PLATFORM)
+        set(ACLASS_PLATFORM Embedded)
+    endif()
+    if(NOT ACLASS_OS)
+        set(ACLASS_OS FreeRTOS)
+    endif()
+    # Explicit backend selection; do not advertise unimplemented ports.
+    if(NOT ACLASS_PLATFORM STREQUAL "Embedded" OR NOT ACLASS_OS STREQUAL "FreeRTOS")
+        message(FATAL_ERROR "Implemented backend: PLATFORM Embedded / OS FreeRTOS; requested ${ACLASS_PLATFORM}/${ACLASS_OS}")
     endif()
 
     set(FIRMWARE_NAME "${ACLASS_NAME}")
@@ -67,7 +77,7 @@ macro(aclass_select)
 
     foreach(required
             MCU_DEVICE
-            MCU_CPU MCU_CORE_CLOCK_HZ FREERTOS_PORT)
+            MCU_CPU MCU_CORE_CLOCK_HZ)
         if(NOT DEFINED ${required} OR "${${required}}" STREQUAL "")
             message(FATAL_ERROR
                 "MCU profile ${MCU_CONFIG} must define ${required}")
@@ -93,12 +103,17 @@ macro(aclass_initialize)
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
     # 工程通用编译选项。
-    add_compile_options(
-        -Wall -Wextra -Wpedantic -Werror
+    add_library(aclass_build_options INTERFACE)
+    target_compile_options(aclass_build_options INTERFACE
         -ffunction-sections -fdata-sections
         $<$<CONFIG:Debug>:-Og>
         $<$<CONFIG:Debug>:-g3>
         $<$<CONFIG:Release>:-Os>
+    )
+    add_library(aclass_project_options INTERFACE)
+    target_link_libraries(aclass_project_options INTERFACE aclass_build_options)
+    target_compile_options(aclass_project_options INTERFACE
+        -Wall -Wextra -Wpedantic -Werror
     )
 endmacro()
 
@@ -118,6 +133,11 @@ function(generate_firmware_images target)
     )
     set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS
         "${LINKER_SCRIPT}"
+    )
+
+    file(GENERATE
+        OUTPUT "${CMAKE_BINARY_DIR}/firmware-$<CONFIG>.json"
+        CONTENT "{\n  \"elf\": \"$<TARGET_FILE:${target}>\",\n  \"device\": \"${MCU_DEBUG_DEVICE}\",\n  \"platform\": \"${ACLASS_PLATFORM}\",\n  \"os\": \"${ACLASS_OS}\"\n}\n"
     )
 
     add_custom_command(TARGET ${target} POST_BUILD

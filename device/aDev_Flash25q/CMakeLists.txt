@@ -18,3 +18,4 @@ target_link_libraries(
     PRIVATE
         aOS
 )
+target_link_libraries(aFlash25q PRIVATE aclass_project_options)

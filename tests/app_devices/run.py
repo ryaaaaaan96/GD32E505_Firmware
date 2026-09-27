@@ -11,14 +11,13 @@ with tempfile.TemporaryDirectory(prefix="aclass-app-devices-") as directory:
         executable = str(Path(directory) / scenario)
         command = [
             "cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
-            "-Wno-unused-variable", f"-D{scenario}", "-DAPP_HAS_USART=1",
+            "-Wno-unused-variable", f"-D{scenario}",
             "-DASHELL_ENABLED=" + ("0" if scenario == "SHELL_OFF" else "1"),
-            "-Itests/usart/mocks", "-Idevice/aDev_LED", "-Idevice/aDev_usart",
+            "-Itests/usart/mocks", "-Idevice/aDev_LED", "-Idevice/aDev_usart/include",
             "-Iplatform/aDrv/include", "-Iplatform/aLib/include",
-            "-Iapp/devices", "-Iapp/devices/led", "-Iapp/devices/usart",
+            "-Iapp", "-Iapp/devices", "-Iapp/devices/system",
             "-Iapp/task/system",
-            "app/devices/led/app_led.c",
-            "app/devices/usart/app_usart.c", "tests/app_devices/test_devices.c",
+            "app/devices/system/app_system_device.c", "tests/app_devices/test_devices.c",
             "-o", executable,
         ]
         if os.environ.get("SANITIZE"):

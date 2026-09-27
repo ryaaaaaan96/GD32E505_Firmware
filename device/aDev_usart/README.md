@@ -264,7 +264,7 @@ NO_WAIT 仅作立即检查；零长度返回 0。超过 65535 字节会分段，
 
 device 层不管理产品编号或全局设备目录。应用在 app/devices/usart/app_usart.c
 持有私有配置、缓冲区及静态存储，调用 aDevUsartInitStatic 初始化。
-业务使用 appUsartInit(id, &handle) 初始化指定实例并获取共享借用句柄。
+系统业务使用 appSystemConsoleInit(id, &handle) 初始化 console 实例并获取共享借用句柄。
 不使用分散注册或设备链接段。借用方不得 DeInit/Destroy。
 
 完整生命周期与错误处理见 [device_registry.md](../../docs/device_registry.md)。

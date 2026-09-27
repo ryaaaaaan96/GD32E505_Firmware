@@ -57,3 +57,4 @@ target_link_libraries(
     PRIVATE
         aOS
 )
+target_link_libraries(aShell PRIVATE aclass_project_options)

@@ -1,6 +1,12 @@
-#ifndef APP_LED_H
-#define APP_LED_H
+#ifndef APP_SYSTEM_DEVICE_H
+#define APP_SYSTEM_DEVICE_H
 #include "aDev_led.h"
+#if ASHELL_ENABLED
+#include "aDev_usart.h"
+typedef enum {
+    APP_USART_CONSOLE = 0,
+} appUsartId_t;
+#endif
 
 /* Application identity, not a hardware index. Keep values stable. */
 typedef enum {
@@ -17,5 +23,9 @@ typedef enum {
  * resources and touch hardware; this is not a side-effect-free lookup.
  * Callers retain/pass the returned handle for runtime use.
  * See docs/interface_contract.md. */
-aStatus_t appLedInit(appLedId_t id, aDevLedHandle_t **handle_out);
+aStatus_t appSystemStatusLedInit(appLedId_t id, aDevLedHandle_t **handle_out);
+#if ASHELL_ENABLED
+/* Same startup/lifetime contract as appSystemStatusLedInit. */
+aStatus_t appSystemConsoleInit(appUsartId_t id, aDevUsartHandle_t **handle_out);
+#endif
 #endif

@@ -83,13 +83,15 @@ void aOSWaitObjectNotify(aOSWaitObject_t object);
 /* ISR-only notification; the aOS port performs any required reschedule. */
 void aOSWaitObjectNotifyFromISR(aOSWaitObject_t object);
 
-/* Bounded-by-caller deferred callback queue; callbacks always run in task context. */
+/* One shared worker, serial callbacks. Callbacks must not block; offload long
+ * operations to application tasks. Task context does not imply blocking-safe. */
+aBool_t aOSIsWorkContext(void);
 void aOSWorkItemInit(aOSWorkItem_t *item);
 aStatus_t aOSWorkSubmit(aOSWorkItem_t *item,
                         aOSWorkFunction_t function, void *argument);
 aStatus_t aOSWorkSubmitFromISR(aOSWorkItem_t *item,
                                aOSWorkFunction_t function, void *argument);
-/* Task-context lifetime barrier; do not call from the item's own callback. */
+/* Task-context lifetime barrier; worker calls return BUSY if not already idle. */
 aStatus_t aOSWorkWaitIdle(aOSWorkItem_t *item, aTimeout_t timeout);
 
 /* One-shot timer; callback executes in the OS timer-service task/thread. */

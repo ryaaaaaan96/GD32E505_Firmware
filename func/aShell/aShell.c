@@ -12,7 +12,6 @@
 
 static Shell *s_shell;
 static char *s_shell_buffer;
-static aOSTaskHandle_t s_shell_task;
 static aOSRecursiveMutex_t s_shell_mutex;
 
 static int shell_lock(Shell *shell)
@@ -36,8 +35,6 @@ void aShellConfigStructInit(aShellConfig_t *config)
     config->read = NULL;
     config->write = NULL;
     config->buffer_size = 256U;
-    config->task_stack_size = 512U;
-    config->task_priority = AOS_TASK_PRIO_LOW;
 }
 
 aStatus_t aShellInit(const aShellConfig_t *config)
@@ -48,8 +45,7 @@ aStatus_t aShellInit(const aShellConfig_t *config)
 
     if ((config == NULL) || (config->read == NULL) ||
         (config->write == NULL) ||
-        (config->buffer_size < ASHELL_MIN_BUFFER_SIZE) ||
-        (config->task_stack_size == 0U)) {
+        (config->buffer_size < ASHELL_MIN_BUFFER_SIZE)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (s_shell != NULL) {
@@ -62,10 +58,14 @@ aStatus_t aShellInit(const aShellConfig_t *config)
     }
 
     shell = aOSAlloc(sizeof(*shell));
-    if (shell == NULL) return A_STATUS_NO_MEMORY;
+    if (shell == NULL) {
+        aOSRecursiveMutexDestroy(&s_shell_mutex);
+        return A_STATUS_NO_MEMORY;
+    }
     buffer = aOSAlloc(config->buffer_size);
     if (buffer == NULL) {
         aOSFree(shell);
+        aOSRecursiveMutexDestroy(&s_shell_mutex);
         return A_STATUS_NO_MEMORY;
     }
 
@@ -76,18 +76,18 @@ aStatus_t aShellInit(const aShellConfig_t *config)
     shell->write = config->write;
     shellInit(shell, buffer, config->buffer_size);
 
-    status = aOSCreateTask(shellTask, "shell", config->task_stack_size,
-                           shell, config->task_priority, &s_shell_task);
-    if (status != A_STATUS_OK) {
-        shellRemove(shell);
-        aOSFree(buffer);
-        aOSFree(shell);
-        s_shell_task = NULL;
-        return status;
-    }
-
     s_shell = shell;
     s_shell_buffer = buffer;
+    return A_STATUS_OK;
+}
+
+aStatus_t aShellProcess(void)
+{
+    char data;
+    if (s_shell == NULL) return A_STATUS_NOT_READY;
+    const int16_t count = s_shell->read(&data, 1U);
+    if (count < 0) return A_STATUS_ERROR;
+    if (count == 1) shellHandler(s_shell, data);
     return A_STATUS_OK;
 }
 
@@ -102,14 +102,13 @@ aStatus_t aShellDeInit(void)
 
     shell = s_shell;
     s_shell = NULL;
-    aOSDeleteTask(s_shell_task);
-    s_shell_task = NULL;
     shellRemove(shell);
     aOSFree(s_shell_buffer);
     aOSFree(shell);
     s_shell_buffer = NULL;
 
     (void)aOSRecursiveMutexUnlock(s_shell_mutex);
+    aOSRecursiveMutexDestroy(&s_shell_mutex);
     return A_STATUS_OK;
 }
 

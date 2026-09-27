@@ -1,7 +1,8 @@
 #include "status.h"
-#include "app_led.h"
+#include "app_system_device.h"
 #include "aOS.h"
-#include "aclass_system_config.h"
+
+#define ASYSTEM_STATUS_BLINK_PERIOD_MS 500U
 
 static void statusTask(void *argument)
 {
@@ -20,7 +21,7 @@ static void statusTask(void *argument)
 aStatus_t statusInit(void)
 {
     aDevLedHandle_t *led = NULL;
-    aStatus_t status = appLedInit(APP_LED_STATUS, &led);
+    aStatus_t status = appSystemStatusLedInit(APP_LED_STATUS, &led);
     if (status != A_STATUS_OK) {
         return status;
     }

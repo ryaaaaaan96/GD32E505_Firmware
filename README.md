@@ -11,7 +11,7 @@ system、startup、完整标准外设库和驱动实现全部由 `aDrv` 管理�
 - HXTAL_IN 接入 20 MHz 外部有源时钟，使用 bypass 模式，系统时钟为 180 MHz；
 - USART0 使用 PA9(TX)/PA10(RX)，115200-8-N-1，作为 Shell 控制台；
 - PA8 通过 `aDevLed` 设备驱动，每 500 ms 翻转一次；
-- LED 暂按低电平点亮配置，实物极性不同时只需修改 `app/task/system/aclass_system_config.h`。
+- LED 暂按低电平点亮配置，实物极性不同时修改 `app/devices/system/app_system_device.c` 中的实例配置。
 
 app 不再链接 Flash、数据库和 Modbus；RS485 已合并为 aDevUsart 的可选功能，
 默认关闭，详见 [USART / RS485 统一设计](docs/usart_rs485.md)。当前工程也只启用 GPIO 与 USART
@@ -137,5 +137,15 @@ GDB 路径及生成的命令。远程主机的防火墙应仅向可信网络开�
 ### 设备初始化与跨文件访问
 
 设备配置和编号映射位于 app/devices，业务模块在 aDrv/aOS 就绪后按实例调用 Init(id, &handle)。
-业务通过 appUsartInit / appLedInit 借用私有静态句柄；无需设备注册宏或链接段。
+业务通过 appSystemConsoleInit / appSystemStatusLedInit 借用私有静态句柄；无需设备注册宏或链接段。
 详见 [应用设备映射与分层](docs/device_registry.md)。
+# 构建与任务边界补充
+
+业务任务由 app/task 创建；func/aShell 仅提供 Init/Process/DeInit，不创建线程。
+aOS worker 是平台服务，配置在 config/aclass_config.cmake；回调禁止阻塞。
+system 设备入口为 appSystemStatusLedInit / appSystemConsoleInit。
+
+CMake 自动输出 build/Debug/firmware-Debug.json（Release 对应另一配置），
+scripts/debug.py 从中读取 ELF 和调试芯片名。改固件名无需再修改脚本；
+--elf 与 --device 可显式覆盖。更换旧构建目录后需重新配置生成元数据。
+PLATFORM Embedded / OS FreeRTOS 是当前唯一实现的后端组合，不表示已经支持 Linux。

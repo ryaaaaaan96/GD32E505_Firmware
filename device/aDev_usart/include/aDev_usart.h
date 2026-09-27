@@ -138,21 +138,7 @@ typedef struct {
 
 } aDevUsartConfig_t;
 
-/** @brief TX 方向当前所有权；应用不得直接修改。 */
-typedef enum {
-    ADEV_USART_TX_IDLE,
-    ADEV_USART_TX_STREAM,
-    ADEV_USART_TX_DIRECT,
-    ADEV_USART_TX_ASYNC,
-    ADEV_USART_TX_QUEUE,
-} aDevUsartTxState_t;
 
-/** @brief RX 方向当前所有权；应用不得直接修改。 */
-typedef enum {
-    ADEV_USART_RX_IDLE,
-    ADEV_USART_RX_STREAM,
-    ADEV_USART_RX_DIRECT,
-} aDevUsartRxState_t;
 
 /** @brief 可选的 USART 设备能力。 */
 typedef enum {
@@ -383,6 +369,7 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
  * 初始化时选择 RX_POLLING 或 RX_INTERRUPT_BUFFERED 才能使用 ReadDirect。
  * 中断模式暂时屏蔽 RXNE，结束后恢复；超过 65535 字节会分段 DMA，
  * 分段重装存在接收间隙，不承诺连续无丢包。size 为 0 时返回 0。
+ * 等待使用 aOS 等待对象，由 DMA 完成/错误唤醒，不进行 yield 忙轮询。
  */
 #if ADEV_USART_HAS_DMA
 aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
@@ -396,6 +383,8 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
  * data，但不表示最后一个停止位已经发出；物理排空使用
  * aDevUsartWaitTransmitComplete()。不支持 TX DMA/零拷贝通道的实例返回
  * -1/A_ENOTSUP。
+ * 等待使用 aOS 等待对象；TC 通知唤醒，最多每 10 ms 睡眠检查 DMA 错误。
+ * 该检查不会把当前任务保持为 runnable，且不改变总 timeout 预算。
  */
 #if ADEV_USART_HAS_DMA
 aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,

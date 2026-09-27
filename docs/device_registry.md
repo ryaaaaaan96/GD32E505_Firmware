@@ -3,13 +3,13 @@
 ## 接口
 
 ```c
-#include "app_usart.h"
+#include "app_system_device.h"
 aDevUsartHandle_t *usart = NULL;
-aStatus_t status = appUsartInit(APP_USART_CONSOLE, &usart);
+aStatus_t status = appSystemConsoleInit(APP_USART_CONSOLE, &usart);
 
-#include "app_led.h"
+#include "app_system_device.h"
 aDevLedHandle_t *led = NULL;
-status = appLedInit(APP_LED_STATUS, &led);
+status = appSystemStatusLedInit(APP_LED_STATUS, &led);
 ```
 
 每类设备只提供 Init(id, &handle) 一个应用访问接口，合并初始化与获取句柄。
@@ -21,9 +21,9 @@ status = appLedInit(APP_LED_STATUS, &led);
 
 main：aDrvInit → aOSInit → aSystemInit → aOSRun。
 不做运行时跨设备引脚/DMA 等资源冲突检查，应用负责正确配置。后续可通过 Python 或 CMake 添加构建期告警，当前未实现。
-设备接口自身的参数、能力检查和初始化错误处理继续保留。编号分别定义在 app_led.h 和 app_usart.h。
+设备接口自身的参数、能力检查和初始化错误处理继续保留。系统设备的编号与接口统一定义在 app_system_device.h，LED 与 USART 的实例配置统一位于 app/devices/system/app_system_device.c。通用 device 层仍分别提供 aDevLed 与 aDevUsart。
 
-statusInit 内调用 appLedInit，然后创建任务；shellInit 内调用 appUsartInit，
+statusInit 内调用 appSystemStatusLedInit，然后创建任务；shellInit 内调用 appSystemConsoleInit，
 然后配置 Shell。不存在集中初始化所有实例的 appDevicesInit。
 各实例独立记录初始化结果，一个实例失败不自动初始化、回滚或使另一个实例失效。
 当前 aSystemInit/main 遇到错误停止后续启动。
@@ -39,7 +39,7 @@ statusInit 内调用 appLedInit，然后创建任务；shellInit 内调用 appUs
 - 借用者不得反初始化、销毁或改变设备配置；无 Close/引用计数。
 - 运行期持有或传递已获得句柄；设备操作并发规则由 aDev 接口负责。
 
-Shell 关闭时 console 未配置，appUsartInit 返回 NOT_FOUND；USART 模块关闭时不编译其应用实现。
+Shell 关闭时，console 的配置、存储、appSystemConsoleInit 声明及实现全部裁剪；Shell 开启时，构建配置必须启用 USART 及其中断能力。
 
 ## 单一接口的取舍
 

@@ -1,6 +1,12 @@
 # Run with: cmake -P tests/config/test_resolver.cmake
 set(root "${CMAKE_CURRENT_LIST_DIR}/../..")
 include("${root}/config/aclass_config.cmake")
+# Use a full-capability fixture independently of the minimal product profile.
+foreach(feature INTERRUPT DMA ASYNC RS485)
+    set(ADEV_USART_${feature}_REQUESTED ON)
+endforeach()
+set(ADRV_USART_ASYNC_REQUESTED ON)
+set(ADRV_MODULE_DMA_REQUESTED ON)
 
 if(DEFINED CASE)
     if(CASE STREQUAL "missing_dma")
@@ -22,6 +28,17 @@ if(DEFINED CASE)
         endforeach()
     elseif(CASE STREQUAL "missing_input")
         unset(ADRV_MODULE_DMA_REQUESTED)
+    elseif(CASE STREQUAL "database_custom")
+        set(ADATABASE_REQUESTED ON)
+        set(ADATABASE_BACKEND CUSTOM)
+        set(ADEV_FLASH25Q_REQUESTED OFF)
+    elseif(CASE STREQUAL "database_missing_flash")
+        set(ADATABASE_REQUESTED ON)
+        set(ADATABASE_BACKEND FLASH25Q)
+        set(ADEV_FLASH25Q_REQUESTED OFF)
+    elseif(CASE STREQUAL "database_invalid_backend")
+        set(ADATABASE_REQUESTED ON)
+        set(ADATABASE_BACKEND typo)
     elseif(CASE STREQUAL "minimal" OR CASE STREQUAL "polling")
         set(ASHELL_REQUESTED OFF)
         foreach(feature INTERRUPT DMA ASYNC RS485)
@@ -46,12 +63,13 @@ if(DEFINED CASE)
 endif()
 
 foreach(case default minimal polling independent_app missing_input missing_dma
-        missing_device_dma missing_device missing_gpio invalid_bool)
+        missing_device_dma missing_device missing_gpio invalid_bool
+        database_custom database_missing_flash database_invalid_backend)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" "-DCASE=${case}" -P "${CMAKE_CURRENT_LIST_FILE}"
         RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
     )
-    if(case MATCHES "^(default|minimal|polling|independent_app)$")
+    if(case MATCHES "^(default|minimal|polling|independent_app|database_custom)$")
         if(NOT result EQUAL 0)
             message(FATAL_ERROR "${case} should succeed: ${error}")
         endif()
@@ -69,6 +87,10 @@ foreach(case default minimal polling independent_app missing_input missing_dma
             set(expected "ADEV_USART_REQUESTED")
         elseif(case STREQUAL "missing_gpio")
             set(expected "ADRV_MODULE_GPIO_REQUESTED")
+        elseif(case STREQUAL "database_missing_flash")
+            set(expected "ADEV_FLASH25Q_REQUESTED")
+        elseif(case STREQUAL "database_invalid_backend")
+            set(expected "ADATABASE_BACKEND")
         else()
             set(expected "must be boolean")
         endif()

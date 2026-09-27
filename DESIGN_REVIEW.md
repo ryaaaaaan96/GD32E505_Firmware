@@ -1,10 +1,41 @@
 # GD32E505_Firmware 架构与接口问题讨论稿
 
+## 2026-09-26：当前修复结果（以下历史章节不覆盖本节）
+
+1. **任务所有权**：func 不再创建/删除业务任务。aShellInit 只建立状态，
+   aShellProcess 每次最多处理一个输入字符；app/task/system/system.c 创建 Shell 任务并
+   配置栈、优先级和调用周期。删除 aShellConfig_t 的任务配置字段。禁用模块保留空实现。
+   aOS 的延迟工作服务和 FreeRTOS idle/timer task 仍属于平台/内核，不迁移到应用。
+2. **Direct 等待**：RX 使用有限 DMA 完成/错误回调通知 aOS 等待对象；TX 使用 TC
+   通知并最多每 10 ms 睡眠检查 DMA 故障，均不再通过 yield 忙轮询。总 deadline、
+   部分长度及返回前停止 DMA 的所有权契约保留。TX DMA 错误即时通知仍是驱动后续项。
+3. **worker 边界**：config/aclass_config.cmake 配置 worker 栈/优先级，并有范围校验。
+   回调必须短小、不能阻塞；aOSIsWorkContext 及工作项等待、USART DeInit、队列排空
+   检查防止 worker 自等待。单 worker 不提供各端口实时隔离，耗时操作交给应用任务。
+4. **队列封装**：TX Queue 改为不透明句柄+静态存储，Init 接收 storage 并输出 handle。
+   内部 FIFO、锁和状态不再公开。保留显式队列所有权；占有 TX 期间禁止销毁 USART。
+5. **构建**：aclass_select 显式区分 PLATFORM 与 OS，目前只实现 Embedded/FreeRTOS，
+   未实现的选择直接报错。FreeRTOS port 从 MCU profile 移至 OS 产品配置。
+   编译选项采用目标级 aclass_build_options / aclass_project_options；FreeRTOS 内核
+   单独对象目标，不继承自有代码严格告警。GCC runtime 继续留在 aCore，不增加新层。
+6. **调试产物**：CMake 生成 firmware-<配置>.json，debug.py 读取 ELF/芯片调试名，
+   不再维护第二份固件名；支持 --elf / --device 覆盖，未连接硬件测试。
+7. **后端隔离**：aOS/public 只导出 aOS.h，FreeRTOS 头/port 不向上层传播；适配源码位于
+   backend/freertos。aDataBase 核心使用存储操作表，Flash25Q 为可选适配目标；
+   CUSTOM 模式不要求 Flash25Q/QSPI，应用负责注入存储。FAL 仍为全局单实例布局。
+8. **system 归属**：应用接口改为 appSystemStatusLedInit / appSystemConsoleInit；
+   继续按实例初始化，不强制把状态灯和 console 一起初始化，也不增加旧接口别名。
+
+验证包含 Debug 固件、USART/FIFO、应用设备、Shell 生命周期、数据库存储隔离的主机测试，
+以及 6 种 USART 能力组合与 2 种数据库后端构建/链接检查。
+**尚未验证真实板上的 DMA 中断/TC 时序；未实现 Linux/裸机后端。**
+初始化/销毁仍要求外部生命周期串行管理；不宣称支持并发销毁或多核 SMP。
+
 
 ## 应用设备映射：显式初始化
 
 设备映射已移至 app/devices，使用普通 C 配置与 switch，不再使用分散注册。
-appUsartInit/appLedInit 按实例初始化并返回私有静态句柄。跨设备资源冲突不在运行时检查，未来可加入构建期告警。
+appSystemConsoleInit/appSystemStatusLedInit 按实例初始化并返回私有静态句柄。跨设备资源冲突不在运行时检查，未来可加入构建期告警。
 device 层仅保留通用设备初始化及操作。失败不回滚，重复初始化不重试；启动前单线程调用。
 详见 [应用设备映射设计](docs/device_registry.md)。
 

@@ -212,3 +212,5 @@ message(
     STATUS
     "Board HXTAL: ${BOARD_HXTAL_HZ} Hz, bypass=${BOARD_HXTAL_BYPASS}"
 )
+target_link_libraries(aDrv PRIVATE aclass_project_options)
+target_link_libraries(aDrv_gd32e505_vendor PRIVATE aclass_build_options)

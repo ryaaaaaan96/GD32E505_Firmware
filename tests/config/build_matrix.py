@@ -14,6 +14,8 @@ profiles = {
     "async": (False, True, True, False),
     "rs485": (False, False, False, True),
     "full": (True, True, True, True),
+    "database_flash25q": (True, True, True, True),
+    "database_custom": (True, True, True, True),
 }
 with tempfile.TemporaryDirectory(prefix="aclass-matrix-") as directory:
     base = Path(directory)
@@ -25,12 +27,23 @@ with tempfile.TemporaryDirectory(prefix="aclass-matrix-") as directory:
         '  set_property(TARGET "${PROJECT_NAME}" PROPERTY LINK_LIBRARIES "${libs}")\n'
         '  target_link_libraries("${PROJECT_NAME}" PRIVATE '
         '"-Wl,--whole-archive" aDevUsart "-Wl,--no-whole-archive")\n'
+        '  if(TARGET aDataBase)\n'
+        '    target_link_libraries("${PROJECT_NAME}" PRIVATE "-Wl,--whole-archive" aDataBase "-Wl,--no-whole-archive")\n'
+        '  endif()\n'
+        '  if(TARGET aDataBaseFlash25q)\n'
+        '    target_link_libraries("${PROJECT_NAME}" PRIVATE "-Wl,--whole-archive" aDataBaseFlash25q "-Wl,--no-whole-archive")\n'
+        '  endif()\n'
         'endfunction()\n'
         'cmake_language(DEFER CALL matrix_force_link)\n'
     )
     for name, values in profiles.items():
         config = base / (name + ".cmake")
         lines = [f'include("{root}/config/aclass_config.cmake")', "set(ASHELL_REQUESTED OFF)"]
+        if name.startswith("database_"):
+            backend = name.removeprefix("database_").upper()
+            lines += ["set(ADATABASE_REQUESTED ON)", f"set(ADATABASE_BACKEND {backend})"]
+            if backend == "FLASH25Q":
+                lines += ["set(ADEV_FLASH25Q_REQUESTED ON)", "set(ADRV_MODULE_QSPI_REQUESTED ON)"]
         for feature, enabled in zip(("INTERRUPT", "DMA", "ASYNC", "RS485"), values):
             lines.append(f"set(ADEV_USART_{feature}_REQUESTED {'ON' if enabled else 'OFF'})")
         irq = any(values)
