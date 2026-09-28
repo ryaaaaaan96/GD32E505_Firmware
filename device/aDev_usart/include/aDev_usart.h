@@ -47,6 +47,8 @@ typedef enum {
  *
  * 回调由 aOS deferred-work 队列投递，在 aOS 工作任务/线程上下文调用，不在
  * USART/DMA ISR 中直接运行。回调仍应短小；耗时业务建议由回调再通知自己的任务。
+ * @param[in] event 状态可能变化的事件，不是逐字节数据。
+ * @param[in] argument 注册时借用的用户参数，保持有效至在途回调退出。
  */
 typedef void (*aDevUsartEventCallback_t)(aDevUsartEvent_t event,
                                          void *argument);
@@ -84,8 +86,8 @@ typedef struct {
     aDrvGpioPin_t de_pin;
     /** 可选接收使能引脚；DE/RE 硬件绑在一起时只填写 de_pin。 */
     aDrvGpioPin_t re_pin;
-    aDrvGpioLevel_t de_active_level;
-    aDrvGpioLevel_t re_active_level;
+    aDrvGpioLevel_t de_active_level; /**< 发送使能的物理电平。 */
+    aDrvGpioLevel_t re_active_level; /**< 接收使能的物理电平。 */
     /** 独立 RE 引脚存在时，是否在发送期间保持接收（可能收到回显）。 */
     aBool_t receive_during_tx;
 } aDevUsartRS485Config_t;
@@ -146,19 +148,28 @@ typedef enum {
     ADEV_USART_CAP_RX_DIRECT,
 } aDevUsartCapability_t;
 
+/** @brief 不透明设备句柄，只能通过 InitStatic/Create 获取。 */
 typedef struct aDevUsartHandle aDevUsartHandle_t;
 
+/** @brief 异步 TX 终态快照；event 本身只在完成回调期间有效。 */
 typedef struct {
-    const void *buffer;
-    size_t requested;
-    size_t transferred;
-    aStatus_t status;
+    const void *buffer; /**< 原请求 DMA 源，回调后可由调用者回收。 */
+    size_t requested; /**< 原请求字节数。 */
+    size_t transferred; /**< DMA 已搬运字节数；失败时不等同于线上完整发出字节数。 */
+    aStatus_t status; /**< OK 表示 TC 完成；否则为超时、取消或硬件错误。 */
 } aDevUsartTxEvent_t;
 
+/**
+ * @brief 单次 TX 终态回调，在 aOS 工作任务执行，不得阻塞。
+ * @param[in] handle 原请求所属设备，回调期间不能销毁。
+ * @param[in] event 本次终态快照，不得保留 event 指针。
+ * @param[in] argument 原请求参数，模块不拥有其内存。
+ */
 typedef void (*aDevUsartTxCallback_t)(aDevUsartHandle_t *handle,
                                       const aDevUsartTxEvent_t *event,
                                       void *argument);
 
+/** @brief 单次 RX 请求只产生一个终态事件。 */
 typedef enum {
     ADEV_USART_RX_EVENT_DATA_READY,
     ADEV_USART_RX_EVENT_TIMEOUT,
@@ -166,14 +177,21 @@ typedef enum {
     ADEV_USART_RX_EVENT_ERROR,
 } aDevUsartRxEventType_t;
 
+/** @brief RX 请求终态；数据来自节点快照，不直接借出活动 DMA 内存。 */
 typedef struct {
-    aDevUsartRxEventType_t type;
-    const void *buffer; /**< Stable node snapshot, valid only during callback; NULL on errors. */
-    size_t offset;       /**< Always zero for DATA_READY snapshots. */
-    size_t length;       /**< Borrowed span length; valid only during the callback. */
-    aStatus_t status;
+    aDevUsartRxEventType_t type; /**< 数据、超时、取消或错误。 */
+    const void *buffer; /**< DATA_READY 的稳定快照，仅回调期间有效；其他事件为 NULL。 */
+    size_t offset;       /**< DATA_READY 快照固定为 0。 */
+    size_t length;       /**< 快照字节数，最大 64；其他事件通常为 0。 */
+    aStatus_t status; /**< 该终态关联的统一状态码。 */
 } aDevUsartRxEvent_t;
 
+/**
+ * @brief RX 单次请求回调，在 aOS 工作任务执行，不得阻塞。
+ * @param[in] handle 原请求设备；不能在回调内销毁。
+ * @param[in] event 终态及借用数据，仅当前回调有效；需要保留时自行复制。
+ * @param[in] argument 原请求参数，模块不拥有其内存。
+ */
 typedef void (*aDevUsartRxCallback_t)(aDevUsartHandle_t *handle,
                                       const aDevUsartRxEvent_t *event,
                                       void *argument);
@@ -190,6 +208,7 @@ typedef struct {
     void *argument;                 /**< 原样传给 callback，可为 NULL。 */
 } aDevUsartWriteRequest_t;
 
+/** @brief 非零 RX 请求标识，仅在所属句柄的本次请求生命周期内使用。 */
 typedef uint32_t aDevUsartReadToken_t;
 
 /**
@@ -202,8 +221,9 @@ typedef struct {
     void *argument;                 /**< 原样传给 callback，可为 NULL。 */
 } aDevUsartReadRequest_t;
 
-/** Static caller-owned storage for an opaque USART handle. */
+/** @brief 不透明句柄存储容量，字节；静态句柄仍可能分配内部 OS 对象。 */
 #define ADEV_USART_STATIC_STORAGE_SIZE 1024U
+/** @brief 应用持有的对齐存储区，初始化后至 DeInit 前禁止复制/移动。 */
 typedef union {
     max_align_t alignment;
     uint8_t bytes[ADEV_USART_STATIC_STORAGE_SIZE];
@@ -240,7 +260,13 @@ aStatus_t aDevUsartInitStatic(const aDevUsartConfig_t *config,
                               aDevUsartStorage_t *storage,
                               aDevUsartHandle_t **handle_out);
 
-/** @brief 通过 aOS 分配句柄私有状态并初始化 USART。 */
+/**
+ * @brief 通过 aOS 分配句柄私有状态并初始化 USART。
+ * @param[in] config 初始化配置；配置本身仅调用期间读取，缓冲区持续有效至销毁。
+ * @param[out] handle_out 成功返回动态句柄；参数有效时初始化失败置 NULL。
+ * @return InitStatic 的状态；分配私有状态失败返回 A_STATUS_NO_MEMORY。
+ * @warning 只能在任务/启动上下文调用；成功后必须使用 Destroy 释放，不能直接 Free。
+ */
 aStatus_t aDevUsartCreate(const aDevUsartConfig_t *config,
                           aDevUsartHandle_t **handle_out);
 
@@ -250,14 +276,21 @@ aStatus_t aDevUsartCreate(const aDevUsartConfig_t *config,
  * 函数会终止已启用的 TX/RX DMA、关闭中断和底层 USART。调用期间不得有其他任务
  * 或异步请求正在访问该 handle。函数还会注销业务事件 callback 并等待已排队/执行中
  * 的 callback 退出，因此不可从该 handle 自身的 callback 内调用。成功后静态存储可
- * 再次传给 InitStatic；动态句柄可再次 Create 前必须 Destroy。
+ * 再次传给 InitStatic；动态句柄 DeInit 后仍须 Destroy 释放其存储。
  *
  * @param[in,out] handle 已初始化的设备句柄。
  * @return A_STATUS_OK 或底层返回的错误状态。
  */
 aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle);
 
-/** @brief 反初始化并释放由 aDevUsartCreate() 创建的动态句柄。 */
+/**
+ * @brief 反初始化并释放由 aDevUsartCreate() 创建的动态句柄。
+ * @param[in,out] handle 动态句柄，成功返回后指针失效，调用者自行清空引用。
+ * @retval A_STATUS_OK 已释放；已 DeInit 的动态句柄也可释放。
+ * @retval A_STATUS_INVALID_PARAM 空句柄或由 InitStatic 创建的句柄。
+ * @return 也可能返回 DeInit 错误；失败时不释放内存。
+ * @warning 遵循 DeInit 的并发/回调限制，不得与任何其他访问并发。
+ */
 aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle);
 
 /**
@@ -334,8 +367,8 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
 /**
  * @brief 向 USART 提交最多 data_size 字节。
  *
- * 函数在不同模式下分别把数据写入硬件寄存器、启动 DMA，或复制到 TX 环形
- * 缓冲区。非负返回值表示这些字节已被当前发送机制接收，不一定已经从 TX 引脚
+ * 轮询模式直接写硬件寄存器；中断/DMA buffered 模式先复制到 TX 环形
+ * 缓冲区，再由中断或 DMA 排空。非负返回值表示这些字节已被当前发送机制接收，不一定已经从 TX 引脚
  * 完整移出；需要确认物理发送完成时继续调用
  * aDevUsartWaitTransmitComplete()。
  *
@@ -370,8 +403,15 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
  * 中断模式暂时屏蔽 RXNE，结束后恢复；超过 65535 字节会分段 DMA，
  * 分段重装存在接收间隙，不承诺连续无丢包。size 为 0 时返回 0。
  * 等待使用 aOS 等待对象，由 DMA 完成/错误唤醒，不进行 yield 忙轮询。
+ *
+ * @param[in,out] handle 已初始化的句柄，调用期间占用 RX 路径。
+ * @param[out] buffer DMA 可写区域，返回前不得被其他上下文访问；零长度允许 NULL。
+ * @param[in] buffer_size 字节数，不得超过 PTRDIFF_MAX。
+ * @param[in] timeout 本次调用的总预算，含锁等待与分段接收。
+ * @return 实际接收字节数；无进展失败返回 -1 并设置 aOS errno。
+ * @warning 仅任务上下文；DMA_ENABLE 为 0 时不提供此声明。
  */
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
 aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
                              size_t buffer_size, aTimeout_t timeout);
 #endif
@@ -385,14 +425,27 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
  * -1/A_ENOTSUP。
  * 等待使用 aOS 等待对象；TC 通知唤醒，最多每 10 ms 睡眠检查 DMA 错误。
  * 该检查不会把当前任务保持为 runnable，且不改变总 timeout 预算。
+ *
+ * @param[in,out] handle 已初始化的句柄，调用期间占用 TX 路径。
+ * @param[in] data DMA 可读区域，返回前不得修改/释放；零长度允许 NULL。
+ * @param[in] data_size 字节数，不得超过 PTRDIFF_MAX。
+ * @param[in] timeout 含锁等待的总预算，NO_WAIT 不保证传输全部数据。
+ * @return 实际搬运字节数；无进展失败返回 -1 并设置 aOS errno；零长度返回 0。
+ * @warning 仅任务上下文；DMA_ENABLE 为 0 时不提供此声明。
  */
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
 aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
                               const void *data, size_t data_size,
                               aTimeout_t timeout);
 #endif
 
-/** @brief 查询当前实例是否支持指定的可选零拷贝能力。 */
+/**
+ * @brief 查询当前实例是否支持指定的可选零拷贝能力。
+ * @param[in] handle USART 句柄。
+ * @param[in] capability 要查询的 TX_DIRECT 或 RX_DIRECT 能力。
+ * @return 编译能力与实例路由均支持时为 A_TRUE，否则 A_FALSE。
+ * @note 能力可用不代表通道当前空闲；操作仍可能因模式或资源冲突失败。
+ */
 aBool_t aDevUsartIsSupported(const aDevUsartHandle_t *handle,
                              aDevUsartCapability_t capability);
 
@@ -422,22 +475,33 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
  * @brief 提交一笔零拷贝异步发送。
  *
  * 成功后 buffer 由 aDev/DMA 持有，直到 callback 收到完成、超时或取消事件；
- * 调用期间不得修改或释放 buffer。单个 USART 同时只允许一笔 WriteAsync，队列
- * 模块会在此接口之上提供多请求 FIFO。TX 必须有可用 DMA 路由，不依赖普通 TX
+ * 调用期间不得修改或释放 buffer。单个 USART 同时只允许一笔 WriteAsync；
+ * 多请求排队由应用实现，本模块不提供 TX Queue。TX 必须有可用 DMA 路由，不依赖普通 TX
  * mode；一次请求最大 65535 字节。timeout 从成功提交时开始计时。
  * callback 始终由 aOS deferred-work 在任务/线程上下文调用，不在 DMA/USART ISR。
+ *
+ * @param[in,out] handle 已初始化句柄。
+ * @param[in] request 请求描述，提交时复制字段；buffer/argument 保持有效至回调结束。
  *
  * @retval A_STATUS_OK 请求已启动。
  * @retval A_STATUS_BUSY 当前 TX 被其他路径或异步请求占用。
  * @retval A_STATUS_UNSUPPORTED 当前实例没有可用 TX DMA 路由。
  * @retval A_STATUS_INVALID_PARAM 参数无效或长度超出 DMA 计数器范围。
  */
-#if ADEV_USART_HAS_ASYNC
+#if ADEV_USART_ASYNC_ENABLE
 aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
                               const aDevUsartWriteRequest_t *request);
 #endif
-/** 停止当前异步 TX；最终结果通过原请求 callback 报告。 */
-#if ADEV_USART_HAS_ASYNC
+/**
+ * @brief 停止当前异步 TX；最终结果通过原请求 callback 报告。
+ * @param[in,out] handle 已初始化句柄。
+ * @retval A_STATUS_OK 已提交取消完成事件，不代表回调已退出。
+ * @retval A_STATUS_NOT_READY 未初始化或没有当前异步 TX。
+ * @retval A_STATUS_INVALID_PARAM handle 为空。
+ * @return 也可能返回 TX mutex 获取错误。
+ * @warning 仅任务上下文；仍需等完成回调后再回收 buffer/argument。
+ */
+#if ADEV_USART_ASYNC_ENABLE
 aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle);
 #endif
 
@@ -455,8 +519,18 @@ aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle);
  * 事件完成。有限 timeout 从请求提交时开始计时。请求节点由 aOS 动态分配，内存
  * 不足时返回 A_STATUS_NO_MEMORY。提交失败不调用回调。不得在本 handle 的
  * ReadAsync callback 中调用 DeInit/Destroy。
+ *
+ * @param[in,out] handle 使用 DMA buffered RX 的已初始化句柄。
+ * @param[in] request 请求描述，提交时复制；argument 持续有效至回调结束。
+ * @param[out] token_out 必填，成功返回用于取消本请求的非零 token。
+ * @retval A_STATUS_OK 已接受请求，回调可能很快执行；不承诺晚于本函数返回。
+ * @retval A_STATUS_INVALID_PARAM 指针、回调或 timeout 无效。
+ * @retval A_STATUS_NOT_READY 未初始化。
+ * @retval A_STATUS_UNSUPPORTED 当前不是 DMA buffered RX。
+ * @retval A_STATUS_NO_MEMORY 无法分配请求节点。
+ * @return 也可能返回 RX 锁/资源状态错误；失败不调用回调。
  */
-#if ADEV_USART_HAS_ASYNC
+#if ADEV_USART_ASYNC_ENABLE
 aStatus_t aDevUsartReadAsync(
     aDevUsartHandle_t *handle, const aDevUsartReadRequest_t *request,
     aDevUsartReadToken_t *token_out);
@@ -465,8 +539,15 @@ aStatus_t aDevUsartReadAsync(
 /**
  * @brief 取消指定的异步 RX 等待；取消结果通过请求 callback 报告。
  * 只能在任务/线程上下文调用；已经进入完成队列的请求返回 BUSY。
+ * @param[in,out] handle 原请求所属句柄。
+ * @param[in] token ReadAsync 成功返回的非零请求标识。
+ * @retval A_STATUS_OK 已提交取消事件，不是回调退出屏障。
+ * @retval A_STATUS_BUSY 请求已进入完成队列。
+ * @retval A_STATUS_NOT_READY 未初始化或请求已不在待处理/完成队列。
+ * @retval A_STATUS_INVALID_PARAM handle 为空或 token 为 0。
+ * @return 也可能返回 RX mutex 获取错误。
  */
-#if ADEV_USART_HAS_ASYNC
+#if ADEV_USART_ASYNC_ENABLE
 aStatus_t aDevUsartReadAsyncCancel(aDevUsartHandle_t *handle,
                                    aDevUsartReadToken_t token);
 #endif
@@ -476,6 +557,8 @@ aStatus_t aDevUsartReadAsyncCancel(aDevUsartHandle_t *handle,
  *
  * 仅启用 ADEV_USART_OPTION_RX_IDLE 时具有业务意义。计数用于观察事件变化，
  * 不代表 RX 环形缓冲区当前字节数，并允许自然回绕。handle 为 NULL 时返回 0。
+ * @param[in] handle USART 句柄。
+ * @return 累计 IDLE 事件数，不是协议帧数。
  */
 uint32_t aDevUsartGetIdleEventCount(const aDevUsartHandle_t *handle);
 
@@ -484,6 +567,8 @@ uint32_t aDevUsartGetIdleEventCount(const aDevUsartHandle_t *handle);
  *
  * RX 环形缓冲区发生数据丢失时返回 A_TRUE。中断模式丢弃新字节，DMA 模式
  * 覆盖最旧数据。handle 为 NULL 时返回 A_FALSE。
+ * @param[in] handle USART 句柄。
+ * @return 当前软件溢出锁存标志。
  */
 aBool_t aDevUsartHasRxOverflowed(const aDevUsartHandle_t *handle);
 
@@ -492,8 +577,16 @@ aBool_t aDevUsartHasRxOverflowed(const aDevUsartHandle_t *handle);
  *
  * 该函数只清除软件标志，不恢复已经丢失的数据。
  * handle 为 NULL 时不执行任何操作。
+ * @param[in,out] handle USART 句柄；不清除 GetRxError 返回的错误状态。
  */
 void aDevUsartClearRxOverflow(aDevUsartHandle_t *handle);
+
+/**
+ * @brief 查询接收路径保存的错误状态。
+ * @param[in] handle 已初始化句柄。
+ * @return 当前 rx_error，无错误为 A_STATUS_OK；NULL 返回 INVALID_PARAM，
+ *         未初始化返回 NOT_READY。读取不清除状态，也不设置任务 errno。
+ */
 aStatus_t aDevUsartGetRxError(const aDevUsartHandle_t *handle);
 
 #endif

@@ -1,3 +1,13 @@
+/**
+ * @file aDev_led.h
+ * @brief GPIO 输出型 LED 的硬件无关逻辑接口。
+ * @see docs/interface_contract.md 公共类型、错误、超时与生命周期约定。
+ *
+ * 配置有效电平后，业务使用亮/灭语义，不直接操作 GPIO。
+ * 句柄由调用方持有，无堆分配、无任务、无延时；闪烁周期由 APP 管理。
+ * 没有内部锁；同一 LED 的配置、读改写与生命周期必须外部串行化。
+ */
+
 #ifndef ADEV_LED_H
 #define ADEV_LED_H
 
@@ -12,25 +22,85 @@ typedef enum {
     ADEV_LED_ACTIVE_HIGH,
 } aDevLedActiveLevel_t;
 
+/** @brief aDevLedConfig_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */
 typedef struct {
-    aDrvGpioPin_t pin;
-    aDevLedActiveLevel_t active_level;
-    aBool_t initially_on;
+    aDrvGpioPin_t pin; /**< 应用选择的输出引脚。 */
+    aDevLedActiveLevel_t active_level; /**< 有效电平，决定逻辑亮灭到物理电平的映射。 */
+    aBool_t initially_on; /**< 初始化完成时是否点亮。 */
 } aDevLedConfig_t;
 
+/** @brief aDevLedHandle_t 驱动/设备状态；调用方提供存储，字段仅由所属模块维护。 */
 typedef struct {
     aDrvGpioHandle_t gpio;
     aDevLedActiveLevel_t active_level;
 } aDevLedHandle_t;
 
+/**
+ * @brief 设置默认 LED 配置。
+ * @param[out] config 配置对象；NULL 不操作。
+ * @note 默认无引脚、高电平点亮、初始熄灭；初始化前必须设置 pin。
+ */
 void aDevLedConfigStructInit(aDevLedConfig_t *config);
+
+/**
+ * @brief 清空未使用的 LED 句柄。
+ * @param[out] handle 调用方存储；NULL 不操作。
+ * @warning 不会反初始化已配置的 GPIO，不得用来释放活动资源。
+ */
 void aDevLedHandleStructInit(aDevLedHandle_t *handle);
+
+/**
+ * @brief 初始化推挽输出并设置初始亮灭状态。
+ * @param[in] config 本次调用期间有效的板级配置。
+ * @param[out] handle 调用方句柄；后续操作期间保持有效。
+ * @retval A_STATUS_OK 初始化成功。
+ * @retval A_STATUS_INVALID_PARAM 空指针、无效引脚或有效电平。
+ * @return 也可能返回底层 GPIO 初始化错误。
+ */
 aStatus_t aDevLedInit(const aDevLedConfig_t *config,
                       aDevLedHandle_t *handle);
+
+/**
+ * @brief 设置 LED 的逻辑亮灭状态。
+ * @param[in,out] handle 已初始化的 LED。
+ * @param[in] on A_TRUE 点亮，A_FALSE 熄灭。
+ * @retval A_STATUS_OK 已写输出电平。
+ * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
+ * @retval A_STATUS_NOT_READY 句柄尚未初始化。
+ */
 aStatus_t aDevLedSet(aDevLedHandle_t *handle, aBool_t on);
+
+/**
+ * @brief 点亮 LED，相当于 Set(handle, A_TRUE)。
+ * @param[in,out] handle 已初始化的 LED。
+ * @return aDevLedSet() 的状态，不等待、不分配内存。
+ */
 aStatus_t aDevLedOn(aDevLedHandle_t *handle);
+
+/**
+ * @brief 熄灭 LED，相当于 Set(handle, A_FALSE)。
+ * @param[in,out] handle 已初始化的 LED。
+ * @return aDevLedSet() 的状态，不等待、不分配内存。
+ */
 aStatus_t aDevLedOff(aDevLedHandle_t *handle);
+
+/**
+ * @brief 根据引脚输入电平翻转逻辑亮灭状态。
+ * @param[in,out] handle 已初始化的 LED。
+ * @return GPIO 读/写状态；成功为 A_STATUS_OK。
+ * @warning 非原子读改写，不与其他写入者并发调用。
+ */
 aStatus_t aDevLedToggle(aDevLedHandle_t *handle);
+
+/**
+ * @brief 按引脚实际输入电平判断 LED 的逻辑状态。
+ * @param[in] handle 已初始化的 LED。
+ * @param[out] on 成功时返回 A_TRUE（亮）或 A_FALSE（灭）。
+ * @retval A_STATUS_OK 已读取。
+ * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
+ * @retval A_STATUS_NOT_READY 句柄尚未初始化。
+ * @note 不是光学检测，也不是缓存的最后一次 Set 值。
+ */
 aStatus_t aDevLedGet(const aDevLedHandle_t *handle, aBool_t *on);
 
 #endif

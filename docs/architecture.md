@@ -26,8 +26,8 @@ aCore 的 GCC runtime 适配 newlib syscall 和 heap，不包含芯片向量表�
 read/write 钩子不依赖任何设备；app 可以提供强定义连接具体控制台。芯片相关的
 startup、CMSIS Device 和 `SystemInit()` 仍由 aDrv 管理。
 
-`aShell` 是进程内唯一实例，通过 aOS 的任务、内存和递归锁接口运行；关闭时保留
-无操作 stub。`aOS` 后端和上游 FreeRTOS source set 的归属见
+`aShell` 是进程内唯一实例，提供 Init/Process/DeInit，由 app 创建任务并调用；
+关闭时保留无操作 stub。func 不创建业务任务；aOS worker 属于平台服务。`aOS` 后端和上游 FreeRTOS source set 的归属见
 [aOS 目录说明](../platform/aOS/README.md)。
 
 ## aDrv 边界
@@ -64,8 +64,8 @@ CMakeLists 只消费有效配置：aDev 选择是否加入设备 target，aDrv �
 
 `ADRV_USART_INTERRUPT` 和 `ADRV_USART_ASYNC` 是 resolver 输出的有效能力。异步能力
 依赖 DMA；关闭某项能力时不编译对应实现，aDrv target 通过 public compile
-definition 隐藏该能力的头文件 API。完整 aDev USART 当前依赖 IRQ 和 Async，
-只启用基础 aDrv USART 则可以不编入这些源码。不支持的实例仍返回
+definition 隐藏该能力的头文件 API。aDev USART 的轮询、INTERRUPT、DMA、ASYNC、RS485 能力按配置裁剪；
+只启用轮询时不需要 IRQ/DMA。不支持的实例仍返回
 `A_STATUS_UNSUPPORTED`。
 
 芯片实际拥有的 USART、SPI、DMA 通道和 GPIO 端口由各实现文件的私有映射表
@@ -97,7 +97,7 @@ GCC startup 的中断向量顺序来自官方 V1.7.0 的 CL 启动文件，GNU �
 ## device、func 与 app
 
 device 提供硬件无关的设备组合，例如 `RS485 = USART + DE GPIO`（作为
-aDevUsart 可选配置，统一收发接口，详见 [RS485 设计](usart_rs485.md)）、
+aDevUsart 可选配置，统一收发接口，详见 [RS485 设计](usart_design.md)）、
 `Flash25Q = QSPI + Flash 操作语义`。device 依赖 aOS 的单调时基实现软件超时，但
 aDrv 不依赖 aOS。func 在其上构成 aDataBase（含 FlashDB 所需 FAL 适配）、aModbus
 和 aShell 等功能。
@@ -111,3 +111,28 @@ aDrv 不依赖 aOS。func 在其上构成 aDataBase（含 FlashDB 所需 FAL 适
 和厂商库，并新增对应 `config/mcu_<mcu>.cmake`。若 CPU 架构不同，再替换 aCore
 内容。更换项目时只需在根 `CMakeLists.txt` 选择固件、MCU profile 和链接脚本，
 并在 `config/` 与 app 中设置模块及产品资源。
+
+## 应用设备初始化与句柄访问
+
+当前 app/devices/system/app_system_device.c 持有 console 与 LED 的配置、缓冲区和私有
+静态句柄；编号及类型明确的接口放在同目录 app_system_device.h。
+通用 device 层仍分别提供 aDevUsart 和 aDevLed，不因为应用组合而合并设备类型。
+
+启动顺序为 main → aDrvInit → aOSInit → aSystemInit → aOSRun。
+statusInit 调用 appSystemStatusLedInit 并创建状态任务；
+system.c 的 shellInit 调用 appSystemConsoleInit、初始化 Shell，再创建调用 Process 的任务。
+不存在集中初始化全部实例的注册表、链接段或分散加载。
+
+应用使用 Init(id, &handle) 合并初始化与句柄获取，不提供独立 Open：
+
+- 仅在驱动/OS 就绪后的启动阶段单线程调用；同实例重入返回 BUSY，不表示线程安全。
+- 首次初始化可能分配 OS 资源，不能当作无副作用查询。
+- 后续调用返回同一句柄或保存的失败结果，不自动重试；各实例独立，不联动回滚。
+- NULL 输出参数返回 INVALID_PARAM；未知编号返回 NOT_FOUND；失败清空输出句柄。
+- 句柄为共享借用，调用者不得销毁、反初始化或修改配置；运行阶段传递已取得的句柄。
+- Shell 关闭时 console 声明、配置和实现一起裁剪。
+- 不做运行时跨设备资源冲突检查；构建期资源告警尚未实现，设备参数/能力检查仍保留。
+
+tests/app_devices/run.py 验证初始化、失败、重复调用和 Shell 裁剪，使用硬件替身，
+不代表上板验证。通用契约见[接口规范](interface_contract.md)，USART 细节见
+[USART 设计](usart_design.md)。

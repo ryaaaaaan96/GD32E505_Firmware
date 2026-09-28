@@ -22,5 +22,5 @@ Shell 等业务任务由 app/task 创建并管理。FreeRTOS 自身 idle/timer t
 worker 回调串行执行，必须短小且不能阻塞。耗时工作应投递给 app 自己的任务。
 config/aclass_config.cmake 的 AOS_WORKER_STACK_WORDS、AOS_WORKER_PRIORITY 控制其资源，
 单位为栈字而非字节；构建时检查范围。aOSIsWorkContext 可检查当前是否为 worker，
-worker 内等待在途工作退出会返回 BUSY，避免自锁。USART DeInit 和 TX Queue
-WaitDrained 同样拒绝该上下文。不能因此认为任意阻塞 API 都能在回调中安全使用。
+worker 内等待在途工作退出会返回 BUSY，避免自锁。USART DeInit 同样拒绝该上下文。
+不能因此认为任意阻塞 API 都能在回调中安全使用。

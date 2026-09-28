@@ -95,7 +95,7 @@ static aStatus_t wait_objects_create(aDevUsartHandle_t *handle)
 {
     aStatus_t status;
 
-    if (ADEV_USART_HAS_DMA || ((handle->mode & ADEV_USART_TX_MASK) ==
+    if (ADEV_USART_DMA_ENABLE || ((handle->mode & ADEV_USART_TX_MASK) ==
          ADEV_USART_TX_INTERRUPT_BUFFERED) ||
         ((handle->mode & ADEV_USART_TX_MASK) ==
          ADEV_USART_TX_DMA_BUFFERED)) {
@@ -105,7 +105,7 @@ static aStatus_t wait_objects_create(aDevUsartHandle_t *handle)
         }
     }
 
-    if (ADEV_USART_HAS_DMA || (handle->mode & ADEV_USART_RX_MASK) ==
+    if (ADEV_USART_DMA_ENABLE || (handle->mode & ADEV_USART_RX_MASK) ==
             ADEV_USART_RX_INTERRUPT_BUFFERED ||
         (handle->mode & ADEV_USART_RX_MASK) ==
             ADEV_USART_RX_DMA_BUFFERED) {
@@ -199,15 +199,15 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
     const aDevUsartMode_t tx = config->mode & ADEV_USART_TX_MASK;
     const aDevUsartMode_t rx = config->mode & ADEV_USART_RX_MASK;
     if (((tx == ADEV_USART_TX_INTERRUPT_BUFFERED) &&
-         !ADEV_USART_HAS_INTERRUPT) ||
-        ((tx == ADEV_USART_TX_DMA_BUFFERED) && !ADEV_USART_HAS_DMA) ||
+         !ADEV_USART_INTERRUPT_ENABLE) ||
+        ((tx == ADEV_USART_TX_DMA_BUFFERED) && !ADEV_USART_DMA_ENABLE) ||
         ((rx == ADEV_USART_RX_INTERRUPT_BUFFERED) &&
-         !ADEV_USART_HAS_INTERRUPT) ||
+         !ADEV_USART_INTERRUPT_ENABLE) ||
         ((rx == ADEV_USART_RX_DMA_BUFFERED) &&
-         !ADEV_USART_HAS_DMA) ||
+         !ADEV_USART_DMA_ENABLE) ||
         ((config->mode & ADEV_USART_OPTION_RX_IDLE) &&
-         !ADEV_USART_HAS_INTERRUPT) ||
-        (config->rs485.enabled && !ADEV_USART_HAS_RS485)) {
+         !ADEV_USART_INTERRUPT_ENABLE) ||
+        (config->rs485.enabled && !ADEV_USART_RS485_ENABLE)) {
         return A_STATUS_UNSUPPORTED;
     }
     if (aOSValidateIsrPriority(config->interrupt_priority) != A_STATUS_OK) {
@@ -230,7 +230,7 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
     handle->mode = config->mode;
     handle->interrupt_priority = config->interrupt_priority;
 
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
     status = aDevUsartRS485Init(handle, &config->rs485);
 #endif
     if (status == A_STATUS_OK) {
@@ -248,7 +248,7 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
 
     if (status != A_STATUS_OK) {
         (void)aDrvUsartDeInitStatic(&handle->drv_handle);
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
         (void)aDevUsartRS485DeInit(handle);
 #endif
         wait_objects_destroy(handle);
@@ -326,7 +326,7 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
         return A_STATUS_BUSY;
     }
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
     if (handle->rx_dma_active) {
         (void)aDrvUsartSetInterruptEnabled(
             &handle->drv_handle, ADRV_USART_EXTI_IDLE, A_FALSE);
@@ -357,7 +357,7 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
         status = aOSWorkWaitIdle(&handle->event_work, A_TIMEOUT_FOREVER);
     }
     if (status == A_STATUS_OK) {
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
         status = aDevUsartRS485DeInit(handle);
 #endif
         wait_objects_destroy(handle);
@@ -433,13 +433,13 @@ aBool_t aDevUsartIsSupported(const aDevUsartHandle_t *handle,
         return A_FALSE;
     }
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
     switch (capability) {
     case ADEV_USART_CAP_TX_DIRECT:
-        return ADEV_USART_HAS_DMA &&
+        return ADEV_USART_DMA_ENABLE &&
                aDrvUsartAsyncTxIsSupported(&handle->drv_handle);
     case ADEV_USART_CAP_RX_DIRECT:
-        return ADEV_USART_HAS_DMA &&
+        return ADEV_USART_DMA_ENABLE &&
                aDrvUsartAsyncRxIsSupported(&handle->drv_handle);
     default:
         return A_FALSE;

@@ -1,5 +1,15 @@
 # GD32E505_Firmware 架构与接口问题讨论稿
 
+## 最新决定：USART 主线精简
+
+USART 仅保留公共管理、TX、RX、RS485 四个实现文件，公共头在 include，私有头在 src。
+删除设备层 TX Queue（包含此前刚做的不透明队列封装）、Claim/Release/Queued 桥接及
+TX_QUEUE 状态；不把同一套模块搬到 app。业务有排队需求时自行提供队列与发送所有者。
+保留单请求 WriteAsync/取消、共享 RX ring 的 ReadAsync/取消，通用 aLib FIFO 继续保留。
+当前 Shell 产品仅启用 INTERRUPT，DMA/ASYNC/RS485 默认关闭，通用实现仍可配置开启。
+下面关于 TX Queue 的段落均为历史讨论，不代表当前可用 API。
+最终接口与文件划分见 docs/usart_design.md。
+
 ## 2026-09-26：当前修复结果（以下历史章节不覆盖本节）
 
 1. **任务所有权**：func 不再创建/删除业务任务。aShellInit 只建立状态，
@@ -37,7 +47,7 @@
 设备映射已移至 app/devices，使用普通 C 配置与 switch，不再使用分散注册。
 appSystemConsoleInit/appSystemStatusLedInit 按实例初始化并返回私有静态句柄。跨设备资源冲突不在运行时检查，未来可加入构建期告警。
 device 层仅保留通用设备初始化及操作。失败不回滚，重复初始化不重试；启动前单线程调用。
-详见 [应用设备映射设计](docs/device_registry.md)。
+详见 [应用设备映射设计](docs/architecture.md)。
 
 ## 2026-09-25：构建体系与模块边界复审
 
@@ -184,7 +194,7 @@ payload 不复制；回调、取消、deadline、TX 独占与工作项仍属于 
 ### 5. USART 设计文档混合了规划接口与当前接口
 
 现状：USART 的同步、异步和队列接口都已落入源码；设计边界与剩余硬件验证项见
-[`docs/usart_design.md`](docs/usart_design.md) 和 [`docs/usart_api_design.md`](docs/usart_api_design.md)。
+[`docs/usart_design.md`](docs/usart_design.md) 和 [`docs/usart_design.md`](docs/usart_design.md)。
 
 影响：读者可能把设计目标误认为现有可调用 API，进而按不存在的接口编写应用，或者误判实现完成度。
 

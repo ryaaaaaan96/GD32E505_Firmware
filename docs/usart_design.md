@@ -1,510 +1,153 @@
-# aDevUsart 整体设计
+# aDevUsart 当前设计
 
-> 状态说明：本文描述当前实现的 USART 设计与公开接口。芯片支持范围仍由 aDrv
-> DMA 路由决定；未实现的 OS 后端不应视为可用。
+## 1. 职责与文件划分
 
-## 1. 目标与边界
-
-`aDevUsart` 对 app、func 提供与具体 MCU 无关的串口接口，并在 aDrv 的非阻塞
-硬件能力之上统一以下使用方式：
-
-- 带内部缓冲的阻塞 `Read/Write`；
-- 用户 buffer 直连 DMA 的阻塞 `ReadDirect/WriteDirect`；
-- callback 完成的异步 TX 和持续异步 RX；
-- 可选的 `aDevUsartTxQueue` 多 buffer FIFO 发送调度。
-
-硬件实例、引脚、波特率和工作模式仍由 app 显式配置。工程不依赖设备树，也不做
-隐藏的自动初始化。
+只保留公共管理、TX、RX、RS485 四条实现主线：
 
 ```text
-app / func
-    |
-    +--> aDevUsart Read/Write/Direct/Async
-    |            |
-    |            +--> aOS mutex/wait/timeout
-    |            +--> aDrv USART/IRQ/DMA
-    |
-    +--> aDevUsartTxQueue --> aDevUsartWriteAsync
+device/aDev_usart/
+├── include/aDev_usart.h          公共接口
+├── src/aDev_usart_internal.h     私有状态与模块内部辅助函数
+├── src/aDev_usart.c              生命周期、配置、事件与能力查询
+├── src/aDev_usart_tx.c           普通/Direct/Async TX、TX IRQ 与 TC
+├── src/aDev_usart_rx.c           普通/Direct/Async RX、RX IRQ 与共享 DMA ring
+├── src/aDev_usart_rs485.c        可选 DE/RE GPIO 方向控制
+└── CMakeLists.txt
 ```
 
-分层职责：
+只有 include 目录向调用方公开。DMA RX、异步 RX 和 Direct 不再各建文件；
+它们按收发方向归属 TX/RX，并继续按能力宏裁剪。TX/RX 状态枚举只在内部头中定义。
+aDrv 负责非阻塞硬件操作，aOS 提供等待和时基，app 选择板级资源与创建业务任务。
 
-| 模块 | 职责 |
-|---|---|
-| aDrv | USART 寄存器、IRQ、DMA 路由和一次非阻塞硬件操作 |
-| aDevUsart | 模式校验、共享 RX/TX ring、同步 Direct、异步 RX waiter FIFO、单请求 Async TX |
-| aDevUsartTxQueue | 多个零拷贝 TX 请求的 FIFO 调度 |
-| aOS | mutex、等待对象、单调时基、deadline timer 和 ISR-safe 同步 |
-| app/func | 硬件参数、静态存储、业务 callback 和协议处理 |
+## 2. 构建能力与实例配置
 
-## 2. 三层能力判断
+构建能力分为 INTERRUPT、DMA、ASYNC、RS485；依赖由统一 resolver 校验，不自动开启。
+构建能力只是上限；每个实例仍通过 mode 选择独立的 TX/RX 模式和 RX_IDLE 选项。
+实例还需具备实际硬件 DMA 路由，不支持时明确返回错误。
 
-公共 API 始终存在，不因配置关闭而从头文件消失。调用结果由三层状态决定：
+当前 Shell 产品只启用 INTERRUPT，TX/RX 使用中断缓冲并启用 IDLE。
+DMA、ASYNC、RS485 及对应驱动 DMA 能力默认关闭，但实现保留。
+关闭 DMA/ASYNC 时，对应函数声明与实现同时裁剪，不提供成功空实现。
+固定静态存储容量仍为 1024 字节，不承诺功能关闭后该容量自动缩小。
 
-| 层次 | 作用 | 典型结果 |
+## 3. 接口主线
+
+| 接口 | 返回时机 | 数据所有权 |
 |---|---|---|
-| 编译能力 | aDrv 是否编译 IRQ/DMA 实现 | 不支持返回 `A_STATUS_UNSUPPORTED` |
-| 实例配置 | 当前 handle 是否准备相应模式和资源 | 未配置返回 `A_STATUS_NOT_READY` |
-| 运行状态 | 同方向是否已有操作占用 | 冲突返回 `A_STATUS_BUSY` |
+| Read | 有数据可读或等待结束 | 复制到调用者 buffer |
+| Write | 当前模式接收数据或等待结束 | 缓冲模式复制；轮询模式直接写硬件 |
+| ReadDirect | DMA 收满、出错或总超时 | DMA 直接写用户 buffer；返回前停止访问 |
+| WriteDirect | DMA 已消费数据或调用结束 | DMA 直接读用户 buffer；不承诺物理 TC |
+| ReadAsync | 请求提交后立即返回 | 共享 DMA ring 中的数据复制到节点快照，再回调 |
+| WriteAsync | 请求提交后立即返回 | 用户 buffer 保持有效到终结回调 |
+| WaitTransmitComplete | 软件缓冲和物理线路均排空或超时 | 不转移 buffer 所有权 |
 
-非法 mode bit、缺少必需缓冲区或无效指针返回 `A_STATUS_INVALID_PARAM`。
+普通与 Direct 接口返回实际长度，失败返回 -1 并设置 aOS errno；已传输部分数据时优先返回长度。
+异步提交返回 aStatus_t，完成/取消/超时通过请求回调报告，不依赖 worker 的 errno。
 
-## 3. 配置模式
+## 4. 生命周期
 
-TX、RX 各使用一个互斥字段，option 使用独立 bit：
+ConfigStructInit 填充默认值；InitStatic 使用调用者存储，Create 使用动态存储。
+DeInit 释放内部资源，动态句柄由 Destroy 释放。不得重复初始化活动存储。
+外部所有者负责串行管理生命周期：停止新提交并结束在途操作后才能销毁。
+worker 内禁止 DeInit；有活动操作或待处理 RX 请求时返回 BUSY。
+静态句柄并不代表内部互斥锁、等待对象、异步 RX 节点完全不使用堆。
 
-```c
-config.mode = ADEV_USART_TX_DMA_BUFFERED |
-              ADEV_USART_RX_INTERRUPT_BUFFERED |
-              ADEV_USART_OPTION_RX_IDLE;
-```
+## 5. TX：单请求，不内置发送队列
 
-目标模式定义：
+设备层已删除 TX Queue、其公开 API 和 Claim/Release/Queued 内部桥接。
+WriteAsync 同时只接受一个请求，重复提交返回 BUSY；可用 WriteAsyncCancel 取消。
+请求结构体的字段在提交时复制，payload 和 argument 的生命周期必须覆盖回调。
+当前 Async TX 基于 DMA，长度为 1..65535，完成以 USART TC 为准。
 
-| 配置 | 普通接口的默认数据路径 |
+多条消息排队属于应用策略，当前不额外创建应用队列：
+
+- 最简单的方式是一个 app TX 任务持有串口，从业务队列取出请求，依次同步发送。
+- 使用 WriteAsync 时，由完成回调通知该任务继续处理下一项；回调本身不阻塞。
+- 应用负责容量、排队超时、重试、取消未提交项，以及 payload 的保留/释放。
+- 若要求严格顺序，其他任务不能绕过该发送所有者直接 Write。
+- 设备内部 mutex 只保证一次调用的互斥，不保证不同任务的提交顺序。
+
+缓冲 Write 返回不等于最后停止位已发送；需要物理排空时调用 WaitTransmitComplete。
+Direct TX 使用 TC 唤醒等待对象，并最多每 10 ms 睡眠检查无中断通知的 DMA 错误；
+返回只保证 DMA 不再访问 buffer，不把 DMA complete 和 TC 混为一谈。
+
+## 6. RX：共享缓冲、单次请求
+
+RX_POLLING 不使用内部 ring；RX_INTERRUPT_BUFFERED 使用 RXNE 填充 ring；
+RX_DMA_BUFFERED 使用初始化时提供的循环 DMA ring。IDLE 仅作为进度通知，不是报文边界承诺。
+
+ReadAsync 只支持 RX_DMA_BUFFERED，注册一次等待并返回 token；取消指定请求使用
+ReadAsyncCancel。多个等待项按 FIFO 分配数据，与 Read 竞争同一消费游标，不是广播。
+DATA_READY 回调持有节点内最多 64 字节稳定快照，offset 为 0，指针只在回调期间有效。
+复制前后校验 DMA 游标；检测到覆盖时不发布可能撕裂的数据，并报告错误。
+持续读取需重新提交，callback 返回值不控制循环接收。
+
+ReadDirect 使用有限 DMA 直接写调用者 buffer，由 DMA 完成/错误唤醒等待任务。
+收满或总超时结束，IDLE 不提前结束；NO_WAIT 只检查即时进度并停止。
+它不能抢占正在运行的 DMA RX ring，也不会丢弃中断 ring 中已收到的数据。
+超过 65535 字节分段重装 DMA，存在接收间隙，不承诺连续流无丢包。
+
+## 7. 回调与并发
+
+业务事件和异步结果均在 aOS 共享 worker 上下文执行，不在硬件 ISR。
+回调必须短小且不阻塞，耗时处理转交 app 任务。
+RX/TX 分别持有互斥锁，可全双工运行；同方向 Direct/Async/stream 有明确占用检查。
+RegisterEventCallback 用于通用事件，请求结果 callback 由每次异步请求指定。
+通用事件允许合并，不替代精确的异步请求完成结果。
+worker 是平台服务；func 不创建任务，业务任务仍由 app/task 管理。
+
+## 8. RS485 与剩余边界
+
+RS485 集成在 USART 配置中，管理 GPIO DE/RE；不管理 Modbus 协议或总线仲裁。
+DE 释放依据 TC，而不是 DMA 完成。硬件自动 DE、建立/保持延迟尚未实现。
+当前只有 GD32/FreeRTOS 后端验证；Linux/裸机未实现。
+TX DMA error 尚无统一即时通知，Direct 使用有界睡眠检查。
+共享 DMA ring 消费太慢仍可能溢出；中断不能长时间饿死。
+真实 DMA、TC、DE 时序仍须上板验证。
+
+## 9. 验证
+
+- tests/usart/run.py：真实 device 源码与模拟 aDrv/aOS，覆盖收发、Direct、Async、RS485、FIFO。
+- tests/config/build_matrix.py：六种 USART 能力组合及数据库后端，检查编译/链接/库符号裁剪。
+- tests/app_devices/run.py：系统设备初始化、失败与 Shell 关闭。
+- tests/architecture/run.py：func 任务所有权和 OS 头文件隔离。
+
+当前不再测试已删除的 TX Queue API；aLib 通用 FIFO 保留，供应用或其他模块复用。
+
+## 10. API 索引
+
+完整签名、参数和错误见 [aDev_usart.h](../device/aDev_usart/include/aDev_usart.h)，
+下表函数均使用 aDevUsart 前缀；不在文档维护另一份函数声明。
+
+| 分组 | 接口 |
 |---|---|
-| `ADEV_USART_TX_POLLING` | `Write()` 内部轮询提交 |
-| `ADEV_USART_TX_INTERRUPT_BUFFERED` | TX ring 由 TXE IRQ 排空 |
-| `ADEV_USART_TX_DMA_BUFFERED` | TX ring 由 DMA 分块排空 |
-| `ADEV_USART_RX_POLLING` | `Read()` 内部轮询读取 |
-| `ADEV_USART_RX_INTERRUPT_BUFFERED` | RXNE IRQ 写初始化提供的 RX ring |
-| `ADEV_USART_RX_DMA_BUFFERED` | 循环 DMA 写初始化提供的共享 RX ring；Read/ReadAsync 消费同一游标 |
-| `ADEV_USART_OPTION_RX_IDLE` | 使用 IDLE 辅助提交和唤醒 RX |
-
-普通 DMA TX 使用 `ADEV_USART_TX_DMA_BUFFERED`。Direct 是公共操作语义，不作为
-普通 `Write()` 的默认 mode 名称。
-
-mode 只决定普通 `Read/Write` 的默认实现和初始化资源。显式 Direct/Async 接口仍需
-检查芯片能力和当前运行状态。
-
-## 4. 对外接口总表
-
-| 分类 | 接口 | 阻塞 | 数据复制 | 完成方式 |
-|---|---|---:|---:|---|
-| 生命周期 | `aDevUsartInit/DeInit` | 是 | — | 函数返回 |
-| 普通 RX | `aDevUsartRead` | 是 | RX ring 到用户 buffer | 返回长度/errno |
-| 普通 TX | `aDevUsartWrite` | 可能等待空间 | 用户 buffer 到 TX ring | 返回已接受长度/errno |
-| 线路排空 | `aDevUsartWaitTransmitComplete` | 是 | — | USART TC |
-| Direct RX | `aDevUsartReadDirect` | 是 | 零拷贝 | 返回实际长度/errno |
-| Direct TX | `aDevUsartWriteDirect` | 是 | 零拷贝 | 返回 DMA 已消费长度/errno |
-| Async TX | `aDevUsartWriteAsync` | 否 | 零拷贝 | callback |
-| Async TX 取消 | `aDevUsartWriteAsyncCancel` | 否 | — | 状态 + callback |
-| Async RX | `aDevUsartReadAsync` | 否 | 最多 64 字节的稳定快照 | 一次 callback |
-| Async RX 取消 | `aDevUsartReadAsyncCancel` | 否 | — | token 指定并回调 |
-| TX FIFO | `aDevUsartTxQueueSubmit` | 否 | 零拷贝 | queue callback |
-
-aDev 不对外提供 `PollIn/PollOut`。轮询是 aDrv 的实现能力，应用统一使用
-`Read/Write`。
-
-## 5. 生命周期接口
-
-```c
-void aDevUsartConfigStructInit(aDevUsartConfig_t *config);
-aStatus_t aDevUsartInitStatic(
-    const aDevUsartConfig_t *config,
-    aDevUsartStorage_t *storage,
-    aDevUsartHandle_t **handle);
-
-aStatus_t aDevUsartCreate(
-    const aDevUsartConfig_t *config,
-    aDevUsartHandle_t **handle);
-
-aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle);
-aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle);
-```
-
-句柄实现保持不透明。`InitStatic()` 使用应用提供的静态存储区；`Create()` 由 aOS
-分配私有句柄，必须配对 `Destroy()`。这两种方式都仍会创建 aOS mutex/wait object，
-当前 FreeRTOS 后端的这些对象本身使用 RTOS heap；静态句柄不等同于整个设备零堆分配。
-
-app 负责填写：
-
-- aDrv 逻辑 USART 实例和 TX/RX 引脚；
-- 波特率、校验和停止位；
-- 默认 TX/RX mode；
-- 普通流接口需要的静态 RX/TX ring；
-- IRQ 优先级。
-
-初始化准备普通收发模式；Direct/Async DMA 在提交请求时启动。
-
-## 6. 普通阻塞流接口
-
-```c
-aSSize_t aDevUsartRead(
-    aDevUsartHandle_t *handle,
-    void *buffer,
-    size_t size,
-    aTimeout_t timeout);
-
-aSSize_t aDevUsartWrite(
-    aDevUsartHandle_t *handle,
-    const void *buffer,
-    size_t size,
-    aTimeout_t timeout);
-
-aStatus_t aDevUsartWaitTransmitComplete(
-    aDevUsartHandle_t *handle,
-    aTimeout_t timeout);
-```
-
-### 6.1 Read
-
-`Read()` 等待首个字节，随后读取当前可用数据立即返回，不等待凑满；无数据且超时
-返回 `-1` 并设置 errno。ReadDirect 等待 DMA 收满或超时，部分数据优先返回长度。
-
-```text
-polling:            USART -> CPU -> user buffer
-interrupt buffered: USART -> RXNE ISR -> RX ring -> copy -> user buffer
-```
-
-无数据时，中断数据路径通过 aOS 等待对象进入 Blocked；ISR 更新状态后唤醒。纯轮询
-路径使用 aOS deadline 和 yield。
-
-### 6.2 Write
-
-`Write()` 是带内部所有权的流式发送接口。返回表示数据已被设备内部路径接受，调用者
-可以立即复用原 buffer，不保证最后一个停止位已经发出。
-
-```text
-polling:            user buffer -> CPU -> USART
-interrupt buffered: user buffer -> copy -> TX ring -> TXE ISR -> USART
-DMA buffered:       user buffer -> copy -> TX ring -> DMA chunks -> USART
-```
-
-TX ring 空间不足时可以阻塞，等待时间计入本次调用总预算。需要确认物理线路排空时
-调用 `aDevUsartWaitTransmitComplete()`。
-
-## 7. Direct 阻塞接口
-
-```c
-aSSize_t aDevUsartReadDirect(
-    aDevUsartHandle_t *handle,
-    void *buffer,
-    size_t size,
-    aTimeout_t timeout);
-
-aSSize_t aDevUsartWriteDirect(
-    aDevUsartHandle_t *handle,
-    const void *buffer,
-    size_t size,
-    aTimeout_t timeout);
-```
-
-Direct 表示 aDev 直接使用调用者 buffer，payload 不经过内部 ring 或 `memcpy()`。
-GD32 port 明确使用 DMA 实现；实例没有对应 DMA 路由时接口保留并返回
-`A_STATUS_UNSUPPORTED`。公共接口不使用 `Dma` 后缀，避免上层依赖具体 DMA 类型、
-通道和控制器。
-
-| 接口 | Buffer 所有权 |
-|---|---|
-| `ReadDirect()` 调用期间 | DMA 写入，应用不得访问 |
-| `WriteDirect()` 调用期间 | DMA 读取，应用不得修改或释放 |
-| Direct 返回之后 | 所有权归还应用 |
-
-同方向已有普通流、Direct 或 Async 操作时返回 `BUSY`。Direct TX 返回只保证 DMA
-不再访问 buffer；若要确认线路停止位已发出，继续调用 WaitTransmitComplete。
-
-`aDevUsartIsSupported()` 可以在调用前查询 `ADEV_USART_CAP_TX_DIRECT` 和
-`ADEV_USART_CAP_RX_DIRECT`。能力查询只说明硬件是否具备 DMA 路由；如果 stream ring
-尚未清空、同方向操作正在执行，Direct 仍返回
-`BUSY`。
-
-## 8. 单请求异步 TX
-
-```c
-typedef struct {
-    const void *buffer;
-    size_t requested;
-    size_t transferred;
-    aStatus_t status;
-} aDevUsartTxEvent_t;
-
-typedef void (*aDevUsartTxCallback_t)(
-    aDevUsartHandle_t *handle,
-    const aDevUsartTxEvent_t *event,
-    void *argument);
-
-aStatus_t aDevUsartWriteAsync(
-    aDevUsartHandle_t *handle,
-    const aDevUsartWriteRequest_t *request);
-
-aStatus_t aDevUsartWriteAsyncCancel(
-    aDevUsartHandle_t *handle);
-```
-
-aDev 同一时刻只执行一个异步 TX。成功返回后直到 complete/abort callback，buffer
-归 aDev 所有。第二次直接调用 `WriteAsync()` 返回 `A_STATUS_BUSY`。
-
-TX callback 使用 per-operation 绑定，而不是占用整个 USART 唯一事件 callback，
-这样 RX 事件和上层 `aDevUsartTxQueue` 不会互相覆盖。
-
-当前同步 Direct 直接启动 aDrv DMA，使用统一 deadline 和 aOS 等待对象阻塞。
-RX DMA 完成/错误、TX TC 通知唤醒等待者；TX 每次睡眠最多 10 ms，兼顾没有 TX DMA
-错误通知的当前驱动。整个过程中 payload 不经过 CPU 复制。同步 Direct 和异步 TX 的所有权
-互斥由 aDev 的 TX/RX 状态及 mutex 管理。
-
-## 9. 共享 DMA RX ring 与异步读取
-
-选择 `ADEV_USART_RX_DMA_BUFFERED` 后，初始化配置的 `rx_buffer/rx_buffer_size`
-是循环 DMA 的唯一 RX ring。普通 `Read()` 从 ring 拷贝到调用者 buffer；
-`ReadAsync()` 复制最多 64 字节到请求节点的快照，再通过回调交付。两者由 RX mutex 保护同一消费
-游标，因此同一字节只交给一个消费者。DMA 写入由 aDrv 按半满/满中断更新进度；
-可选 IDLE 中断用于低延迟唤醒；未启用时 DMA 半满/满中断才通知数据进度，延迟
-取决于 ring 容量和输入速率。
-
-`ReadAsync(handle, request, &token)` 在链表尾部提交一次等待项。多个任务可以并发
-提交，FIFO 顺序决定异步请求之间的数据分配；每个请求只调用一次 callback，后续
-读取需重新提交。callback 返回 `void`，不决定请求是否续期；按 token 调用
-`ReadAsyncCancel()` 可取消仍在等待的请求。超时从提交时开始计时，NO_WAIT 在无
-可读数据时通过 deferred callback 报告 TIMEOUT。等待节点由 aOS 分配，分配失败时
-提交返回 `A_STATUS_NO_MEMORY`。
-
-ISR 不调用业务 callback，只提交 aOS work。DATA_READY 的 buffer 指向节点快照，offset
-固定为 0；快照在 callback 期间稳定，返回后失效。Read 与 ReadAsync 都在复制前后检查
-DMA 生产游标，复制期间源区间被覆盖则报 ERROR，不交付混杂字节。快照增加一次复制，
-ReadDirect 仍直接 DMA 到用户 buffer。连续流可能在消费者过慢时溢出，不承诺无损；
-DMA IRQ 必须至少每个 ring 周期获得处理，否则硬件的单个满标志无法记录多圈。
-普通 Read 和 ReadAsync 是同一数据流的竞争消费者，谁先取得 RX mutex 谁消费字节；
-系统不会广播或复制同一段字节给多个线程。DMA ring 溢出时保留最新容量的数据，
-丢失状态通过 `aDevUsartHasRxOverflowed()` / `aDevUsartGetRxError()` 查询。
-
-DMA buffered RX 持续占用接收 DMA，不能同时调用 `ReadDirect()`。需要同步零拷贝接收时，
-初始化选择 polling 或 interrupt buffered RX。
-
-## 10. aDevUsartTxQueue
-
-`aDevUsartTxQueue` 是 aDevUsart 内的发送队列扩展，用于在 aDev 单请求 Async TX 之上支持多个
-outstanding 零拷贝 buffer。
-
-```text
-Submit(A), Submit(B), Submit(C)
-              |
-              v
-FIFO:      [A] -> [B] -> [C]
-active:     A
-              |
-              v
-      aDevUsartWriteAsync(A)
-              |
-        DMA complete ISR
-              |
-      aOS deferred-work worker
-              |
-      complete A, start B
-```
-
-### 10.1 接口
-
-```c
-aStatus_t aDevUsartTxQueueInit(
-    const aDevUsartTxQueueConfig_t *config,
-    aDevUsartTxQueueStorage_t *storage,
-    aDevUsartTxQueueHandle_t **handle_out);
-
-aStatus_t aDevUsartTxQueueSubmit(
-    aDevUsartTxQueueHandle_t *handle,
-    const aDevUsartTxQueueRequest_t *request,
-    uint32_t *request_id);
-
-aStatus_t aDevUsartTxQueueCancelAll(
-    aDevUsartTxQueueHandle_t *handle);
-
-aStatus_t aDevUsartTxQueueWaitDrained(
-    aDevUsartTxQueueHandle_t *handle,
-    aTimeout_t timeout);
-
-size_t aDevUsartTxQueueGetPendingCount(
-    aDevUsartTxQueueHandle_t *handle);
-
-aBool_t aDevUsartTxQueueIsIdle(
-    aDevUsartTxQueueHandle_t *handle);
-
-aStatus_t aDevUsartTxQueueDeInit(
-    aDevUsartTxQueueHandle_t *handle);
-```
-
-第一阶段不提供指定 request ID 的中间删除；先实现 active abort 和 `CancelAll()`。
-完整实现验证后再增加 `aDevUsartTxQueueCancel(id)`，不提前保留空壳接口。
-
-### 10.2 静态存储
-
-应用提供固定描述符数组：
-
-```c
-static aDevUsartTxRequest_t s_tx_requests[4];
-
-config.usart = &s_usart;
-config.request_storage = s_tx_requests;
-config.request_capacity = 4U;
-config.callback = txQueueCallback;
-```
-
-队列只复制描述符，不复制用户数据。成功 Submit 后直到该请求的 complete、abort、
-cancel 或 timeout 事件，buffer 归队列所有。队列满时返回 `A_STATUS_BUSY`，buffer
-仍属于应用。
-
-### 10.3 DMA 推进
-
-队列不创建专用 TX 任务：
-
-- Submit 只登记请求并提交 aOS 工作项，由 worker 启动 DMA；
-- 后续 Submit 只进入 FIFO；
-- DMA 完成后继续等待 USART TC，由 aOS deferred work 完成请求并启动下一项；
-- 正常完成、启动失败、排队超时和取消回调均在 aOS worker 执行。
-
-队列源文件属于 aDevUsart target。公开扩展头为 `aDev_usart_tx_queue.h`，
-TX 占用和带 owner 的提交接口仅声明于内部头文件。不提供 ISR 链式提交 API。
-FIFO 元素存储复用 aLib/aFifo.h；锁、超时、取消和 DMA 推进属于 device。
-
-同一个 USART TX 被 aDevUsartTxQueue 接管后，直到 QueueDeInit 都禁止直接调用该
-handle 的 Write、WriteDirect 或 WriteAsync。RX 方向保持独立，可以并行运行。
-
-### 10.4 完成语义
-
-| 状态 | 含义 |
-|---|---|
-| request complete | DMA 不再访问这个 buffer，可以归还应用 |
-| queue drained | FIFO 为空且 USART TC，最后停止位已经发出 |
-
-DMA 完成后可立即启动下一个 buffer，不在每个请求之间等待 USART TC，避免产生发送
-间隙。RS485 方向由 aDevUsart 内部在最终 TC 后自动切换；等待接口仅用于确认
-线路排空，不由应用手动切换方向。当前实现与配置见 [RS485 统一设计](usart_rs485.md)。
-
-## 11. TX/RX 状态和冲突
-
-TX、RX 分别维护状态，允许全双工并行：
-
-```c
-typedef enum {
-    ADEV_USART_TX_IDLE,
-    ADEV_USART_TX_STREAM,
-    ADEV_USART_TX_DIRECT,
-    ADEV_USART_TX_ASYNC,
-    ADEV_USART_TX_QUEUE
-} aDevUsartTxState_t;
-
-typedef enum {
-    ADEV_USART_RX_IDLE,
-    ADEV_USART_RX_STREAM,
-    ADEV_USART_RX_DIRECT,
-    ADEV_USART_RX_ASYNC
-} aDevUsartRxState_t;
-```
-
-| 当前方向状态 | 同类型后续操作 | 其他同方向操作 |
-|---|---|---|
-| TX stream | `Write()` 可继续串行调用 | Direct/Async/Queue 为 `BUSY` |
-| TX direct | 不接受第二个操作 | `BUSY` |
-| TX async | 不接受第二个 aDev async | `BUSY` |
-| TX queue | QueueSubmit 可继续入队 | 绕过 Queue 的 TX 操作为 `BUSY` |
-| RX stream | `Read()` 由 mutex 串行 | Direct 为 `BUSY`；DMA ring 的 ReadAsync 可排队 |
-| RX direct | 不接受第二个操作 | `BUSY` |
-| RX async waiter | token 可取消指定等待项 | 同一 RX ring 由 Read/异步请求竞争消费 |
-
-## 12. 锁和 ISR 并发
-
-| 保护对象 | 机制 | 规则 |
-|---|---|---|
-| 多任务完整 Read 调用 | RX mutex | 覆盖一次完整 Read，防止多消费者拆分字节流 |
-| 多任务完整 Write 调用 | TX mutex | 覆盖一次完整 Write，防止消息按字节交错 |
-| Direct 调用 | 对应方向 mutex | 从状态检查持有到 Direct 返回 |
-| Async Start/Stop/Submit | 对应方向 mutex | 只保护短控制操作，不跨异步生命周期持有 |
-| task/ISR 共享索引和状态 | IRQ-safe 短临界区 | 只更新指针、计数和状态 |
-| 阻塞等待 | aOS wait object | 负责睡眠/唤醒，不代替 mutex |
-
-ISR 不能获取任务 mutex，也不能替任务释放 mutex。异步函数返回前释放 mutex，后续
-生命周期由状态机表示。aDev 和 aDevUsartTxQueue 不能直接包含 FreeRTOS 头文件。
-
-## 13. Timeout
-
-同步接口 timeout 覆盖：
-
-```text
-等待 mutex + 等待队列/数据 + 硬件操作
-```
-
-所有阶段共享同一个绝对 deadline，不能在获得锁或启动 DMA 后重新计算完整预算。
-
-异步 TX Queue 的 timeout 从成功 Submit 开始，覆盖排队和 DMA 传输。Submit 本身
-不等待队列空间，队列满立即返回 `BUSY`。`A_TIMEOUT_NO_WAIT` 不能表达有意义的异步
-完成期限，异步接口应拒绝它，调用者使用有限 timeout 或 `A_TIMEOUT_FOREVER`。
-
-硬件 IDLE 只表示一个字符时间的线路空闲，不等价于任意毫秒 timeout。任意 deadline
-需要 aOS timer 抽象；FreeRTOS port 可以使用系统 timer service，不创建 USART 专用
-数据搬运任务。
-
-## 14. Callback 规则
-
-- callback 事件必须携带 buffer、请求长度、实际长度和状态；
-- callback 只通知完成或数据可用，不执行阻塞 Read/Write；
-- aDev 的业务事件 callback 统一由 aOS deferred-work 队列投递，在任务/线程上下文
-  执行；硬件 ISR 仅更新状态并提交 work item，不直接调用业务 callback；
-- callback 必须短小，不应阻塞或从自身调用 DeInit；复杂业务应通知业务任务处理；
-- 如果未来需要真正的 ISR callback，必须提供名字和契约明确的 ISR 专用 API，不与
-  当前线程上下文 callback 混用。当前不提供该 API；
-- 每个成功提交的零拷贝 buffer 必须且只能收到一次最终归还事件。
-
-异步 TX/RX completion callback 也使用同一个 aOS deferred-work 上下文；这避免把
-FreeRTOS task/thread 语义泄漏到 aDev，同时也不模仿 Linux softirq。Linux port 可用
-工作线程/工作队列实现相同契约，裸机 port 可由主循环轮询 deferred work。
-
-## 15. 错误语义
-
-| 情况 | 状态 |
-|---|---|
-| 参数、mode、buffer 或 timeout 无效 | `A_STATUS_INVALID_PARAM` |
-| 芯片/固件没有对应能力 | `A_STATUS_UNSUPPORTED` |
-| handle 未初始化或没有准备对应模式 | `A_STATUS_NOT_READY` |
-| 同方向冲突或异步队列已满 | `A_STATUS_BUSY` |
-| 有限等待到期 | `A_STATUS_TIMEOUT` |
-| DMA/USART 硬件故障 | `A_STATUS_ERROR` 或后续细分状态 |
-
-流式 Read/Write 返回 `aSSize_t`，失败时用 aOS errno；配置、控制和异步提交接口返回
-`aStatus_t`。发生部分传输时，事件或返回值必须报告实际长度。
-
-## 16. Buffer 所有权汇总
-
-| 操作 | 成功调用后 | 所有权归还时刻 |
-|---|---|---|
-| `Read()` | 用户始终拥有目标 buffer | 函数返回 |
-| `Write()` | 数据已复制后用户可复用源 buffer | Write 返回 |
-| `ReadDirect()` | aDev/DMA 写用户 buffer | 函数返回 |
-| `WriteDirect()` | aDev/DMA 读用户 buffer | 函数返回 |
-| `WriteAsync()` | aDev/DMA 持有用户 buffer | complete/abort callback |
-| `ReadAsync()` | 节点快照在 callback 期间借用 | callback 返回 |
-| `TxQueueSubmit()` | TX queue 持有用户 buffer | complete/abort/cancel/timeout event |
-
-## 17. 当前实现状态
-
-当前仓库实现范围：
-
-| 能力 | 源码状态 | 当前边界 |
-|---|---|---|
-| 普通 `Read/Write` | 已实现 | polling、interrupt buffered、DMA buffered 由 TX/RX flag 选择 |
-| DMA buffered RX | 已实现 | 初始化提供共享 ring；Read 与 ReadAsync 使用同一消费游标 |
-| `ReadDirect/WriteDirect` | 已实现 | 当前 GD32 通过 DMA 能力实现；无对应路由返回 unsupported |
-| Async RX | 已实现 | DMA ring 上 FIFO 等待项；回调只在 aOS task context |
-| `aDevUsartTxQueue` | 已实现 | 调用者提供 FIFO 存储；请求按提交顺序串行发送 |
-
-异步 TX 的 DMA/USART ISR 只更新状态并提交 aOS work item；物理发送完成后，callback
-在 aOS 工作任务执行。队列因此在任务上下文完成当前请求并启动下一请求，而不是从
-ISR 直接调用上层 callback。RX DMA 半满/满或 IDLE 后，aDev 刷新共享 ring 游标并在
-aOS 工作任务中派发一个 FIFO waiter；DMA 持续运行，不为每次 callback 重装用户 buffer。
-
-异步 TX buffer 由调用方分配和保持。TX queue 成功 Submit 后，源 buffer 到该请求的
-终结 callback 返回前不得修改或释放。DMA RX ring 在初始化时由应用提供，并持续
-有效到 DeInit；Async callback 临时借用最多 64 字节的节点快照，不单独持有 DMA 目标缓冲区。
-
-流式 RX 错误通过 `ADEV_USART_EVENT_RX_ERROR` 通知，并可由
-`aDevUsartGetRxError()` 查询。ReadAsync 的 DMA backend 错误通过该请求的 ERROR event 报告。
-
-## 异步请求参数约定
-
-ReadAsync 使用 `aDevUsartReadRequest_t`（timeout、callback、argument），token 单独作为输出参数；
-WriteAsync 使用 `aDevUsartWriteRequest_t`（buffer、size、timeout、callback、argument）。
-TxQueueSubmit 使用 `aDevUsartTxQueueRequest_t`（buffer、size、timeout），request_id 单独作为输出参数；
-队列回调仍在队列初始化配置中设置。内部 WriteAsyncQueued 复用 WriteRequest。
-
-所有请求结构体在提交期间复制所需字段，不保存其地址，可以是局部变量；提交返回后可修改或销毁
-结构体本身。TX buffer 及 argument 必须保持有效直到完成回调；TX payload 不复制，RX Async 使用节点快照。
-NULL 请求返回 INVALID_PARAM。同步 Read/Write/Direct 保留原有简短签名。
+| 生命周期 | ConfigStructInit、InitStatic、Create、DeInit、Destroy |
+| 普通流 | Read、Write |
+| 同步零拷贝 | ReadDirect、WriteDirect |
+| 单次异步 | ReadAsync、ReadAsyncCancel、WriteAsync、WriteAsyncCancel |
+| 通用事件 | RegisterEventCallback、UnregisterEventCallback |
+| 线路完成 | WaitTransmitComplete |
+| 能力/诊断 | IsSupported、GetIdleEventCount、HasRxOverflowed、ClearRxOverflow、GetRxError |
+
+WriteAsync 的请求包含 buffer、size、timeout、callback、argument；
+ReadAsync 请求包含 timeout、callback、argument，单独输出 token。
+请求结构字段提交时复制，但引用的 payload/argument 必须满足生命周期要求。
+
+## 11. RS485 方向控制
+
+RS485 不是独立 target 或收发模式，通过 config.rs485 配置 GPIO DE/RE。
+启用前必须具备 USART TC IRQ 能力；不支持时明确失败。
+DE/RE 不得与 TX/RX 重叠，也不能重复配置；独立 RE 可指定有效电平及发送期间接收。
+没有独立 RE 时，是否关闭接收由电路决定，软件不模拟关闭接收或过滤回显。
+
+Init 使 DE 无效、独立 RE 有效；发送开始前使能 DE，最终 TC 后释放。
+Read 不改变方向。缓冲写入可能合并成一次总线占用，不保证每次 Write 独立产生 DE 脉冲。
+Write 超时不撤回已接受的数据，WaitTransmitComplete 超时也不强制释放方向；
+Direct 超时停止 DMA 访问，但 USART 内尾字节仍待 TC 完成。
+正常 TX_COMPLETE 事件发生时方向已释放。
+
+方向未释放、仍有发送数据或活动调用时，DeInit 返回 BUSY。
+硬件故障导致 TC 永不出现时不承诺自动释放线路。
+硬件自动 DE、建立/保持延迟未实现；Modbus 帧间隔和总线仲裁归协议/应用层。
+上板须测量 DE 在起始位前有效、最后停止位后释放，主机测试不能替代时序验证。

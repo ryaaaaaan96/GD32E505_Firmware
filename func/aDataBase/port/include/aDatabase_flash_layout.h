@@ -1,3 +1,12 @@
+/**
+ * @file aDatabase_flash_layout.h
+ * @brief 当前产品的 FAL 编译期存储布局。
+ * @see docs/interface_contract.md 公共类型、错误、超时与生命周期约定。
+ *
+ * 容量、偏移、分区长度和擦除块均以字节表示；操作超时以毫秒表示。
+ * 后端容量/擦除粒度必须与布局匹配。偏移基于整个介质，不是分区内相对地址。
+ */
+
 #ifndef ADATABASE_FLASH_LAYOUT_H
 #define ADATABASE_FLASH_LAYOUT_H
 

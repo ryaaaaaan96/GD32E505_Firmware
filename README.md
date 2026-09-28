@@ -14,7 +14,7 @@ system、startup、完整标准外设库和驱动实现全部由 `aDrv` 管理�
 - LED 暂按低电平点亮配置，实物极性不同时修改 `app/devices/system/app_system_device.c` 中的实例配置。
 
 app 不再链接 Flash、数据库和 Modbus；RS485 已合并为 aDevUsart 的可选功能，
-默认关闭，详见 [USART / RS485 统一设计](docs/usart_rs485.md)。当前工程也只启用 GPIO 与 USART
+默认关闭，详见 [USART / RS485 统一设计](docs/usart_design.md)。当前工程也只启用 GPIO 与 USART
 驱动，未使用模块仍保留源码，可由后续项目按需打开。
 
 ## 分层
@@ -63,8 +63,8 @@ USB 库不纳入工程。
 ## 工程选择与构建
 
 根 `CMakeLists.txt` 使用 `aclass_select()` 选择固件名、MCU profile、链接脚本和
-工具链。MCU profile 保存 CPU/FPU、主频、厂商宏和 FreeRTOS port；链接脚本属于
-具体项目；FreeRTOS 参数位于 `config/`。
+工具链。MCU profile 保存 CPU/FPU、主频、厂商宏和调试器件名；链接脚本属于
+具体项目；FreeRTOS port 和参数位于 `config/freeRTOS_config.cmake`。
 
 默认 GCC 位于：
 
@@ -75,13 +75,12 @@ USB 库不纳入工程。
 构建入口：
 
 ```sh
-source aclass.env.sh
-build
-build release
-build clean
+python3 scripts/build.py
+python3 scripts/build.py release
+python3 scripts/build.py clean
 ```
 
-也可以执行 `python3 scripts/build.py`。当前工程已使用 GCC 15.3 无警告完成 ELF、
+脚本直接执行，无需 source，适用于 bash、zsh 和 fish。当前工程已使用 GCC 15.3 无警告完成 ELF、
 HEX 和 BIN 构建。GD32E50X_CL 的 GCC startup、newlib syscall/sysmem 以及统一超时
 机制均已接入；startup 的向量表来自官方 V1.7.0 CL 启动文件。
 
@@ -132,14 +131,14 @@ GDB 路径及生成的命令。远程主机的防火墙应仅向可信网络开�
 
 详细边界见 [架构说明](docs/architecture.md)，构建职责见
 [CMake 设计](docs/cmake_design.md)，统一时间与超时规则见
-[超时方案](docs/timeout_design.md)。
+[超时方案](docs/interface_contract.md)。
 
 ### 设备初始化与跨文件访问
 
 设备配置和编号映射位于 app/devices，业务模块在 aDrv/aOS 就绪后按实例调用 Init(id, &handle)。
 业务通过 appSystemConsoleInit / appSystemStatusLedInit 借用私有静态句柄；无需设备注册宏或链接段。
-详见 [应用设备映射与分层](docs/device_registry.md)。
-# 构建与任务边界补充
+详见 [应用设备映射与分层](docs/architecture.md)。
+## 构建与任务边界
 
 业务任务由 app/task 创建；func/aShell 仅提供 Init/Process/DeInit，不创建线程。
 aOS worker 是平台服务，配置在 config/aclass_config.cmake；回调禁止阻塞。
@@ -149,3 +148,17 @@ CMake 自动输出 build/Debug/firmware-Debug.json（Release 对应另一配置�
 scripts/debug.py 从中读取 ELF 和调试芯片名。改固件名无需再修改脚本；
 --elf 与 --device 可显式覆盖。更换旧构建目录后需重新配置生成元数据。
 PLATFORM Embedded / OS FreeRTOS 是当前唯一实现的后端组合，不表示已经支持 Linux。
+
+## 设计文档
+
+docs 只维护以下四份现行说明，不保留旧方案和迁移过程：
+
+| 文档 | 内容 |
+|---|---|
+| [架构](docs/architecture.md) | 分层、依赖、应用设备初始化与句柄归属 |
+| [接口规范](docs/interface_contract.md) | 类型、错误、超时、缓冲区和任务上下文契约 |
+| [CMake](docs/cmake_design.md) | 配置来源、依赖解析、能力裁剪和构建产物 |
+| [USART](docs/usart_design.md) | Read/Direct/Async、生命周期、RS485 和当前限制 |
+
+模块 README 用于模块本地使用说明；根 DESIGN_REVIEW.md 保留评审讨论及用户回复，
+属于历史记录，不是当前设计依据。修改接口时须同步公共头注释及相应现行文档。

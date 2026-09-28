@@ -27,7 +27,7 @@ foreach(feature INTERRUPT DMA ASYNC RS485)
     target_compile_definitions(
         aDevUsart
         PUBLIC
-            ADEV_USART_HAS_${feature}=$<BOOL:${ADEV_USART_${feature}_ENABLED}>
+            ADEV_USART_${feature}_ENABLE=$<BOOL:${ADEV_USART_${feature}_ENABLED}>
     )
 endforeach()
 

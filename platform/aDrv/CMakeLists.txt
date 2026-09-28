@@ -175,8 +175,8 @@ add_library(
 target_compile_definitions(
     aDrv
     PUBLIC
-        ADRV_USART_HAS_INTERRUPT=$<BOOL:${ADRV_USART_INTERRUPT}>
-        ADRV_USART_HAS_ASYNC=$<BOOL:${ADRV_USART_ASYNC}>
+        ADRV_USART_INTERRUPT_ENABLE=$<BOOL:${ADRV_USART_INTERRUPT}>
+        ADRV_USART_ASYNC_ENABLE=$<BOOL:${ADRV_USART_ASYNC}>
 )
 
 target_include_directories(

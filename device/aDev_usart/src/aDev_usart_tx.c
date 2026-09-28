@@ -3,11 +3,11 @@
 #include <limits.h>
 #include <string.h>
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
 static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle);
 #endif
 static void rs485_complete(aDevUsartHandle_t *handle);
-#if ADEV_USART_HAS_ASYNC
+#if ADEV_USART_ASYNC_ENABLE
 static void async_tx_complete(aDevUsartHandle_t *handle, aStatus_t status,
                               size_t transferred, aBool_t from_isr)
 {
@@ -78,7 +78,7 @@ void aDevUsartAsyncTxTimeout(void *argument)
 /* 调用者已屏蔽 USART IRQ，或正在 USART ISR 内。 */
 static void rs485_complete(aDevUsartHandle_t *handle)
 {
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
     const aStatus_t status = aDevUsartRS485Complete(handle);
     if (status != A_STATUS_OK) {
         handle->tx_error = status;
@@ -88,7 +88,7 @@ static void rs485_complete(aDevUsartHandle_t *handle)
 #endif
 }
 
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
 void aDevUsartRs485ArmComplete(aDevUsartHandle_t *handle)
 {
     if (handle->rs485_transmitting) {
@@ -102,7 +102,7 @@ void aDevUsartRs485ArmComplete(aDevUsartHandle_t *handle)
 
 #endif
 
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
 static void irq_transmit(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
@@ -138,7 +138,7 @@ static void irq_transmit_complete(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
 
-#if ADEV_USART_HAS_ASYNC
+#if ADEV_USART_ASYNC_ENABLE
     if (handle->tx_state == ADEV_USART_TX_ASYNC) {
         size_t remaining = handle->tx_async_size;
         const aStatus_t status = aDrvUsartAsyncTxGetRemaining(
@@ -160,7 +160,7 @@ static void irq_transmit_complete(void *argument)
 
 #endif
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
     if (handle->tx_state == ADEV_USART_TX_DIRECT) {
         (void)aDrvUsartSetInterruptEnabled(
             &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
@@ -232,14 +232,14 @@ aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
     switch (config->mode & ADEV_USART_TX_MASK) {
     case ADEV_USART_TX_POLLING:
 #if ADEV_USART_NEEDS_IRQ
-        if (config->rs485.enabled || ADEV_USART_HAS_DMA)
+        if (config->rs485.enabled || ADEV_USART_DMA_ENABLE)
             return aDevUsartRegisterIrqCallback(
                 handle, ADRV_USART_EXTI_TC, irq_transmit_complete,
                 config->interrupt_priority, A_FALSE);
 #endif
         (void)handle;
         return A_STATUS_OK;
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
     case ADEV_USART_TX_INTERRUPT_BUFFERED: {
         aStatus_t status;
 
@@ -264,7 +264,7 @@ aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
     }
 #endif
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
     case ADEV_USART_TX_DMA_BUFFERED: {
         aStatus_t status;
 
@@ -314,7 +314,7 @@ static aSSize_t polling_write(aDevUsartHandle_t *handle, const void *data,
     return (aSSize_t)count;
 }
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
 static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
 {
     size_t contiguous;
@@ -330,7 +330,7 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
         contiguous = handle->tx_count;
     }
     status = A_STATUS_OK;
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
     status = aDevUsartRS485Begin(handle);
 #endif
     if (status != A_STATUS_OK) {
@@ -340,7 +340,7 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
         &handle->drv_handle, &handle->tx_buffer[handle->tx_tail],
         contiguous, &started);
     if (status != A_STATUS_OK) {
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
         aDevUsartRs485ArmComplete(handle);
 #endif
         return status;
@@ -352,7 +352,7 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
     if (status != A_STATUS_OK) {
         (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
         handle->tx_dma_active = 0U;
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
         aDevUsartRs485ArmComplete(handle);
 #endif
     }
@@ -361,7 +361,7 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
 
 #endif
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
 static size_t ring_write(aDevUsartHandle_t *handle, const uint8_t *data,
                          size_t size)
 {
@@ -386,7 +386,7 @@ static size_t ring_write(aDevUsartHandle_t *handle, const uint8_t *data,
 
 #endif
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
 static aSSize_t dma_buffered_write(aDevUsartHandle_t *handle,
                                    const void *data, size_t data_size,
                                    const aTimepoint_t *end,
@@ -430,7 +430,7 @@ static aSSize_t dma_buffered_write(aDevUsartHandle_t *handle,
 
 #endif
 
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
 static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
                                 size_t data_size,
                                 const aTimepoint_t *end,
@@ -446,7 +446,7 @@ static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
         space_available = handle->tx_count < handle->tx_buffer_size;
         status = handle->tx_error;
         if (space_available && (status == A_STATUS_OK)) {
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
             status = aDevUsartRS485Begin(handle);
 #endif
         }
@@ -515,14 +515,14 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
 
     handle->tx_state = ADEV_USART_TX_STREAM;
     switch (handle->mode & ADEV_USART_TX_MASK) {
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
     case ADEV_USART_TX_DMA_BUFFERED:
         result = dma_buffered_write(handle, data, data_size, &end,
                                     timeout);
         break;
 #endif
 
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
     case ADEV_USART_TX_INTERRUPT_BUFFERED:
         result = interrupt_write(handle, data, data_size, &end,
                                  timeout);
@@ -534,11 +534,11 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
         aOSCriticalEnter();
         status = handle->tx_error;
         if (status == A_STATUS_OK) {
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
             status = aDevUsartRS485Begin(handle);
 #endif
         }
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
         if (handle->rs485.enabled) {
             (void)aDrvUsartSetInterruptEnabled(
                 &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
@@ -550,7 +550,7 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
                      ? polling_write(handle, data, data_size, &end, timeout)
                      : aOSFailWithStatus(status);
         aOSCriticalEnter();
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
         aDevUsartRs485ArmComplete(handle);
 #endif
         aOSCriticalExit();
@@ -588,7 +588,7 @@ static aStatus_t wait_transmit_complete_locked(
             aOSCriticalExit();
             return handle->tx_error;
         }
-#if ADEV_USART_HAS_DMA || ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_DMA_ENABLE || ADEV_USART_INTERRUPT_ENABLE
         if (((handle->mode & ADEV_USART_TX_MASK) ==
              ADEV_USART_TX_INTERRUPT_BUFFERED) ||
             ((handle->mode & ADEV_USART_TX_MASK) ==
@@ -655,7 +655,7 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
     return status;
 }
 
-#if ADEV_USART_HAS_ASYNC
+#if ADEV_USART_ASYNC_ENABLE
 aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
                                     const aDevUsartWriteRequest_t *request)
 {
@@ -675,7 +675,7 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
         return A_STATUS_INVALID_PARAM;
     }
     if (!handle->drv_handle.initialized) return A_STATUS_NOT_READY;
-    if (!ADEV_USART_HAS_ASYNC ||
+    if (!ADEV_USART_ASYNC_ENABLE ||
         !aDrvUsartAsyncTxIsSupported(&handle->drv_handle)) {
         return A_STATUS_UNSUPPORTED;
     }
@@ -700,7 +700,7 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
     }
 
     status = A_STATUS_OK;
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
     status = aDevUsartRS485Begin(handle);
 #endif
     if (status != A_STATUS_OK) {
@@ -777,7 +777,7 @@ aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle)
 
 #endif
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
 /* Synchronous zero-copy TX. */
 static void direct_tx_interrupts_disable(aDevUsartHandle_t *handle)
 {
@@ -837,7 +837,7 @@ aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
     direct_tx_interrupts_disable(handle);
     status = handle->tx_error;
     if (status == A_STATUS_OK) {
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
         status = aDevUsartRS485Begin(handle);
 #endif
     }
@@ -887,7 +887,7 @@ aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
     aDrvUsartDisableInterrupt(&handle->drv_handle);
     (void)aDrvUsartSetInterruptEnabled(
         &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
-#if ADEV_USART_HAS_RS485
+#if ADEV_USART_RS485_ENABLE
     aDevUsartRs485ArmComplete(handle);
 #endif
     handle->tx_state = ADEV_USART_TX_IDLE;

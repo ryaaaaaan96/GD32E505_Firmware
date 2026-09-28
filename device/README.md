@@ -7,4 +7,4 @@
 生命周期及异步回调上下文遵循公共规则，设备特有语义写入对应头文件。
 
 device 不管理应用产品编号和启动顺序；当前设备映射与显式初始化由
-app/devices 管理，详见 [应用设备映射](../docs/device_registry.md)。
+app/devices 管理，详见 [应用设备映射](../docs/architecture.md)。

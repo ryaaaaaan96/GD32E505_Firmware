@@ -3,7 +3,7 @@
 #include <limits.h>
 #include <string.h>
 
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
 static void irq_receive(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
@@ -26,13 +26,13 @@ static void irq_receive(void *argument)
 
 #endif
 
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
 static void irq_idle(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
 
     ++handle->idle_event_count;
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
     if ((handle->mode & ADEV_USART_RX_MASK) == ADEV_USART_RX_DMA_BUFFERED)
         aDevUsartRxDmaNotifyFromISR(handle);
 #endif
@@ -42,7 +42,7 @@ static void irq_idle(void *argument)
 
 #endif
 
-#if ADEV_USART_HAS_DMA && ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_DMA_ENABLE && ADEV_USART_INTERRUPT_ENABLE
 static void rx_dma_idle(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
@@ -55,7 +55,7 @@ static void rx_dma_idle(void *argument)
 
 #endif
 
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
 static aStatus_t rx_idle_detection_enable(
     aDevUsartHandle_t *handle, const aDevUsartConfig_t *config)
 {
@@ -82,7 +82,7 @@ aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
     case ADEV_USART_RX_POLLING:
         status = A_STATUS_OK;
         break;
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
     case ADEV_USART_RX_INTERRUPT_BUFFERED:
         if (!aDrvUsartInterruptIsSupported()) {
             return A_STATUS_UNSUPPORTED;
@@ -99,9 +99,9 @@ aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
         break;
 #endif
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
     case ADEV_USART_RX_DMA_BUFFERED:
-        if (!ADEV_USART_HAS_DMA ||
+        if (!ADEV_USART_DMA_ENABLE ||
             !aDrvUsartAsyncRxIsSupported(&handle->drv_handle)) {
             return A_STATUS_UNSUPPORTED;
         }
@@ -128,10 +128,10 @@ aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
         return A_STATUS_INVALID_PARAM;
     }
 
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
     if ((status == A_STATUS_OK) &&
         ((config->mode & ADEV_USART_OPTION_RX_IDLE) != 0U)) {
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
         if ((config->mode & ADEV_USART_RX_MASK) ==
             ADEV_USART_RX_DMA_BUFFERED) {
             status = aDevUsartRegisterIrqCallback(
@@ -172,7 +172,7 @@ static aSSize_t polling_read(aDevUsartHandle_t *handle, void *buffer,
     return (aSSize_t)count;
 }
 
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
 static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
                               size_t buffer_size,
                               const aTimepoint_t *end,
@@ -211,7 +211,7 @@ static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
 
 #endif
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
 static aSSize_t dma_buffered_read(aDevUsartHandle_t *handle, void *buffer,
                                   size_t buffer_size,
                                   const aTimepoint_t *end,
@@ -285,12 +285,12 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
     }
 
     handle->rx_state = ADEV_USART_RX_STREAM;
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
     if (rx_mode == ADEV_USART_RX_DMA_BUFFERED) {
         result = dma_buffered_read(handle, buffer, buffer_size, &end, timeout);
     } else
 #endif
-#if ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_INTERRUPT_ENABLE
     if (rx_mode == ADEV_USART_RX_INTERRUPT_BUFFERED) {
         result = buffered_read(handle, buffer, buffer_size, &end, timeout);
     } else
@@ -304,7 +304,7 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
 }
 
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
 /* Shared circular DMA buffer. */
 /* Updates the DMA producer count and preserves the newest ring contents. */
 aStatus_t aDevUsartDmaRxRefresh(aDevUsartHandle_t *handle)
@@ -365,7 +365,7 @@ aStatus_t aDevUsartDmaRxCopy(aDevUsartHandle_t *handle, void *buffer,
 void aDevUsartRxDmaNotifyFromISR(aDevUsartHandle_t *handle)
 {
     if (!handle->rx_dma_active) return;
-#if ADEV_USART_HAS_ASYNC
+#if ADEV_USART_ASYNC_ENABLE
     (void)aOSWorkSubmitFromISR(&handle->rx_completion_work,
                                aDevUsartAsyncRxWork, handle);
 #endif
@@ -493,7 +493,7 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
 
 #endif
 
-#if ADEV_USART_HAS_ASYNC
+#if ADEV_USART_ASYNC_ENABLE
 /* One-shot asynchronous reads from the shared ring. */
 static void rx_timeout(void *argument);
 
@@ -646,7 +646,7 @@ aStatus_t aDevUsartReadAsync(
     }
     *token_out = 0U;
     if (!handle->drv_handle.initialized) return A_STATUS_NOT_READY;
-    if (!ADEV_USART_HAS_ASYNC || !handle->rx_dma_active ||
+    if (!ADEV_USART_ASYNC_ENABLE || !handle->rx_dma_active ||
         ((handle->mode & ADEV_USART_RX_MASK) != ADEV_USART_RX_DMA_BUFFERED)) {
         return A_STATUS_UNSUPPORTED;
     }

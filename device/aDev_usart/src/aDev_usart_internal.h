@@ -5,7 +5,7 @@
 #include "aOS.h"
 
 #include <stdatomic.h>
-#define ADEV_USART_NEEDS_IRQ (ADEV_USART_HAS_INTERRUPT || ADEV_USART_HAS_DMA || ADEV_USART_HAS_RS485)
+#define ADEV_USART_NEEDS_IRQ (ADEV_USART_INTERRUPT_ENABLE || ADEV_USART_DMA_ENABLE || ADEV_USART_RS485_ENABLE)
 
 /** @brief TX 方向当前所有权；应用不得直接修改。 */
 typedef enum {
@@ -121,7 +121,7 @@ void aDevUsartRs485ArmComplete(aDevUsartHandle_t *handle);
 aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
                               const aDevUsartConfig_t *config);
 
-#if ADEV_USART_HAS_DMA || ADEV_USART_HAS_INTERRUPT
+#if ADEV_USART_DMA_ENABLE || ADEV_USART_INTERRUPT_ENABLE
 static inline aStatus_t wait_for_event(void *wait_object,
                                 const aTimepoint_t *end)
 {
@@ -141,7 +141,7 @@ static inline aSSize_t fail_with_wait_status(aStatus_t status,
 }
 
 
-#if ADEV_USART_HAS_DMA
+#if ADEV_USART_DMA_ENABLE
 /* TC wakes TX and DMA completion/error wakes RX. A bounded sleeping check
  * also detects TX DMA faults on drivers without a DMA-error IRQ callback. */
 static inline aStatus_t direct_wait(aOSWaitObject_t object, const aTimepoint_t *end,

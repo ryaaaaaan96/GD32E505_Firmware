@@ -12,8 +12,8 @@ with tempfile.TemporaryDirectory(prefix="aclass-usart-") as directory:
         "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
         *(["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
           if os.environ.get("SANITIZE") else []),
-        "-DADRV_USART_HAS_INTERRUPT=1", "-DADRV_USART_HAS_ASYNC=1",
-        *[f"-DADEV_USART_HAS_{feature}=1" for feature in (
+        "-DADRV_USART_INTERRUPT_ENABLE=1", "-DADRV_USART_ASYNC_ENABLE=1",
+        *[f"-DADEV_USART_{feature}_ENABLE=1" for feature in (
             "INTERRUPT", "DMA", "ASYNC", "RS485",
         )],
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",

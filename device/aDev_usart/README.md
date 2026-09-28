@@ -1,5 +1,10 @@
 # aDevUsart 数据路径配置
 
+实现按公共管理、TX、RX、RS485 四条主线组织。公共接口在 include/aDev_usart.h；
+所有实现与内部头文件在 src/，不会向调用者导出私有头搜索路径。
+原 Direct、DMA RX、Async RX 实现已按方向合并；设备层发送队列已删除。
+当前 Shell 产品默认只开启 INTERRUPT，其他能力按需启用；下列 DMA 示例仅描述可选用法。
+
 `aDevUsartRead()`、`aDevUsartWrite()` 和超时语义不随底层数据路径变化。应用通过
 `aDevUsartConfig_t.mode` 同时组合一个 TX 模式、一个 RX 模式和可选功能：
 
@@ -74,7 +79,7 @@ ASYNC 控制 WriteAsync / ReadAsync，并依赖 DMA。TX/RX 的具体模式与�
 不再分别设置 CMake 开关。依赖 OFF 时 CMake 报错，必须显式开启。
 
 关闭的模式在初始化时返回 `A_STATUS_UNSUPPORTED`。关闭 DMA 时 Direct 的声明与实现
-均不参与构建，关闭 ASYNC 时异步接口与 TX 队列不参与构建；调用方应按对应 HAS 宏编译。
+均不参与构建，关闭 ASYNC 时异步接口不参与构建；调用方应按对应 HAS 宏编译。
 纯轮询无需 IRQ/DMA 后端。启用功能但硬件不支持时仍返回 UNSUPPORTED。
 
 ## 中断回调与任务等待
@@ -173,10 +178,9 @@ DMA，与 `ReadDirect()` 互斥；需要同步零拷贝时初始化选择 pollin
 未启用 IDLE 时，Read/ReadAsync 的 DMA 进度通知发生在半满或满中断，数据可见延迟
 由 ring 大小与波特率决定；设置 `ADEV_USART_OPTION_RX_IDLE` 可在帧间空闲时提前唤醒。
 
-`aDevUsartTxQueue` 是 `aDevUsart` 内的 FIFO 扩展，用调用者提供的 request 数组保存多个请求，
-内部仍由 aDev 单次 DMA 发送。成功提交后每个 buffer 都保持有效到该请求的 callback
-返回。队列满时 Submit 返回 `A_STATUS_BUSY`；CancelAll 会对活动与等待中的每个请求
-分别产生一次取消终结 callback。业务 callback 不在 ISR 中执行。
+发送排队由应用管理，设备层只接受单次 WriteAsync。应用可以用一个 TX 任务消费业务
+队列，按顺序同步发送，或由完成回调通知该任务提交下一项。应用负责排队超时、取消
+未提交项以及 payload 生命周期；需要严格顺序时，不允许其他任务绕过发送所有者。
 
 ```c
 static void usartEvent(aDevUsartEvent_t event, void *argument)
@@ -226,7 +230,7 @@ Direct 不隐式打乱 stream 数据：TX ring 或 DMA buffered 分块尚未清�
 
 ReadAsync 的请求结构只含等待超时、callback 和用户参数；DMA 使用初始化配置的
 `rx_buffer/rx_buffer_size`，不从 ReadAsync 请求取得额外 buffer。ReadAsync 返回
-`aDevUsartReadToken_t`，取消时传入对应 token。WriteAsync 与 TX queue 请求仍由调用者
+`aDevUsartReadToken_t`，取消时传入对应 token。WriteAsync 请求仍由调用者
 提供 TX payload，且在完成 callback 前保持有效。
 
 ```c
@@ -267,4 +271,4 @@ device 层不管理产品编号或全局设备目录。应用在 app/devices/usa
 系统业务使用 appSystemConsoleInit(id, &handle) 初始化 console 实例并获取共享借用句柄。
 不使用分散注册或设备链接段。借用方不得 DeInit/Destroy。
 
-完整生命周期与错误处理见 [device_registry.md](../../docs/device_registry.md)。
+完整生命周期与错误处理见 [应用设备初始化](../../docs/architecture.md)。

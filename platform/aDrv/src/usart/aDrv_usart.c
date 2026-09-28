@@ -178,11 +178,11 @@ aStatus_t aDrvUsartDeInitStatic(aDrvUsartHandle_t *handle)
         return A_STATUS_NOT_READY;
     }
 
-#if ADRV_USART_HAS_ASYNC
+#if ADRV_USART_ASYNC_ENABLE
     (void)aDrvUsartAsyncTxAbort(handle);
     (void)aDrvUsartAsyncRxAbort(handle);
 #endif
-#if ADRV_USART_HAS_INTERRUPT
+#if ADRV_USART_INTERRUPT_ENABLE
     aDrvUsartDisableInterrupt(handle);
 #endif
     aDrvPrivateUsartHandleSet(handle->id, NULL);

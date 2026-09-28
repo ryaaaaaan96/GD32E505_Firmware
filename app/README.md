@@ -12,7 +12,7 @@
 无独立 Open、统一设备初始化入口或分散注册。仅启动阶段单线程调用。
 设备实例参数归属 devices 下对应的 .c 文件。模式组合、缓冲区大小等必要的配置宏保留在当前 .c 顶部；简单参数直接填写在配置结构体中，模式、引脚等保留接口提供的具名常量。闪烁周期、Shell 读写超时分别定义在 status.c、system.c 中，不放进应用功能开关头文件。平台功能裁剪仍由 config 下的 CMake 配置控制。
 
-详见 [设备按实例初始化](../docs/device_registry.md) 和 [接口规范](../docs/interface_contract.md)。
+详见 [设备按实例初始化](../docs/architecture.md) 和 [接口规范](../docs/interface_contract.md)。
 
 当前不做运行时跨设备资源冲突检查。后续可使用 Python/CMake 增加构建期告警，尚未实现；设备参数、能力和初始化错误检查继续保留。
 
