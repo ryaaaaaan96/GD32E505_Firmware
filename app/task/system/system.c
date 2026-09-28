@@ -1,17 +1,15 @@
 #include "system.h"
 #include "status.h"
 #include "aOS.h"
+#include "app_config.h"
 #if ASHELL_ENABLED
 #include "app_system_device.h"
 #include "aDrv_basic.h"
 #include "aShell.h"
 #endif
 
-/* The application owns task scheduling; aShell only processes input. */
+/* 应用层负责创建和调度任务，aShell 只负责处理输入。 */
 #if ASHELL_ENABLED
-
-#define ASYSTEM_SHELL_IO_TIMEOUT A_TIMEOUT_MS(20U)
-#define ASYSTEM_SHELL_TASK_STACK_WORDS 512U
 
 static aDevUsartHandle_t *s_shell_usart;
 
@@ -19,9 +17,10 @@ static void shellTask(void *argument)
 {
     (void)argument;
     for (;;) {
-        (void)aShellProcess();
-        /* Also bounds retries when transport returns immediately on error. */
-        aOSDelayMs(1U);
+        /* 成功时继续排空输入；错误或非阻塞空读时退避。 */
+        if (aShellProcess() != A_STATUS_OK) {
+            aOSDelayMs(ASYSTEM_SHELL_RETRY_DELAY_MS);
+        }
     }
 }
 
@@ -66,8 +65,8 @@ static aStatus_t shellInit(void)
                 (unsigned long)core_clock_hz);
     aShellPrint("system peripherals initialized\r\n");
 
-    status = aOSCreateTask(shellTask, "shell", ASYSTEM_SHELL_TASK_STACK_WORDS,
-                          NULL, AOS_TASK_PRIO_LOW, NULL);
+    status = aOSCreateTask(shellTask, "shell", ASYSTEM_SHELL_TASK_STACK_BYTES,
+                          NULL, ASYSTEM_SHELL_TASK_PRIORITY, NULL);
     if (status != A_STATUS_OK) (void)aShellDeInit();
     return status;
 }
@@ -81,7 +80,7 @@ static aStatus_t shellInit(void)
 
 #endif
 
-/* Basic services: each function owns its initialization details. */
+/* 基础服务编排：各功能在自己的初始化函数中完成具体配置。 */
 aStatus_t aSystemInit(void)
 {
     aStatus_t status = statusInit();

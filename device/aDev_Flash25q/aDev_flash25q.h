@@ -16,6 +16,7 @@
 #include "aDrv_qspi.h"
 #include "aLib.h"
 
+/** @brief 快速读开关命令；IoCtl argument 按指针数值解释，不解引用。 */
 #define ADEV_FLASH_IOCTL_QSPI_FAST_READ 0x01U
 
 /** @brief aDevFlash25qConfig_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */
@@ -26,11 +27,11 @@ typedef struct {
 
 /** @brief aDevFlash25qHandle_t 驱动/设备状态；调用方提供存储，字段仅由所属模块维护。 */
 typedef struct {
-    aDrvQspiHandle_t qspi;
-    void *operation_mutex;
-    uint32_t size;
-    aBool_t initialized;
-    aBool_t fast_read;
+    aDrvQspiHandle_t qspi; /**< 底层 QSPI 句柄。 */
+    void *operation_mutex; /**< 模块创建的 aOS 锁，业务不可解引用。 */
+    uint32_t size; /**< 配置容量，字节；不是已探测容量。 */
+    aBool_t initialized; /**< 设备和操作锁均就绪的状态。 */
+    aBool_t fast_read; /**< 是否使用带空周期的快速读指令。 */
 } aDevFlash25qHandle_t;
 
 /**

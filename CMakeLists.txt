@@ -16,8 +16,6 @@ aclass_select(
 if(NOT DEFINED ACLASS_CONFIG_FILE)
     set(ACLASS_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/config/aclass_config.cmake")
 endif()
-include("${ACLASS_CONFIG_FILE}")
-include(cmake/aclass_resolve.cmake)
 
 project(
     ${FIRMWARE_NAME}
@@ -27,7 +25,6 @@ project(
 
 aclass_initialize()
 
-add_subdirectory(platform)
-add_subdirectory(device)
-add_subdirectory(func)
+include(cmake/AclassLibraries.cmake)
+aclass_add_libraries(CONFIG_FILE "${ACLASS_CONFIG_FILE}")
 add_subdirectory(app)

@@ -23,6 +23,7 @@ typedef enum {
     ADRV_GPIO_ANALOG,
 } aDrvGpioMode_t;
 
+/** @brief GPIO 物理电平，不包含 LED/DE 等设备有效电平语义。 */
 typedef enum {
     ADRV_GPIO_LOW = 0,
     ADRV_GPIO_HIGH = 1,

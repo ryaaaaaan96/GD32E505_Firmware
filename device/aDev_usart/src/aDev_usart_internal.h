@@ -5,7 +5,8 @@
 #include "aOS.h"
 
 #include <stdatomic.h>
-#define ADEV_USART_NEEDS_IRQ (ADEV_USART_INTERRUPT_ENABLE || ADEV_USART_DMA_ENABLE || ADEV_USART_RS485_ENABLE)
+#define ADEV_USART_DMA_BACKEND_ENABLE (ADRV_USART_DMA_ENABLE && ADRV_USART_INTERRUPT_ENABLE)
+#define ADEV_USART_NEEDS_IRQ (ADEV_USART_INTERRUPT_ENABLE || ADEV_USART_DMA_BACKEND_ENABLE || ADEV_USART_RS485_ENABLE)
 
 /** @brief TX 方向当前所有权；应用不得直接修改。 */
 typedef enum {
@@ -13,6 +14,8 @@ typedef enum {
     ADEV_USART_TX_STREAM,
     ADEV_USART_TX_DIRECT,
     ADEV_USART_TX_ASYNC,
+    ADEV_USART_TX_CALLBACK,
+    ADEV_USART_TX_DRAINING,
 } aDevUsartTxState_t;
 
 /** @brief RX 方向当前所有权；应用不得直接修改。 */
@@ -20,24 +23,13 @@ typedef enum {
     ADEV_USART_RX_IDLE,
     ADEV_USART_RX_STREAM,
     ADEV_USART_RX_DIRECT,
+    ADEV_USART_RX_ASYNC,
 } aDevUsartRxState_t;
-
-typedef struct aDevUsartReadNode aDevUsartReadNode_t;
-
-struct aDevUsartReadNode {
-    aDevUsartReadNode_t *next;
-    aDevUsartReadToken_t token;
-    aDevUsartReadRequest_t request;
-    aTimepoint_t deadline;
-    aDevUsartRxEvent_t event;
-    uint8_t snapshot[64];
-};
 
 struct aDevUsartHandle {
     aDrvUsartHandle_t drv_handle;
     aDevUsartRS485Config_t rs485;
     aDrvGpioHandle_t de_gpio;
-    aDrvGpioHandle_t re_gpio;
     volatile aBool_t rs485_transmitting;
     aDevUsartMode_t mode;
     uint8_t interrupt_priority;
@@ -61,14 +53,9 @@ struct aDevUsartHandle {
     void *tx_mutex;
     void *rx_wait_object;
     void *tx_wait_object;
-    aDevUsartEventCallback_t event_callback;
-    void *event_argument;
-    aOSMutex_t event_mutex;
-    aOSWorkItem_t event_work;
-    aOSWorkItem_t tx_completion_work;
-    aOSWorkItem_t rx_completion_work;
+    aBool_t tx_draining;
+    aTimepoint_t tx_deadline;
     aOSTimer_t tx_deadline_timer;
-    atomic_uint_least32_t pending_events;
     atomic_bool tx_completion_claimed;
     aDevUsartTxEvent_t tx_completion_event;
     aDevUsartTxCallback_t tx_callback;
@@ -76,12 +63,9 @@ struct aDevUsartHandle {
     const void *tx_async_buffer;
     size_t tx_async_size;
     aStatus_t tx_async_status;
-    aDevUsartReadNode_t *rx_request_head;
-    aDevUsartReadNode_t *rx_request_tail;
-    aDevUsartReadNode_t *rx_complete_head;
-    aDevUsartReadNode_t *rx_complete_tail;
-    aDevUsartReadToken_t rx_next_token;
-    aOSTimer_t rx_deadline_timer;
+    aDevUsartRxCallback_t rx_callback;
+    void *rx_callback_argument;
+    volatile aBool_t rx_dispatching;
     volatile uint32_t idle_event_count;
     volatile aBool_t rx_overflow;
     volatile aStatus_t rx_error;
@@ -100,11 +84,7 @@ aStatus_t aDevUsartRS485DeInit(aDevUsartHandle_t *handle);
 aStatus_t aDevUsartRS485Begin(aDevUsartHandle_t *handle);
 aStatus_t aDevUsartRS485Complete(aDevUsartHandle_t *handle);
 
-void aDevUsartNotifyEvent(aDevUsartHandle_t *handle,
-                          aDevUsartEvent_t event);
-void aDevUsartEventWork(void *argument);
-void aDevUsartAsyncTxWork(void *argument);
-void aDevUsartAsyncRxWork(void *argument);
+
 void aDevUsartRxDmaComplete(void *argument);
 void aDevUsartRxDmaNotifyFromISR(aDevUsartHandle_t *handle);
 void aDevUsartAsyncTxTimeout(void *argument);
@@ -121,7 +101,7 @@ void aDevUsartRs485ArmComplete(aDevUsartHandle_t *handle);
 aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
                               const aDevUsartConfig_t *config);
 
-#if ADEV_USART_DMA_ENABLE || ADEV_USART_INTERRUPT_ENABLE
+#if ADEV_USART_DMA_BACKEND_ENABLE || ADEV_USART_INTERRUPT_ENABLE
 static inline aStatus_t wait_for_event(void *wait_object,
                                 const aTimepoint_t *end)
 {
@@ -141,7 +121,7 @@ static inline aSSize_t fail_with_wait_status(aStatus_t status,
 }
 
 
-#if ADEV_USART_DMA_ENABLE
+#if ADEV_USART_DMA_BACKEND_ENABLE
 /* TC wakes TX and DMA completion/error wakes RX. A bounded sleeping check
  * also detects TX DMA faults on drivers without a DMA-error IRQ callback. */
 static inline aStatus_t direct_wait(aOSWaitObject_t object, const aTimepoint_t *end,

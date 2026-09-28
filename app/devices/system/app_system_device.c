@@ -1,11 +1,9 @@
 #include "app_system_device.h"
-
-#define APP_STATUS_LED_PIN ADRV_PIN(ADRV_GPIO_PORT_A, 8)
-#define APP_STATUS_LED_ACTIVE_LEVEL ADEV_LED_ACTIVE_LOW
+#include "app_config.h"
 
 enum { INSTANCE_COLD, INSTANCE_STARTING, INSTANCE_DONE };
 
-/* System status indicator. */
+/* 系统状态指示灯实例。 */
 static const aDevLedConfig_t led_config = {
     .pin = APP_STATUS_LED_PIN,
     .active_level = APP_STATUS_LED_ACTIVE_LEVEL,
@@ -42,19 +40,11 @@ aStatus_t appSystemStatusLedInit(appLedId_t id, aDevLedHandle_t **handle_out)
     }
 }
 
-/* System console transport. */
+/* 系统控制台串口实例，随 Shell 功能一同裁剪。 */
 #if ASHELL_ENABLED
 
-/* Console settings are private to this device instance. */
-#define APP_CONSOLE_RX_BUFFER_SIZE 256U
-#define APP_CONSOLE_TX_BUFFER_SIZE 256U
-#define APP_CONSOLE_USART_MODE                  \
-    (ADEV_USART_TX_INTERRUPT_BUFFERED |         \
-     ADEV_USART_RX_INTERRUPT_BUFFERED |         \
-     ADEV_USART_OPTION_RX_IDLE)
-
-/* Product resources are private to this file. The business-facing identity is
- * APP_USART_CONSOLE; no public global usart_handle or device-specific getter exists. */
+/* 配置宏统一放在 app_config.h；缓冲区和句柄仍由本文件私有持有。
+ * 业务通过 APP_USART_CONSOLE 按实例初始化获取句柄，不暴露全局句柄或独立 getter。 */
 static uint8_t rx_buffer[APP_CONSOLE_RX_BUFFER_SIZE];
 static uint8_t tx_buffer[APP_CONSOLE_TX_BUFFER_SIZE];
 
@@ -76,10 +66,7 @@ static const aDevUsartConfig_t usart_config = {
     .rs485 = {
         .enabled = A_FALSE,
         .de_pin = ADRV_PIN_NONE,
-        .re_pin = ADRV_PIN_NONE,
         .de_active_level = ADRV_GPIO_HIGH,
-        .re_active_level = ADRV_GPIO_LOW,
-        .receive_during_tx = A_FALSE,
     },
 };
 

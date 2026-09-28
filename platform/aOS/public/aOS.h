@@ -18,6 +18,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/**
+ * @brief 应用任务优先级预设，数值越大优先级越高；与 NVIC 规则不同。
+ * 使用前确保后端最大优先级数量覆盖所选值；REALTIME 仅是等级名，
+ * 不保证硬实时截止时间。
+ */
 #define AOS_TASK_PRIO_LOWEST 1U
 #define AOS_TASK_PRIO_LOW 2U
 #define AOS_TASK_PRIO_BELOW_NORMAL 3U
@@ -26,7 +31,11 @@
 #define AOS_TASK_PRIO_HIGH 6U
 #define AOS_TASK_PRIO_REALTIME 7U
 
-/** @brief 任务入口，argument 为创建参数；任务不得直接从入口返回。 */
+/**
+ * @brief 任务入口，由后端调用；允许正常返回，后端负责结束当前任务。
+ * @param[in] argument 创建任务时传入的借用参数，可以为 NULL。
+ * @note 业务负责退出协议和资源清理，禁止在仍持有共享资源时删除任务。
+ */
 typedef void (*aOSTaskFunction_t)(void *argument);
 
 /** @brief 借用的 OS 任务标识，删除后失效；调用者不可解引用。 */
@@ -48,7 +57,11 @@ typedef void *aOSRecursiveMutex_t;
 /** @brief 由 aOSTimerCreate 创建的一次性 OS 软件定时器。 */
 typedef void *aOSTimer_t;
 
-/** @brief 一次性定时器服务任务回调；argument 为创建参数，不得阻塞。 */
+/**
+ * @brief 一次性定时器服务任务回调，不是硬件 ISR。
+ * @param[in] argument 创建定时器时传入的借用参数，可以为 NULL。
+ * @warning 不得阻塞或执行耗时业务，否则推迟其他软件定时器的处理。
+ */
 typedef void (*aOSTimerCallback_t)(void *argument);
 
 /** @brief ISR 临界区保存令牌，不应由调用者构造。 */
@@ -56,7 +69,11 @@ typedef uintptr_t aOSCriticalState_t;
 
 typedef struct aOSWorkItem aOSWorkItem_t;
 
-/** @brief 共享工作任务回调；argument 为提交参数，不得执行阻塞等待。 */
+/**
+ * @brief 共享工作任务回调，与其他工作项串行执行。
+ * @param[in] argument 提交时传入的借用参数，可以为 NULL。
+ * @warning 任务上下文不意味着可阻塞；耗时业务应转交应用自己的任务。
+ */
 typedef void (*aOSWorkFunction_t)(void *argument);
 
 /** @brief 调用方存储的工作项；字段由 aOS 管理，不可在运行/排队期间改写。 */
@@ -66,8 +83,10 @@ struct aOSWorkItem {
     void *argument; /**< 借用的回调参数。 */
     aBool_t queued; /**< 是否处于待执行队列。 */
     aBool_t running; /**< 是否正在执行回调。 */
+    aBool_t canceling; /**< 正在取消，拒绝执行中的工作项重新提交。 */
 };
 
+/** @brief 最近一次诊断事件；不代表所有错误都有对应自动处理。 */
 typedef enum {
     AOS_FAULT_NONE = 0U,
     AOS_FAULT_APP_INIT = 1U,
@@ -87,10 +106,12 @@ typedef struct {
 extern aOSFaultRecord_t g_aOSFaultRecord;
 
 /**
- * @brief 初始化 OS 适配公共状态并创建共享工作任务。
- * @retval A_STATUS_OK 初始化成功；已有工作任务时不会重复创建。
+ * @brief 初始化 OS 适配公共状态，仅在启用 workqueue 时创建共享工作任务。
+ * @retval A_STATUS_OK 初始化成功；重复调用不会重新创建资源。
  * @retval A_STATUS_NO_MEMORY 无法创建工作任务。
- * @note 启动阶段串行调用；不启动调度器。重复调用仍会重置启动 errno 和故障记录。
+ * @retval A_STATUS_NOT_READY 首次调用时调度器已经启动。
+ * @note 首次初始化必须在调度器启动前串行调用，且不能从 ISR 调用。
+ * 不启动调度器；重复调用不重复分配资源，也不清除 errno 或故障记录。
  */
 aStatus_t aOSInit(void);
 
@@ -105,27 +126,36 @@ aStatus_t aOSValidateIsrPriority(uint32_t priority);
 
 /**
  * @brief 创建任务，不负责应用模块初始化。
- * @param[in] function 任务入口，不能直接返回。
+ * @param[in] function 任务入口，允许正常返回。
  * @param[in] name 非空任务名，由后端按名称长度上限保存。
- * @param[in] stack_words 非零栈容量，单位为后端栈字，不是字节。
+ * @param[in] stack_bytes 栈容量，单位为字节；0 使用后端默认容量，向上对齐。
  * @param[in] argument 原样传给任务；其对象须在任务访问期间有效。
- * @param[in] priority 逻辑优先级，小于后端最大优先级数量。
+ * @param[in] priority 逻辑优先级 AOS_TASK_PRIO_LOWEST..REALTIME；后端映射，不保证调度效果一致。
  * @param[out] handle 可选输出，NULL 表示不获取句柄。
  * @retval A_STATUS_OK 创建成功。
- * @retval A_STATUS_INVALID_PARAM 入口、名称、栈容量或优先级无效。
+ * @retval A_STATUS_INVALID_PARAM 入口、名称、栈容量超出后端范围或优先级无效。
  * @retval A_STATUS_NO_MEMORY 分配失败。
  * @note 调度器启动后，新任务可能在本函数返回前运行。
  */
 aStatus_t aOSCreateTask(aOSTaskFunction_t function, const char *name,
-                        uint16_t stack_words, void *argument,
+                        size_t stack_bytes, void *argument,
                         uint32_t priority, aOSTaskHandle_t *handle);
 
 /**
- * @brief 删除指定任务。
+ * @brief 强制删除指定任务（后端受限能力）；普通关闭优先使用协作退出。
  * @param[in] handle 有效任务句柄；NULL 不操作，不表示删除当前任务。
  * @warning 不自动释放业务资源；先停止任务访问共享资源，禁止持锁强制删除。
  */
 void aOSDeleteTask(aOSTaskHandle_t handle);
+
+/**
+ * @brief 正常结束当前应用任务，不返回。
+ * @note 仅在调度器运行时的应用任务上下文调用；不能从 ISR、临界区、
+ *       调度器挂起区或 OS 服务回调（定时器/workqueue）中调用。
+ * @warning 调用前必须释放持有的锁和业务资源，并结束对该任务的外部引用。
+ *          不自动清理业务内存；FreeRTOS 后端的栈/任务控制块由空闲任务稍后回收。
+ */
+void aOSTaskExit(void) ALIB_NORETURN;
 
 /**
  * @brief 从 OS 堆分配内存，不清零。
@@ -212,56 +242,69 @@ void aOSWaitObjectNotify(aOSWaitObject_t object);
 void aOSWaitObjectNotifyFromISR(aOSWaitObject_t object);
 
 /**
- * @brief 查询当前任务是否为 aOS 共享工作任务。
- * @return 是则 A_TRUE；未启动调度器或未创建工作任务则 A_FALSE。
- * @note 仅任务上下文使用。
+ * @brief 非阻塞条件通知，自动选择任务或 ISR 后端。
+ * @param[in] object 等待对象；NULL 不操作，对象在调用期间必须有效。
+ * @note 可从设备事件回调调用；重复通知合并，不存储事件或数据。
+ *       ISR 优先级必须符合 OS API 限制。等待仍使用 aOSWaitObjectWait。
+ */
+void aOSNotifyGive(aOSWaitObject_t object);
+
+#if AOS_WORKQUEUE_ENABLE
+/**
+ * @brief 查询是否在系统 workqueue 线程中，仅任务上下文调用。
+ * @return 是则 A_TRUE，否则 A_FALSE。
  */
 aBool_t aOSIsWorkContext(void);
 
 /**
- * @brief 重置工作项，尚不提交执行。
- * @param[out] item 调用方长期持有的状态，NULL 不操作。
- * @warning 只对未排队且未运行的对象调用；不得初始化覆盖在途工作项。
+ * @brief 初始化工作项并固定处理函数，不提交执行。
+ * @param[out] item 应用长期持有的工作项。
+ * @param[in] function 非空处理函数，在线程上下文执行。
+ * @param[in] argument 借用参数，保持有效至取消/排空成功。
+ * @warning 只能初始化空闲项；运行期间不得修改处理函数、参数或工作项存储。
  */
-void aOSWorkItemInit(aOSWorkItem_t *item);
+void aOSWorkItemInit(aOSWorkItem_t *item,
+                      aOSWorkFunction_t function, void *argument);
 
 /**
- * @brief 向共享工作任务提交短小的非阻塞回调。
- * @param[in,out] item 已初始化工作项；直到不再排队/运行都必须有效。
- * @param[in] function 非空回调，在工作任务串行执行，不是 ISR。
- * @param[in] argument 原样传入，可为 NULL；依赖对象保持有效至执行结束。
- * @retval A_STATUS_OK 已排队；正在执行但尚未重新排队的项也可再次提交。
- * @retval A_STATUS_BUSY 已在队列中，本次不会覆盖已有回调。
- * @retval A_STATUS_NOT_READY aOSInit 尚未创建工作任务。
- * @retval A_STATUS_INVALID_PARAM item 或 function 为空。
+ * @brief 提交系统队列，自动选择任务/ISR 路径。
+ * @param[in,out] item 已初始化工作项。
+ * @retval A_STATUS_OK 已排队，或已在队列中合并本次提交（不改变原位置）。
+ * @retval A_STATUS_BUSY 正在取消。
+ * @retval A_STATUS_NOT_READY 服务未初始化。
+ * @retval A_STATUS_INVALID_PARAM 工作项/处理函数无效。
+ * @note 执行中的项可再排队一次；无堆分配。ISR 优先级必须符合 OS 限制。
  */
-aStatus_t aOSWorkSubmit(aOSWorkItem_t *item,
-                        aOSWorkFunction_t function, void *argument);
+aStatus_t aOSWorkSubmit(aOSWorkItem_t *item);
 
 /**
- * @brief 从 ISR 提交工作项，在共享任务而非 ISR 执行回调。
- * @param[in,out] item 生命周期同 aOSWorkSubmit()。
- * @param[in] function 非空、短小且不得阻塞的回调。
- * @param[in] argument 用户参数，可为 NULL。
- * @retval A_STATUS_OK 已排队。
- * @retval A_STATUS_BUSY 已排队。
- * @retval A_STATUS_INVALID_PARAM 空参数或工作任务尚未创建。
- * @warning IRQ 优先级必须通过 aOSValidateIsrPriority()。
+ * @brief 非阻塞取消排队执行，任务/ISR 均可调用。
+ * @param[in,out] item 已初始化工作项。
+ * @retval A_STATUS_OK 已空闲或成功移除排队项。
+ * @retval A_STATUS_BUSY 处理函数仍在执行；拒绝其重新提交直到退出。
+ * @retval A_STATUS_INVALID_PARAM 空指针。
+ * @note 不打断正在执行的函数，返回 BUSY 时不能释放对象。
  */
-aStatus_t aOSWorkSubmitFromISR(aOSWorkItem_t *item,
-                               aOSWorkFunction_t function, void *argument);
+aStatus_t aOSWorkCancel(aOSWorkItem_t *item);
 
 /**
- * @brief 等待工作项既未排队也未运行。
- * @param[in,out] item 有效工作项，等待期间不能释放。
- * @param[in] timeout 合法超时，调用方须先停止新的提交。
- * @retval A_STATUS_OK 已空闲。
- * @retval A_STATUS_BUSY 仍忙且当前位于工作任务或调度器未运行。
- * @retval A_STATUS_TIMEOUT 非工作任务等待到期，包含 NO_WAIT 时仍忙。
- * @retval A_STATUS_INVALID_PARAM item 为空。
- * @note 任务上下文生命周期屏障，不取消工作；有效等待期间以 1 ms 延时检查。
+ * @brief 取消并等待在途函数退出，仅普通任务调用。
+ * @param[in,out] item 工作项；调用前须阻止其他生产者再次提交。
+ * @param[in] timeout 总等待预算。
+ * @return OK 表示可回收对象；TIMEOUT 表示仍被引用；工作线程/ISR 返回 BUSY。
+ * @note 失败不能释放对象；不得持有工作函数所需的锁。
+ */
+aStatus_t aOSWorkCancelSync(aOSWorkItem_t *item, aTimeout_t timeout);
+
+/**
+ * @brief 等待工作项不再排队或运行，不取消。
+ * @param[in,out] item 有效工作项。
+ * @param[in] timeout 等待预算；调用前须停止新的提交。
+ * @return OK 已空闲，TIMEOUT 超时，BUSY 上下文不允许等待，INVALID_PARAM 参数错误。
+ * @note 生命周期同步而非消息计数；当前后端使用 1 ms 延时检查。
  */
 aStatus_t aOSWorkWaitIdle(aOSWorkItem_t *item, aTimeout_t timeout);
+#endif
 
 /**
  * @brief 创建一次性软件定时器，尚不启动。
@@ -271,6 +314,7 @@ aStatus_t aOSWorkWaitIdle(aOSWorkItem_t *item, aTimeout_t timeout);
  * @retval A_STATUS_OK 创建成功。
  * @retval A_STATUS_INVALID_PARAM 参数为空或已有定时器。
  * @retval A_STATUS_NO_MEMORY 分配失败。
+ * @retval A_STATUS_NOT_READY ISR 上下文调用。
  */
 aStatus_t aOSTimerCreate(aOSTimer_t *timer, aOSTimerCallback_t callback,
                          void *argument);
@@ -280,26 +324,34 @@ aStatus_t aOSTimerCreate(aOSTimer_t *timer, aOSTimerCallback_t callback,
  * @param[in] timer 有效定时器。
  * @param[in] milliseconds 正延时，按 OS tick 向上取整。
  * @retval A_STATUS_OK 控制命令已入队。
- * @retval A_STATUS_BUSY 定时器命令队列满。
+ * @retval A_STATUS_BUSY 命令队列满、正在销毁或其他上下文回调尚未退出。
  * @retval A_STATUS_INVALID_PARAM 空对象或延时为零。
- * @note 不同步等待定时器服务处理命令。
+ * @retval A_STATUS_NOT_READY ISR 上下文调用。
+ * @note 仅任务上下文，不同步等待定时器服务处理命令；允许自身回调重新计时。
+ *       生命周期操作由调用方串行化；失败不替换上一次有效计时。
  */
 aStatus_t aOSTimerStart(aOSTimer_t timer, uint32_t milliseconds);
 
 /**
- * @brief 尝试投递停止定时器的命令。
+ * @brief 立即禁用尚未进入的回调，并尝试投递停止命令。
  * @param[in] timer 有效对象；NULL 不操作。
- * @warning 当前后端不报告队列满错误；返回不是回调退出屏障，也不保证已停止。
+ * @retval A_STATUS_OK 命令已入队或对象为空。
+ * @retval A_STATUS_BUSY 命令队列满，但软件回调已被禁用。
+ * @retval A_STATUS_NOT_READY ISR 上下文调用，未修改对象。
+ * @note 仅任务上下文，非阻塞；已进入的回调可继续执行。不是退出屏障。
  */
-void aOSTimerStop(aOSTimer_t timer);
+aStatus_t aOSTimerStop(aOSTimer_t timer);
 
 /**
- * @brief 投递停止/删除命令并释放包装对象。
- * @param[in,out] timer 对象槽，返回时置 NULL；空槽不操作。
- * @warning 当前后端没有在途回调退出屏障。调用方须确保回调不会再访问包装对象
- *          或 argument，禁止与到期回调并发销毁；不可在定时器服务回调内阻塞删除。
+ * @brief 同步删除定时器，等待服务队列屏障后释放资源。
+ * @param[in,out] timer 对象槽，成功置 NULL；失败保留对象供重试，空槽成功。
+ * @retval A_STATUS_OK 在途回调已退出，定时器不再访问 argument。
+ * @retval A_STATUS_NOT_READY ISR 或调度器未运行。
+ * @retval A_STATUS_BUSY 定时服务自身调用，或命令提交失败。
+ * @note 仅普通任务；可能阻塞。不得持有回调所需的锁，不得与其他生命周期
+ *       操作并发。回调投递的工作须由调用方另行排空，本屏障不等待其他任务。
  */
-void aOSTimerDestroy(aOSTimer_t *timer);
+aStatus_t aOSTimerDestroy(aOSTimer_t *timer);
 
 /**
  * @brief 进入当前后端任务临界区。

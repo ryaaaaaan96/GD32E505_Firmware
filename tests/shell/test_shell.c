@@ -3,6 +3,7 @@
 #include "shell.h"
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 
 static unsigned allocations, mutexes, handled, removed;
 static unsigned fail_at, allocation_attempt;
@@ -28,7 +29,7 @@ void shellRemove(Shell *s) { assert(s); ++removed; }
 void shellHandler(Shell *s, char c) { assert(s && c == 'x'); ++handled; }
 void shellWriteString(Shell *s, const char *p) { assert(s && p); }
 static int16_t read_input(char *p, uint16_t n)
-{ assert(n == 1); *p = 'x'; return input_result; }
+{ assert(n == 64); memset(p, 'x', n); return input_result; }
 static int16_t write_output(char *p, uint16_t n) { (void)p; return (int16_t)n; }
 int main(void)
 {
@@ -47,7 +48,11 @@ int main(void)
     assert(aShellInit(&config) == A_STATUS_BUSY);
     assert(aShellProcess() == A_STATUS_OK && handled == 1);
     input_result = 0;
-    assert(aShellProcess() == A_STATUS_OK && handled == 1);
+    assert(aShellProcess() == A_STATUS_BUSY && handled == 1);
+    input_result = 64;
+    assert(aShellProcess() == A_STATUS_OK && handled == 65);
+    input_result = 65;
+    assert(aShellProcess() == A_STATUS_ERROR && handled == 65);
     input_result = -1;
     assert(aShellProcess() == A_STATUS_ERROR);
     aShellPrint("test %d", 1);

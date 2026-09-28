@@ -3,7 +3,7 @@
 #include "aDrv_dma.h"
 #include "aDrv_usart_internal.h"
 
-#define ADRV_USART_ASYNC_MAX_TRANSFER 65535U
+#define ADRV_USART_DMA_MAX_TRANSFER 65535U
 
 /*
  * GD32E505 fixed USART DMA request mapping.
@@ -228,8 +228,8 @@ aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *handle,
         return status;
     }
 
-    transfer_size = size > ADRV_USART_ASYNC_MAX_TRANSFER
-                        ? ADRV_USART_ASYNC_MAX_TRANSFER
+    transfer_size = size > ADRV_USART_DMA_MAX_TRANSFER
+                        ? ADRV_USART_DMA_MAX_TRANSFER
                         : size;
     status = aDrvDmaTransDisable(&state->tx_dma);
     if (status == A_STATUS_OK) {
@@ -336,7 +336,7 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
     aStatus_t status;
 
     if ((handle == NULL) || (buffer == NULL) || (size == 0U) ||
-        (size > ADRV_USART_ASYNC_MAX_TRANSFER)) {
+        (size > ADRV_USART_DMA_MAX_TRANSFER)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (handle->initialized == 0U) {
@@ -443,7 +443,7 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
 
     if ((handle == NULL) || (buffer == NULL) || (size < 2U) ||
         (callback == NULL) ||
-        (size > ADRV_USART_ASYNC_MAX_TRANSFER) ||
+        (size > ADRV_USART_DMA_MAX_TRANSFER) ||
         (interrupt_priority > 15U)) {
         return A_STATUS_INVALID_PARAM;
     }

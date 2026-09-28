@@ -62,9 +62,10 @@ platform/aDrv/
 CMakeLists 只消费有效配置：aDev 选择是否加入设备 target，aDrv 选择生成的
 `gd32e50x_libopt.h`、SPL 源文件和驱动实现源文件，不在本层推导或改写依赖。
 
-`ADRV_USART_INTERRUPT` 和 `ADRV_USART_ASYNC` 是 resolver 输出的有效能力。异步能力
-依赖 DMA；关闭某项能力时不编译对应实现，aDrv target 通过 public compile
-definition 隐藏该能力的头文件 API。aDev USART 的轮询、INTERRUPT、DMA、ASYNC、RS485 能力按配置裁剪；
+`ADRV_USART_INTERRUPT` 和 `ADRV_USART_DMA` 是 resolver 输出的有效能力。USART DMA 能力
+依赖通用 DMA 驱动，不等于 device 的异步请求 API；关闭某项能力时不编译对应实现，aDrv target 通过 public compile
+definition 隐藏该能力的头文件 API。aDev USART 的 INTERRUPT、DIRECT、ASYNC、RS485 接口按配置裁剪；
+DIRECT 表示用户缓冲区直传，后端在初始化选择；普通 DMA ring 不依赖 DIRECT 开关。
 只启用轮询时不需要 IRQ/DMA。不支持的实例仍返回
 `A_STATUS_UNSUPPORTED`。
 
@@ -118,7 +119,12 @@ aDrv 不依赖 aOS。func 在其上构成 aDataBase（含 FlashDB 所需 FAL 适
 静态句柄；编号及类型明确的接口放在同目录 app_system_device.h。
 通用 device 层仍分别提供 aDevUsart 和 aDevLed，不因为应用组合而合并设备类型。
 
-启动顺序为 main → aDrvInit → aOSInit → aSystemInit → aOSRun。
+启动顺序为 main → aDrvInit → aOSInit → 创建 appInit 任务 → aOSRun。
+调度器启动后，由 main.c 内的 appInitTask 调用 aSystemInit；Shell/status 仍在
+各自模块中创建任务。初始化任务优先级为 HIGH，初始化可能阻塞并允许其他就绪任务运行，
+不承诺所有初始化完成前业务任务绝不执行。初始化成功后自删除，不复用为 workqueue。
+初始化任务通过 aOSTaskExit() 自退出，无需保存全局任务句柄；
+aOSDeleteTask(handle) 仍用于删除指定任务，传入 NULL 保持空操作语义。
 statusInit 调用 appSystemStatusLedInit 并创建状态任务；
 system.c 的 shellInit 调用 appSystemConsoleInit、初始化 Shell，再创建调用 Process 的任务。
 不存在集中初始化全部实例的注册表、链接段或分散加载。
@@ -136,3 +142,12 @@ system.c 的 shellInit 调用 appSystemConsoleInit、初始化 Shell，再创建
 tests/app_devices/run.py 验证初始化、失败、重复调用和 Shell 裁剪，使用硬件替身，
 不代表上板验证。通用契约见[接口规范](interface_contract.md)，USART 细节见
 [USART 设计](usart_design.md)。
+
+## 平台复用边界
+
+更换芯片或 OS 时允许重写 app/devices；引脚、实例和初始化方式属于产品适配。
+aDrv 保持 MCU 驱动定位。Linux 设备可使用独立实现，不要求模拟 IRQ/DMA 寄存器模型。
+共同业务复用操作、错误、超时及所有权契约，不要求复用硬件资源配置。
+当前 MCU 临界区仅针对单核；未来 Linux 后端必须使用实际线程同步，不能以 volatile
+或空临界区代替。现有 Async 来源上下文及 DMA ring 借用模型本轮保持，统一 ISR
+回调与稳定缓冲区交接后置；引脚路由 Python/XML 校验也尚未实现。

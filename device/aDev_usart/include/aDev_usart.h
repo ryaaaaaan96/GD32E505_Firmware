@@ -9,7 +9,7 @@
  * 任务或线程上下文调用，不能在 ISR 中调用。
  *
  * 配置中的缓冲区均由调用者提供，模块不管理这些 DMA/ring 缓冲区的内存。
- * ReadAsync 节点另含 64 字节快照。缓冲区和
+ * 缓冲区和
  * handle 从静态初始化或动态创建成功开始，到 DeInit/Destroy 完成为止必须持续有效。
  * 已初始化的 handle 还会被中断回调引用，禁止复制、移动或在运行期间释放。
  */
@@ -33,25 +33,6 @@
  */
 typedef uint32_t aDevUsartMode_t;
 
-/** @brief 与具体 USART 硬件标志无关的设备事件。 */
-typedef enum {
-    ADEV_USART_EVENT_RX_READY,
-    ADEV_USART_EVENT_RX_IDLE,
-    ADEV_USART_EVENT_TX_SPACE,
-    ADEV_USART_EVENT_TX_COMPLETE,
-    ADEV_USART_EVENT_RX_ERROR,
-} aDevUsartEvent_t;
-
-/**
- * @brief 可选业务事件回调。
- *
- * 回调由 aOS deferred-work 队列投递，在 aOS 工作任务/线程上下文调用，不在
- * USART/DMA ISR 中直接运行。回调仍应短小；耗时业务建议由回调再通知自己的任务。
- * @param[in] event 状态可能变化的事件，不是逐字节数据。
- * @param[in] argument 注册时借用的用户参数，保持有效至在途回调退出。
- */
-typedef void (*aDevUsartEventCallback_t)(aDevUsartEvent_t event,
-                                         void *argument);
 
 /** @brief TX 模式字段及其有效值，三者互斥。 */
 #define ADEV_USART_TX_MASK                 0x00000003U
@@ -78,18 +59,13 @@ typedef void (*aDevUsartEventCallback_t)(aDevUsartEvent_t event,
     (ADEV_USART_TX_MASK | ADEV_USART_RX_MASK | \
      ADEV_USART_OPTION_RX_IDLE)
 
-/** @brief 可选 RS485 GPIO 方向配置，由应用按板级连接填写。 */
+/** @brief 物理连接配置：默认 TTL 直连；启用后为单 DE 控制的 RS485。 */
 typedef struct {
-    /** 默认关闭；与 TX/RX 数据模式独立。当前通过 GPIO 控制方向。 */
+    /** A_FALSE：TTL，不操作方向 GPIO；A_TRUE：RS485，使用下述 DE。 */
     aBool_t enabled;
-    /** 必填 DE 引脚；由 APP 选择，不能与 USART TX/RX 或 RE 重叠。 */
+    /** RS485 时必填 DE 引脚；由 APP 选择，不能与 USART TX/RX 重叠。 */
     aDrvGpioPin_t de_pin;
-    /** 可选接收使能引脚；DE/RE 硬件绑在一起时只填写 de_pin。 */
-    aDrvGpioPin_t re_pin;
     aDrvGpioLevel_t de_active_level; /**< 发送使能的物理电平。 */
-    aDrvGpioLevel_t re_active_level; /**< 接收使能的物理电平。 */
-    /** 独立 RE 引脚存在时，是否在发送期间保持接收（可能收到回显）。 */
-    aBool_t receive_during_tx;
 } aDevUsartRS485Config_t;
 
 /**
@@ -97,6 +73,8 @@ typedef struct {
  *
  * 先调用 aDevUsartConfigStructInit()，再设置硬件、TX/RX 模式及缓冲区。
  * 配置结构仅初始化期间读取；其中的缓冲区必须持续有效到 DeInit 完成。
+ * TX/RX 缓冲区必须互不重叠，运行期间不得被其他设备或业务直接改写。
+ * DMA 缓冲区必须处于硬件可访问的内存；当前接口不自动执行 cache 一致性维护。
  * RS485 默认关闭；启用时需要 TC 中断能力，即使 TX 为轮询模式。
  * 当前不提供自动 DE、方向切换延迟或协议帧间隔配置。
  */
@@ -108,6 +86,7 @@ typedef struct {
      * TX/RX 数据路径与附加选项的组合，默认 TX/RX 均为轮询且不启用 option。
      */
     aDevUsartMode_t mode;
+
 
     /** 可选半双工方向管理；Read 不改变方向，最终 TC 自动释放 DE。 */
     aDevUsartRS485Config_t rs485;
@@ -144,8 +123,8 @@ typedef struct {
 
 /** @brief 可选的 USART 设备能力。 */
 typedef enum {
-    ADEV_USART_CAP_TX_DIRECT,
-    ADEV_USART_CAP_RX_DIRECT,
+    ADEV_USART_CAP_TX_DIRECT, /**< 当前构建与初始化后端是否支持用户缓冲区直传。 */
+    ADEV_USART_CAP_RX_DIRECT, /**< 当前构建与初始化后端是否支持用户缓冲区直收。 */
 } aDevUsartCapability_t;
 
 /** @brief 不透明设备句柄，只能通过 InitStatic/Create 获取。 */
@@ -160,7 +139,7 @@ typedef struct {
 } aDevUsartTxEvent_t;
 
 /**
- * @brief 单次 TX 终态回调，在 aOS 工作任务执行，不得阻塞。
+ * @brief 单次 TX 终态回调，在 IRQ、取消调用者或定时服务上下文执行，不得阻塞。
  * @param[in] handle 原请求所属设备，回调期间不能销毁。
  * @param[in] event 本次终态快照，不得保留 event 指针。
  * @param[in] argument 原请求参数，模块不拥有其内存。
@@ -169,25 +148,24 @@ typedef void (*aDevUsartTxCallback_t)(aDevUsartHandle_t *handle,
                                       const aDevUsartTxEvent_t *event,
                                       void *argument);
 
-/** @brief 单次 RX 请求只产生一个终态事件。 */
+/** @brief 持续 RX 订阅的数据及终止事件。 */
 typedef enum {
-    ADEV_USART_RX_EVENT_DATA_READY,
-    ADEV_USART_RX_EVENT_TIMEOUT,
-    ADEV_USART_RX_EVENT_CANCELLED,
-    ADEV_USART_RX_EVENT_ERROR,
+    ADEV_USART_RX_EVENT_DATA_READY, /**< 交付新数据，订阅继续。 */
+    ADEV_USART_RX_EVENT_CANCELLED, /**< 订阅被显式取消。 */
+    ADEV_USART_RX_EVENT_ERROR, /**< 接收/覆盖检测异常，订阅终止。 */
 } aDevUsartRxEventType_t;
 
-/** @brief RX 请求终态；数据来自节点快照，不直接借出活动 DMA 内存。 */
+/** @brief RX 事件；数据直接借用初始化提供的接收区。 */
 typedef struct {
     aDevUsartRxEventType_t type; /**< 数据、超时、取消或错误。 */
-    const void *buffer; /**< DATA_READY 的稳定快照，仅回调期间有效；其他事件为 NULL。 */
-    size_t offset;       /**< DATA_READY 快照固定为 0。 */
-    size_t length;       /**< 快照字节数，最大 64；其他事件通常为 0。 */
+    const void *buffer; /**< DATA_READY 的连续数据区间，仅回调期间借用。 */
+    size_t offset;       /**< 相对 buffer 的偏移，当前为 0。 */
+    size_t length;       /**< 本次连续区间长度；其他事件为 0。 */
     aStatus_t status; /**< 该终态关联的统一状态码。 */
 } aDevUsartRxEvent_t;
 
 /**
- * @brief RX 单次请求回调，在 aOS 工作任务执行，不得阻塞。
+ * @brief RX 持续数据回调，在事件来源上下文执行，不得阻塞。
  * @param[in] handle 原请求设备；不能在回调内销毁。
  * @param[in] event 终态及借用数据，仅当前回调有效；需要保留时自行复制。
  * @param[in] argument 原请求参数，模块不拥有其内存。
@@ -204,20 +182,17 @@ typedef struct {
     const void *buffer;             /**< DMA 源；回调前不得修改。 */
     size_t size;                    /**< 1..65535 字节。 */
     aTimeout_t timeout;             /**< 正毫秒数或 FOREVER。 */
-    aDevUsartTxCallback_t callback;  /**< 必填，任务上下文执行。 */
+    aDevUsartTxCallback_t callback;  /**< 必填，在事件来源上下文执行。 */
     void *argument;                 /**< 原样传给 callback，可为 NULL。 */
 } aDevUsartWriteRequest_t;
 
-/** @brief 非零 RX 请求标识，仅在所属句柄的本次请求生命周期内使用。 */
-typedef uint32_t aDevUsartReadToken_t;
 
 /**
- * 异步数据等待请求；提交时复制字段，不保存此结构体指针。
+ * 持续异步接收订阅；提交时复制字段，不保存此结构体指针。
  * argument 必须保持有效到 callback 返回。
  */
 typedef struct {
-    aTimeout_t timeout;             /**< 等待新数据的超时；允许 NO_WAIT/FOREVER。 */
-    aDevUsartRxCallback_t callback;  /**< 必填，任务上下文执行。 */
+    aDevUsartRxCallback_t callback;  /**< 必填；通过 ReadAsync 设置，通过 Cancel 解除。 */
     void *argument;                 /**< 原样传给 callback，可为 NULL。 */
 } aDevUsartReadRequest_t;
 
@@ -225,14 +200,14 @@ typedef struct {
 #define ADEV_USART_STATIC_STORAGE_SIZE 1024U
 /** @brief 应用持有的对齐存储区，初始化后至 DeInit 前禁止复制/移动。 */
 typedef union {
-    max_align_t alignment;
-    uint8_t bytes[ADEV_USART_STATIC_STORAGE_SIZE];
+    max_align_t alignment; /**< 保证内部状态的标准最大对齐，不由业务赋值。 */
+    uint8_t bytes[ADEV_USART_STATIC_STORAGE_SIZE]; /**< 私有存储，初始化后不可直接访问。 */
 } aDevUsartStorage_t;
 
 /**
  * @brief 填充 USART 配置默认值。
  *
- * 默认 TX/RX 均使用轮询，中断优先级为 5，不启用 option，所有设备缓冲区
+ * 默认普通 TX/RX 和 Direct TX/RX 后端均使用轮询，中断优先级为 5，不启用 option，所有设备缓冲区
  * 为空；aDrv 子配置由 aDrvUsartConfigStructInit() 初始化。
  *
  * @param[out] config 配置结构；为 NULL 时函数不执行任何操作。
@@ -274,8 +249,8 @@ aStatus_t aDevUsartCreate(const aDevUsartConfig_t *config,
  * @brief 停止传输并反初始化 USART 设备。
  *
  * 函数会终止已启用的 TX/RX DMA、关闭中断和底层 USART。调用期间不得有其他任务
- * 或异步请求正在访问该 handle。函数还会注销业务事件 callback 并等待已排队/执行中
- * 的 callback 退出，因此不可从该 handle 自身的 callback 内调用。成功后静态存储可
+ * 或异步订阅正在访问该 handle；活动操作或回调在途时返回 BUSY。
+ * 不可从该 handle 自身的 callback 内调用。成功后静态存储可
  * 再次传给 InitStatic；动态句柄 DeInit 后仍须 Destroy 释放其存储。
  *
  * @param[in,out] handle 已初始化的设备句柄。
@@ -292,51 +267,6 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle);
  * @warning 遵循 DeInit 的并发/回调限制，不得与任何其他访问并发。
  */
 aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle);
-
-/**
- * @brief 注册或替换 USART 的硬件无关异步事件回调。
- *
- * 注册后，aDev 会在维护完内部缓冲区、DMA 位置和等待对象之后报告设备事件。
- * 回调只用于通知，不拥有传输缓冲区，也不替代 aDevUsartRead()、
- * aDevUsartWrite() 或 aDevUsartWaitTransmitComplete()。
- *
- * 同一 handle 同一时刻只保存一个业务回调。再次调用本函数会原子地替换原回调；
- * 不再需要通知时调用 aDevUsartUnregisterEventCallback()。
- *
- * @param[in,out] handle 已初始化的设备句柄。
- * @param[in] callback 业务事件回调，不得为 NULL。
- * @param[in] argument 调用 callback 时原样传回的用户参数，允许为 NULL。
- *
- * @retval A_STATUS_OK 注册成功。
- * @retval A_STATUS_INVALID_PARAM handle 或 callback 为空。
- * @retval A_STATUS_NOT_READY USART 尚未初始化。
- *
- * @warning 只能在任务或线程上下文调用。事件会合并为待处理位，因此回调表示
- *          “状态可能变化”，不保证每次硬件边沿分别对应一次回调；接收数据请调用
- *          Read 查询，不能把事件次数当作字节数。
- */
-aStatus_t aDevUsartRegisterEventCallback(
-    aDevUsartHandle_t *handle,
-    aDevUsartEventCallback_t callback,
-    void *argument);
-
-/**
- * @brief 注销 USART 的业务异步事件回调。
- *
- * 函数返回后，该 handle 的后续设备事件不再调用业务回调；aDev 内部的 ISR
- * 处理、环形缓冲区维护和任务唤醒不受影响。
- *
- * @param[in,out] handle 已初始化的设备句柄。
- *
- * @retval A_STATUS_OK 注销成功；没有已注册回调时同样返回成功。
- * @retval A_STATUS_INVALID_PARAM handle 为空。
- * @retval A_STATUS_NOT_READY USART 尚未初始化。
- *
- * @warning 只能在任务或线程上下文调用。注销不会中断已经开始执行的回调；
- *          调用方仍需保证 callback argument 在在途回调退出前有效。
- */
-aStatus_t aDevUsartUnregisterEventCallback(
-    aDevUsartHandle_t *handle);
 
 /**
  * @brief 从 USART 读取最多 buffer_size 字节。
@@ -392,26 +322,27 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
 /**
  * @brief 使用调用者 buffer 完成一次同步零拷贝接收。
  *
- * 成功启动后，底层硬件直接写入 buffer，不经过 aDev RX ring。函数返回前一定
- * 停止硬件对 buffer 的访问；不支持 RX DMA/零拷贝通道的实例返回
- * -1/A_ENOTSUP。等待收满或总超时到期，IDLE 不会提前结束本次读取。
+ * 不经过 aDev RX ring；按初始化的 mode 的 RX 字段 选择 CPU 轮询直收或
+ * DMA 直收。轮询也不复制到内部缓冲区，但不是“零 CPU 搬运”。函数返回后
+ * 不再访问用户 buffer。等待收满或总超时到期，IDLE 不会提前结束本次读取。
  * 超时/错误前收到部分数据时返回实际长度；无数据时返回 -1 并设置 errno。
- * NO_WAIT 仅启动后检查当前进度并停止，无数据返回 -1/A_EAGAIN。
+ * NO_WAIT 只取当前进度后返回，无数据返回 -1/A_EAGAIN。
  * 中断 RX ring 非空或 RX 被其他请求占用时返回 -1/A_EAGAIN，不丢弃已有数据。
  * DMA buffered RX 持续占用 RX DMA 通道，因此该模式下返回 -1/A_EAGAIN；应在
- * 初始化时选择 RX_POLLING 或 RX_INTERRUPT_BUFFERED 才能使用 ReadDirect。
- * 中断模式暂时屏蔽 RXNE，结束后恢复；超过 65535 字节会分段 DMA，
+ * 初始化普通 RX 时选择 RX_POLLING 或 RX_INTERRUPT_BUFFERED 才能使用 ReadDirect。
+ * 直传复用 mode 的 RX 后端；当前中断后端不提供 Direct，返回 UNSUPPORTED。
+ * DMA 后端超过 65535 字节会分段，
  * 分段重装存在接收间隙，不承诺连续无丢包。size 为 0 时返回 0。
- * 等待使用 aOS 等待对象，由 DMA 完成/错误唤醒，不进行 yield 忙轮询。
+ * DMA 等待由完成/错误通知唤醒；轮询后端使用 aOS 时基和 yield。
  *
  * @param[in,out] handle 已初始化的句柄，调用期间占用 RX 路径。
- * @param[out] buffer DMA 可写区域，返回前不得被其他上下文访问；零长度允许 NULL。
+ * @param[out] buffer 可写用户区域，返回前不得被其他上下文访问；DMA 时须硬件可达，零长度允许 NULL。
  * @param[in] buffer_size 字节数，不得超过 PTRDIFF_MAX。
  * @param[in] timeout 本次调用的总预算，含锁等待与分段接收。
  * @return 实际接收字节数；无进展失败返回 -1 并设置 aOS errno。
- * @warning 仅任务上下文；DMA_ENABLE 为 0 时不提供此声明。
+ * @warning 仅任务上下文；DIRECT_ENABLE 为 0 时不提供此声明。
  */
-#if ADEV_USART_DMA_ENABLE
+#if ADEV_USART_DIRECT_ENABLE
 aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
                              size_t buffer_size, aTimeout_t timeout);
 #endif
@@ -419,21 +350,20 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
 /**
  * @brief 使用调用者 buffer 完成一次同步零拷贝发送。
  *
- * 底层硬件直接读取 data，不复制到 aDev TX ring。函数返回表示硬件不再访问
- * data，但不表示最后一个停止位已经发出；物理排空使用
- * aDevUsartWaitTransmitComplete()。不支持 TX DMA/零拷贝通道的实例返回
- * -1/A_ENOTSUP。
- * 等待使用 aOS 等待对象；TC 通知唤醒，最多每 10 ms 睡眠检查 DMA 错误。
+ * 按 mode 的 TX 字段 使用 CPU 轮询或 DMA，不复制到 aDev TX ring。
+ * 返回后驱动/设备不再访问 data，但不表示最后一个停止位已经发出；物理排空使用
+ * aDevUsartWaitTransmitComplete()。轮询后端不等于零 CPU 搬运。
+ * DMA 等待使用 aOS 等待对象；TC 通知唤醒，最多每 10 ms 睡眠检查 DMA 错误。
  * 该检查不会把当前任务保持为 runnable，且不改变总 timeout 预算。
  *
  * @param[in,out] handle 已初始化的句柄，调用期间占用 TX 路径。
- * @param[in] data DMA 可读区域，返回前不得修改/释放；零长度允许 NULL。
+ * @param[in] data 可读用户区域，返回前不得修改/释放；DMA 时须硬件可达，零长度允许 NULL。
  * @param[in] data_size 字节数，不得超过 PTRDIFF_MAX。
  * @param[in] timeout 含锁等待的总预算，NO_WAIT 不保证传输全部数据。
  * @return 实际搬运字节数；无进展失败返回 -1 并设置 aOS errno；零长度返回 0。
- * @warning 仅任务上下文；DMA_ENABLE 为 0 时不提供此声明。
+ * @warning 仅任务上下文；DIRECT_ENABLE 为 0 时不提供此声明。
  */
-#if ADEV_USART_DMA_ENABLE
+#if ADEV_USART_DIRECT_ENABLE
 aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
                               const void *data, size_t data_size,
                               aTimeout_t timeout);
@@ -453,7 +383,7 @@ aBool_t aDevUsartIsSupported(const aDevUsartHandle_t *handle,
  * @brief 等待软件 TX 队列清空且 USART 硬件报告发送完成。
  *
  * 本接口用于确认最后一个停止位已经由外设发送；启用 RS485 时也确认方向已释放。
- * RS485 方向由设备自动管理，调用方不得自行修改 DE/RE。
+ * RS485 方向由设备自动管理，调用方不得自行修改 DE。
  * 适合需要确认线路排空等
  * 场景。它直接返回 aStatus_t，不设置 errno。
  *
@@ -476,9 +406,11 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
  *
  * 成功后 buffer 由 aDev/DMA 持有，直到 callback 收到完成、超时或取消事件；
  * 调用期间不得修改或释放 buffer。单个 USART 同时只允许一笔 WriteAsync；
- * 多请求排队由应用实现，本模块不提供 TX Queue。TX 必须有可用 DMA 路由，不依赖普通 TX
- * mode；一次请求最大 65535 字节。timeout 从成功提交时开始计时。
- * callback 始终由 aOS deferred-work 在任务/线程上下文调用，不在 DMA/USART ISR。
+ * 多请求排队由应用实现，本模块不提供 TX Queue。当前仅实现 DMA 异步后端，初始化
+ * mode 的 TX 字段必须选择 TX_DMA_BUFFERED 且实例有 DMA 路由。
+ * 不依赖同步 Direct API 开关；一次最大 65535 字节。timeout 是从提交入口开始的总预算。
+ * 提交不等待 TX 锁，竞争时立即返回 BUSY；初始化耗尽预算返回 TIMEOUT。
+ * callback 直接在事件来源上下文执行，不经过 worker；不得阻塞或重入 USART API。
  *
  * @param[in,out] handle 已初始化句柄。
  * @param[in] request 请求描述，提交时复制字段；buffer/argument 保持有效至回调结束。
@@ -495,61 +427,47 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
 /**
  * @brief 停止当前异步 TX；最终结果通过原请求 callback 报告。
  * @param[in,out] handle 已初始化句柄。
- * @retval A_STATUS_OK 已提交取消完成事件，不代表回调已退出。
+ * @retval A_STATUS_OK 已完成取消回调，buffer 不再被访问；线路可能仍在排空。
  * @retval A_STATUS_NOT_READY 未初始化或没有当前异步 TX。
  * @retval A_STATUS_INVALID_PARAM handle 为空。
  * @return 也可能返回 TX mutex 获取错误。
- * @warning 仅任务上下文；仍需等完成回调后再回收 buffer/argument。
+ * @warning 仅任务上下文；取消会同步调用原 callback，回调不得重入 USART API。
  */
 #if ADEV_USART_ASYNC_ENABLE
 aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle);
 #endif
 
 /**
- * @brief 注册一次异步 RX 等待；接收数据仍存放于初始化提供的共享 RX ring。
- *
- * 仅支持 ADEV_USART_RX_DMA_BUFFERED。多个任务可以同时提交，aDev 按 FIFO
- * 顺序为各请求分配数据区间。Read 与 ReadAsync 共用一个消费游标，因此同一
- * 字节只会被一个调用者取得。DATA_READY 的 buffer 指向节点内最多 64 字节的快照，
- * offset 固定为 0；数据在 callback 返回前保持稳定，返回后不得保留指针。
- * 快照复制前后校验 DMA 进度；发生覆盖则回报 ERROR，不交付可疑字节。
- * 回调应短小且不得阻塞。DMA/USART ISR 仅提交工作项，callback 在 aOS 工作任务上下文
- * 执行。每个请求只通知一次；需要继续接收时重新提交。回调返回值不控制生命周期，
- * 使用返回的 token 显式取消。NO_WAIT 时若已有数据则立即通知，否则以 TIMEOUT
- * 事件完成。有限 timeout 从请求提交时开始计时。请求节点由 aOS 动态分配，内存
- * 不足时返回 A_STATUS_NO_MEMORY。提交失败不调用回调。不得在本 handle 的
- * ReadAsync callback 中调用 DeInit/Destroy。
- *
- * @param[in,out] handle 使用 DMA buffered RX 的已初始化句柄。
- * @param[in] request 请求描述，提交时复制；argument 持续有效至回调结束。
- * @param[out] token_out 必填，成功返回用于取消本请求的非零 token。
- * @retval A_STATUS_OK 已接受请求，回调可能很快执行；不承诺晚于本函数返回。
- * @retval A_STATUS_INVALID_PARAM 指针、回调或 timeout 无效。
+ * @brief 启用持续异步接收，共享初始化提供的 RX ring，无请求队列或内部数据快照。
+ * @param[in,out] handle 已初始化的中断/DMA 缓冲接收实例。
+ * @param[in] request 回调及参数，提交时复制；参数有效到 Cancel 成功返回或 ERROR 回调退出。
+ * @retval A_STATUS_OK 已订阅；回调可能早于返回执行。
+ * @retval A_STATUS_BUSY RX 已占用、回调在途或 ring 中仍有未读取数据。
+ * @retval A_STATUS_UNSUPPORTED 当前后端不支持异步接收。
+ * @retval A_STATUS_INVALID_PARAM 参数或回调为空。
  * @retval A_STATUS_NOT_READY 未初始化。
- * @retval A_STATUS_UNSUPPORTED 当前不是 DMA buffered RX。
- * @retval A_STATUS_NO_MEMORY 无法分配请求节点。
- * @return 也可能返回 RX 锁/资源状态错误；失败不调用回调。
+ * @note 任务上下文调用。活动期间 Read/ReadDirect 返回 BUSY；重复提交不替换回调。
+ * 数据回调在 IRQ 来源上下文执行，允许有界解析，不得阻塞或重入 USART API。
+ * 数据直接借用 ring，仅在回调期间读取；环绕最多分两次交付，不代表协议帧。
+ * 循环 DMA 不因 ISR 暂停：应用必须在覆盖前处理完，溢出检测不构成零覆盖保证。
+ * 无软件超时；需要停止时由 app 调用 Cancel。提交失败不回调。
  */
 #if ADEV_USART_ASYNC_ENABLE
 aStatus_t aDevUsartReadAsync(
-    aDevUsartHandle_t *handle, const aDevUsartReadRequest_t *request,
-    aDevUsartReadToken_t *token_out);
+    aDevUsartHandle_t *handle, const aDevUsartReadRequest_t *request);
 #endif
 
 /**
- * @brief 取消指定的异步 RX 等待；取消结果通过请求 callback 报告。
- * 只能在任务/线程上下文调用；已经进入完成队列的请求返回 BUSY。
- * @param[in,out] handle 原请求所属句柄。
- * @param[in] token ReadAsync 成功返回的非零请求标识。
- * @retval A_STATUS_OK 已提交取消事件，不是回调退出屏障。
- * @retval A_STATUS_BUSY 请求已进入完成队列。
- * @retval A_STATUS_NOT_READY 未初始化或请求已不在待处理/完成队列。
- * @retval A_STATUS_INVALID_PARAM handle 为空或 token 为 0。
- * @return 也可能返回 RX mutex 获取错误。
+ * @brief 取消持续 RX 订阅，不关闭底层 ring 接收。
+ * @param[in,out] handle 原订阅实例。
+ * @retval A_STATUS_OK 已报告 CANCELLED，返回后不再使用回调参数。
+ * @retval A_STATUS_BUSY 回调正在执行或其他 RX 操作占用。
+ * @retval A_STATUS_NOT_READY 未初始化或没有订阅。
+ * @retval A_STATUS_INVALID_PARAM handle 为空。
+ * @note 任务上下文调用；取消回调在调用者上下文执行，不得重入 USART API。
  */
 #if ADEV_USART_ASYNC_ENABLE
-aStatus_t aDevUsartReadAsyncCancel(aDevUsartHandle_t *handle,
-                                   aDevUsartReadToken_t token);
+aStatus_t aDevUsartReadAsyncCancel(aDevUsartHandle_t *handle);
 #endif
 
 /**

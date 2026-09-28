@@ -58,8 +58,9 @@ void aShellConfigStructInit(aShellConfig_t *config);
 aStatus_t aShellInit(const aShellConfig_t *config);
 
 /**
- * @brief 从 read 回调获取并处理至多一个输入字符。
- * @retval A_STATUS_OK 已处理字符或暂无输入；模块关闭时为空操作。
+ * @brief 从 read 回调获取并处理至多 64 个输入字符。
+ * @retval A_STATUS_OK 已处理输入；模块关闭时为空操作。
+ * @retval A_STATUS_BUSY 当前没有输入。
  * @retval A_STATUS_NOT_READY 启用但未初始化。
  * @retval A_STATUS_ERROR read 回调返回负数。
  * @note 只允许一个处理者；可能等待 read 的超时，也可能同步执行耗时命令。

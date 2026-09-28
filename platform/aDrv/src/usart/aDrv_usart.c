@@ -178,7 +178,7 @@ aStatus_t aDrvUsartDeInitStatic(aDrvUsartHandle_t *handle)
         return A_STATUS_NOT_READY;
     }
 
-#if ADRV_USART_ASYNC_ENABLE
+#if ADRV_USART_DMA_ENABLE
     (void)aDrvUsartAsyncTxAbort(handle);
     (void)aDrvUsartAsyncRxAbort(handle);
 #endif

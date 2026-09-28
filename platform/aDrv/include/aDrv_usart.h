@@ -6,7 +6,8 @@
  * aDev 负责等待、超时与业务回调；此层仅配置/查询硬件，不依赖 aOS。
  * 句柄由上层持有，同一实例的生命周期和操作必须串行化；活动期间不得移动句柄。
  * Async 命名在此表示启动 DMA 硬件，不表示任务回调或业务请求队列。
- * INTERRUPT_ENABLE/ASYNC_ENABLE 为 0 时对应声明被裁剪，无 stub；调用方同步裁剪。
+ * INTERRUPT_ENABLE/DMA_ENABLE 为 0 时对应声明被裁剪，无 stub；调用方同步裁剪。
+ * ADRV_USART_DMA_ENABLE 只控制硬件 DMA 操作，不启用 device 的业务异步 API。
  * DMA 缓冲区需硬件可达并满足 cache 一致性；本 port 不提供跨平台 cache 维护。
  */
 
@@ -21,10 +22,11 @@
 #define ADRV_USART_INTERRUPT_ENABLE 0
 #endif
 
-#ifndef ADRV_USART_ASYNC_ENABLE
-#define ADRV_USART_ASYNC_ENABLE 0
+#ifndef ADRV_USART_DMA_ENABLE
+#define ADRV_USART_DMA_ENABLE 0
 #endif
 
+/** @brief 逻辑 USART/UART 实例，枚举不保证存在相应引脚或 DMA 路由。 */
 typedef enum {
     ADRV_USART_0,
     ADRV_USART_1,
@@ -34,12 +36,14 @@ typedef enum {
     ADRV_USART_5,
 } aDrvUsartId_t;
 
+/** @brief USART 校验方式，默认 NONE。 */
 typedef enum {
     ADRV_USART_PARITY_NONE,
     ADRV_USART_PARITY_EVEN,
     ADRV_USART_PARITY_ODD,
 } aDrvUsartParity_t;
 
+/** @brief 帧停止位数量，默认一个停止位。 */
 typedef enum {
     ADRV_USART_STOP_1,
     ADRV_USART_STOP_2,
@@ -55,19 +59,20 @@ typedef struct {
     aDrvGpioPin_t rx_pin; /**< RX 引脚，需满足当前 port 引脚映射。 */
 } aDrvUsartConfig_t;
 
+/** @brief USART 内部事件；EXTI 命名不表示 GPIO 外部中断控制器。 */
 typedef enum {
-    ADRV_USART_EXTI_TXE,
-    ADRV_USART_EXTI_RXNE,
-    ADRV_USART_EXTI_TC,
-    ADRV_USART_EXTI_IDLE,
-    ADRV_USART_EXTI_ERROR,
-    ADRV_USART_EXTI_MAX,
+    ADRV_USART_EXTI_TXE, /**< 发送数据寄存器可写，不是线路发完。 */
+    ADRV_USART_EXTI_RXNE, /**< 接收数据寄存器非空。 */
+    ADRV_USART_EXTI_TC, /**< 最后一个停止位发送完成。 */
+    ADRV_USART_EXTI_IDLE, /**< 硬件空闲线检测，不等同于协议帧结束。 */
+    ADRV_USART_EXTI_ERROR, /**< 校验、帧、噪声或溢出等硬件异常通知。 */
+    ADRV_USART_EXTI_MAX, /**< 事件数量哨兵，不可作为注册事件。 */
 } aDrvUsartExti_t;
 
 /** @brief aDrvUsartCallback_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */
 typedef struct {
-    aDrvInterruptCallback_t function;
-    void *argument;
+    aDrvInterruptCallback_t function; /**< 硬件 ISR 执行入口。 */
+    void *argument; /**< 注册者借用参数，有效至在途回调退出。 */
 } aDrvUsartCallback_t;
 
 /**
@@ -77,6 +82,7 @@ typedef struct {
  */
 typedef void (*aDrvUsartDmaCallback_t)(void *argument);
 
+/** @brief 驱动内部路径占用位，可组合；上层不得直接改写。 */
 typedef enum {
     ADRV_USART_OWNER_NONE = 0U,
     ADRV_USART_OWNER_INTERRUPT = 1U << 0,
@@ -86,16 +92,16 @@ typedef enum {
 
 /** @brief aDrvUsartHandle_t 驱动/设备状态；调用方提供存储，字段仅由所属模块维护。 */
 typedef struct {
-    uintptr_t instance;
-    uint32_t baud_rate;
-    aDrvUsartParity_t parity;
-    aDrvUsartStopBits_t stop_bits;
-    aDrvUsartId_t id;
-    aDrvUsartCallback_t callbacks[ADRV_USART_EXTI_MAX];
-    aDrvUsartOwner_t owner;
-    uint32_t interrupt_enabled_mask;
-    uint8_t irq_priority;
-    aBool_t initialized;
+    uintptr_t instance; /**< 内部 USART 寄存器地址。 */
+    uint32_t baud_rate; /**< 当前波特率缓存，bit/s。 */
+    aDrvUsartParity_t parity; /**< 当前校验方式缓存。 */
+    aDrvUsartStopBits_t stop_bits; /**< 当前停止位缓存。 */
+    aDrvUsartId_t id; /**< 本句柄绑定的逻辑实例。 */
+    aDrvUsartCallback_t callbacks[ADRV_USART_EXTI_MAX]; /**< ISR 回调槽。 */
+    aDrvUsartOwner_t owner; /**< 当前占用路径的位集合。 */
+    uint32_t interrupt_enabled_mask; /**< 外设事件使能位，不等于 NVIC 状态。 */
+    uint8_t irq_priority; /**< USART 共用 NVIC 优先级。 */
+    aBool_t initialized; /**< 基础 USART 配置是否完成。 */
 } aDrvUsartHandle_t;
 
 /** @brief aDrvUsartExtiConfig_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */
@@ -103,7 +109,7 @@ typedef struct {
     aDrvUsartExti_t trigger; /**< TXE/RXNE/TC/IDLE/ERROR 事件。 */
     uint32_t priority; /**< 未移位的 NVIC 优先级，GD32 0..15；OS 约束由 aDev 校验。 */
     aDrvInterruptCallback_t callback; /**< 必填 ISR 回调；不能阻塞。 */
-    void *argument;
+    void *argument; /**< 原样传给 callback，可为 NULL。 */
     aBool_t enabled; /**< 登记回调时是否立即开启事件源。 */
 } aDrvUsartExtiConfig_t;
 
@@ -239,7 +245,7 @@ void aDrvUsartEnableInterrupt(aDrvUsartHandle_t *handle);
 void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *handle);
 #endif
 
-#if ADRV_USART_ASYNC_ENABLE
+#if ADRV_USART_DMA_ENABLE
 /**
  * @brief 查询当前实例是否具有固定 TX DMA 路由。
  * @param[in] handle USART 句柄。

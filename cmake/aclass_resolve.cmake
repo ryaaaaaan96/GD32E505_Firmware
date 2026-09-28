@@ -33,8 +33,8 @@ endfunction()
 
 
 # ── Inputs: validate every switch before evaluating any edge ──────────
-foreach(module ASHELL ADATABASE AMODBUS ADEV_LED ADEV_USART
-        ADEV_USART_INTERRUPT ADEV_USART_DMA ADEV_USART_ASYNC
+foreach(module AOS_WORKQUEUE ASHELL ADATABASE AMODBUS ADEV_LED ADEV_USART
+        ADEV_USART_INTERRUPT ADEV_USART_DIRECT ADEV_USART_ASYNC
         ADEV_USART_RS485 ADEV_FLASH25Q)
     _aclass_option(${module}_REQUESTED ${module}_ENABLED)
 endforeach()
@@ -42,7 +42,7 @@ endforeach()
 foreach(module GPIO USART DMA SPI QSPI)
     _aclass_option(ADRV_MODULE_${module}_REQUESTED ADRV_MODULE_${module})
 endforeach()
-foreach(feature INTERRUPT ASYNC)
+foreach(feature INTERRUPT DMA)
     _aclass_option(ADRV_USART_${feature}_REQUESTED ADRV_USART_${feature})
 endforeach()
 
@@ -63,17 +63,18 @@ endif()
 _aclass_requires(ADEV_LED_REQUESTED ADRV_MODULE_GPIO_REQUESTED)
 
 # ── device / USART ────────────────────────────────────────────────────
-foreach(feature INTERRUPT DMA ASYNC RS485)
+foreach(feature INTERRUPT DIRECT ASYNC RS485)
     _aclass_requires(ADEV_USART_${feature}_REQUESTED ADEV_USART_REQUESTED)
 endforeach()
 _aclass_requires(ADEV_USART_REQUESTED ADRV_MODULE_USART_REQUESTED)
 foreach(feature INTERRUPT RS485)
     _aclass_requires(ADEV_USART_${feature}_REQUESTED ADRV_USART_INTERRUPT_REQUESTED)
 endforeach()
-_aclass_requires(ADEV_USART_DMA_REQUESTED
-    ADRV_USART_ASYNC_REQUESTED ADRV_USART_INTERRUPT_REQUESTED
+# Direct is a user-buffer contract, not a DMA requirement (polling is supported).
+_aclass_requires(ADEV_USART_ASYNC_REQUESTED
+    ADRV_USART_DMA_REQUESTED ADRV_USART_INTERRUPT_REQUESTED
 )
-_aclass_requires(ADEV_USART_ASYNC_REQUESTED ADEV_USART_DMA_REQUESTED)
+# Async currently uses DMA, but does not require synchronous Direct APIs.
 _aclass_requires(ADEV_USART_RS485_REQUESTED ADRV_MODULE_GPIO_REQUESTED)
 
 # ── device / Flash25Q ─────────────────────────────────────────────────
@@ -84,7 +85,7 @@ _aclass_requires(ADEV_FLASH25Q_REQUESTED ADRV_MODULE_QSPI_REQUESTED)
 # ── driver / USART ────────────────────────────────────────────────────
 _aclass_requires(ADRV_MODULE_USART_REQUESTED ADRV_MODULE_GPIO_REQUESTED)
 _aclass_requires(ADRV_USART_INTERRUPT_REQUESTED ADRV_MODULE_USART_REQUESTED)
-_aclass_requires(ADRV_USART_ASYNC_REQUESTED
+_aclass_requires(ADRV_USART_DMA_REQUESTED
     ADRV_MODULE_USART_REQUESTED ADRV_MODULE_DMA_REQUESTED
 )
 

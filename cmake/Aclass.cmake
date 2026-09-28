@@ -1,16 +1,22 @@
 # AClass MCU 工程公共 CMake 规范与工程选择入口。
 
 include_guard(GLOBAL)
+set(ACLASS_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
 
 # 使用 macro 是为了让 MCU profile 中的变量保留在顶层目录作用域，并确保
 # toolchain、CPU/FPU 参数在 project() 启用编译器之前生效。
 macro(aclass_select)
     cmake_parse_arguments(ACLASS ""
-        "NAME;VERSION;PLATFORM;OS;MCU;LINKER_SCRIPT;TOOLCHAIN" "" ${ARGN})
+        "NAME;VERSION;PLATFORM;OS;MCU;LINKER_SCRIPT;TOOLCHAIN;PRODUCT_DIR" "" ${ARGN})
 
     if(ACLASS_UNPARSED_ARGUMENTS OR ACLASS_KEYWORDS_MISSING_VALUES)
         message(FATAL_ERROR "Invalid aclass_select arguments: ${ACLASS_UNPARSED_ARGUMENTS}; ${ACLASS_KEYWORDS_MISSING_VALUES}")
     endif()
+
+    if(NOT ACLASS_PRODUCT_DIR)
+        set(ACLASS_PRODUCT_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
+    get_filename_component(ACLASS_PRODUCT_DIR "${ACLASS_PRODUCT_DIR}" ABSOLUTE)
 
     foreach(required NAME MCU LINKER_SCRIPT)
         if(NOT ACLASS_${required})
@@ -38,13 +44,13 @@ macro(aclass_select)
     set(FIRMWARE_VERSION "${ACLASS_VERSION}")
     set(MCU_NAME "${ACLASS_MCU}")
     set(MCU_CONFIG
-        "${CMAKE_SOURCE_DIR}/config/mcu_${MCU_NAME}.cmake")
+        "${ACLASS_PRODUCT_DIR}/config/mcu_${MCU_NAME}.cmake")
 
     if(IS_ABSOLUTE "${ACLASS_LINKER_SCRIPT}")
         set(_ACLASS_LINKER_SCRIPT "${ACLASS_LINKER_SCRIPT}")
     else()
         set(_ACLASS_LINKER_SCRIPT
-            "${CMAKE_SOURCE_DIR}/${ACLASS_LINKER_SCRIPT}")
+            "${ACLASS_PRODUCT_DIR}/${ACLASS_LINKER_SCRIPT}")
     endif()
     set(LINKER_SCRIPT "${_ACLASS_LINKER_SCRIPT}")
 
@@ -61,7 +67,7 @@ macro(aclass_select)
         CACHE INTERNAL "Configured MCU/toolchain identity")
 
     set(CMAKE_TOOLCHAIN_FILE
-        "${CMAKE_SOURCE_DIR}/cmake/toolchains/${TOOLCHAIN_NAME}.cmake")
+        "${ACLASS_ROOT}/cmake/toolchains/${TOOLCHAIN_NAME}.cmake")
 
     if(NOT EXISTS "${MCU_CONFIG}")
         message(FATAL_ERROR "MCU configuration does not exist: ${MCU_CONFIG}")
@@ -73,6 +79,9 @@ macro(aclass_select)
         message(FATAL_ERROR "Toolchain file does not exist: ${CMAKE_TOOLCHAIN_FILE}")
     endif()
 
+    if(NOT DEFINED ACLASS_FREERTOS_CONFIG_FILE)
+        set(ACLASS_FREERTOS_CONFIG_FILE "${ACLASS_PRODUCT_DIR}/config/freeRTOS_config.cmake")
+    endif()
     include("${MCU_CONFIG}")
 
     foreach(required

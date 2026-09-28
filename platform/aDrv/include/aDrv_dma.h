@@ -15,18 +15,21 @@
 
 #include "aDrv_basic.h"
 
+/** @brief DMA 搬运方向；地址设置接口始终绑定 memory/peripheral 两侧。 */
 typedef enum {
     ADRV_DMA_DIR_PERIPH_TO_MEMORY,
     ADRV_DMA_DIR_MEMORY_TO_PERIPH,
     ADRV_DMA_DIR_MEMORY_TO_MEMORY,
 } aDrvDmaDirection_t;
 
+/** @brief 单个传输单元的位宽，不是传输数量。 */
 typedef enum {
     ADRV_DMA_WIDTH_8,
     ADRV_DMA_WIDTH_16,
     ADRV_DMA_WIDTH_32,
 } aDrvDmaWidth_t;
 
+/** @brief DMA 仲裁优先级，从 LOW 到 ULTRA；与 NVIC IRQ 优先级无关。 */
 typedef enum {
     ADRV_DMA_PRIORITY_LOW,
     ADRV_DMA_PRIORITY_MEDIUM,
@@ -48,9 +51,9 @@ typedef struct {
 
 /** @brief aDrvDmaHandle_t 驱动/设备状态；调用方提供存储，字段仅由所属模块维护。 */
 typedef struct {
-    uintptr_t controller;
-    uint8_t channel;
-    aBool_t initialized;
+    uintptr_t controller; /**< 内部 DMA 控制器地址，不是配置项。 */
+    uint8_t channel; /**< 控制器内硬件通道号，不是逻辑 channel。 */
+    aBool_t initialized; /**< 是否已取得并配置通道。 */
 } aDrvDmaHandle_t;
 
 /**

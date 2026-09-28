@@ -18,19 +18,21 @@
 extern "C" {
 #endif
 
+/** @brief 模块持有的介质描述符；调用者不修改或释放。 */
 struct fal_flash_dev {
-    char name[8];
-    uint32_t addr;
-    size_t len;
-    size_t blk_size;
+    char name[8]; /**< NUL 结尾名称，最多 7 个字符。 */
+    uint32_t addr; /**< 介质基址，当前适配器为 0。 */
+    size_t len; /**< 介质容量，字节。 */
+    size_t blk_size; /**< 擦除块大小，字节。 */
 };
 
+/** @brief 模块持有的分区描述符；偏移/长度均以字节计。 */
 struct fal_partition {
-    char name[8];
-    char flash_name[8];
-    const struct fal_flash_dev *flash_dev;
-    uint32_t offset;
-    uint32_t len;
+    char name[8]; /**< NUL 结尾分区名，最多 7 个字符。 */
+    char flash_name[8]; /**< 所属 Flash 名称。 */
+    const struct fal_flash_dev *flash_dev; /**< 借用的设备描述符。 */
+    uint32_t offset; /**< 相对整个介质的起点。 */
+    uint32_t len; /**< 分区容量。 */
 };
 
 /**

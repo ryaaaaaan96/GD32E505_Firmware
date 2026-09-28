@@ -12,15 +12,22 @@
 
 #include "aDrv.h"
 
+/** @brief 编码后的逻辑 GPIO 引脚，不是位掩码或寄存器地址。 */
 typedef uint16_t aDrvGpioPin_t;
+/** @brief 由芯片 port 解释的逻辑 DMA 通道标识。 */
 typedef uint8_t aDrvDmaChannel_t;
 
+/** @brief 编码逻辑端口及 0..15 引脚号；参数范围由调用方保证。 */
 #define ADRV_PIN(port_, pin_)                                                 \
     ((aDrvGpioPin_t)(((uint16_t)(port_) * 16U) + (uint16_t)(pin_)))
+/** @brief 未选择引脚的哨兵值，不能直接用于硬件初始化。 */
 #define ADRV_PIN_NONE         ((aDrvGpioPin_t)0xFFFFU)
+/** @brief 现存的未选择引脚别名，新代码使用 ADRV_PIN_NONE。 */
 #define ADRV_PINNULL          ADRV_PIN_NONE
+/** @brief 未选择 DMA 通道的哨兵值。 */
 #define ADRV_DMA_CHANNEL_NONE ((aDrvDmaChannel_t)0xFFU)
 
+/** @brief 逻辑 GPIO 端口；枚举存在不代表当前封装有对应引脚。 */
 typedef enum {
     ADRV_GPIO_PORT_A,
     ADRV_GPIO_PORT_B,

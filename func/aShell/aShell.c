@@ -83,11 +83,12 @@ aStatus_t aShellInit(const aShellConfig_t *config)
 
 aStatus_t aShellProcess(void)
 {
-    char data;
+    char data[64];
     if (s_shell == NULL) return A_STATUS_NOT_READY;
-    const int16_t count = s_shell->read(&data, 1U);
-    if (count < 0) return A_STATUS_ERROR;
-    if (count == 1) shellHandler(s_shell, data);
+    const int16_t count = s_shell->read(data, sizeof(data));
+    if (count < 0 || (size_t)count > sizeof(data)) return A_STATUS_ERROR;
+    if (count == 0) return A_STATUS_BUSY;
+    for (int16_t i = 0; i < count; ++i) shellHandler(s_shell, data[i]);
     return A_STATUS_OK;
 }
 

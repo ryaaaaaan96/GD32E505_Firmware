@@ -9,7 +9,30 @@
 #include <stdint.h>
 #include <stdatomic.h>
 
+_Static_assert(sizeof(TickType_t) == 4U && configTICK_RATE_HZ == 1000U,
+               "aOS requires 32-bit ticks at 1000 Hz");
+
 #define AOS_ERRNO_TLS_INDEX 0
+#define AOS_START_TLS_INDEX 1
+
+/* TLS owns the bootstrap until entry, including deletion before first run. */
+typedef struct {
+    aOSTaskFunction_t function;
+    void *argument;
+} aOSTaskStart_t;
+
+static void os_task_entry(void *argument)
+{
+    aOSTaskStart_t *start = argument;
+    /* Deletion must not interleave between clearing TLS ownership and free. */
+    taskENTER_CRITICAL();
+    const aOSTaskStart_t entry = *start;
+    vTaskSetThreadLocalStoragePointer(NULL, AOS_START_TLS_INDEX, NULL);
+    vPortFree(start);
+    taskEXIT_CRITICAL();
+    entry.function(entry.argument);
+    aOSTaskExit();
+}
 #define AOS_WAIT_NOTIFICATION_INDEX 1U
 #define AOS_WORK_NOTIFICATION_INDEX 2U
 
@@ -30,13 +53,22 @@ typedef struct {
     TimerHandle_t timer;
     aOSTimerCallback_t callback;
     void *argument;
+    SemaphoreHandle_t quiesced;
+    TickType_t started;
+    TickType_t duration;
+    aBool_t armed;
+    aBool_t running;
+    aBool_t deleting;
 } aOSPrivateTimer_t;
 
 static aErrno_t s_pre_scheduler_errno;
 aOSFaultRecord_t g_aOSFaultRecord;
+#if AOS_WORKQUEUE_ENABLE
 static aOSTaskHandle_t s_work_task;
 static aOSWorkItem_t *s_work_head;
 static aOSWorkItem_t *s_work_tail;
+/* 由队列临界区保护：仅在 worker 将要等待时发送一次唤醒。 */
+static aBool_t s_work_waiting = A_TRUE;
 
 static void work_append_locked(aOSWorkItem_t *item)
 {
@@ -52,18 +84,28 @@ static void work_append_locked(aOSWorkItem_t *item)
 
 static void work_task(void *argument)
 {
+    /* 平台共享延迟执行服务：ISR 只投递，业务回调在此任务串行执行。
+     * 空队列时阻塞等待通知；回调不得阻塞，否则会拖延所有设备的回调。 */
     (void)argument;
     for (;;) {
         (void)ulTaskNotifyTakeIndexed(AOS_WORK_NOTIFICATION_INDEX, pdTRUE,
                                       portMAX_DELAY);
+        aOSWorkItem_t *completed = NULL;
         for (;;) {
             aOSWorkItem_t *item;
             aOSWorkFunction_t function;
             void *function_argument;
 
             taskENTER_CRITICAL();
+            /* 上一项完成与下一项出队共用一次临界区；回调始终在区外。 */
+            if (completed != NULL) {
+                completed->running = A_FALSE;
+                completed->canceling = A_FALSE;
+            }
             item = s_work_head;
             if (item == NULL) {
+                /* 与入队共用锁，避免检查空队列到睡眠之间丢失唤醒。 */
+                s_work_waiting = A_TRUE;
                 taskEXIT_CRITICAL();
                 break;
             }
@@ -82,12 +124,13 @@ static void work_task(void *argument)
                 function(function_argument);
             }
 
-            taskENTER_CRITICAL();
-            item->running = A_FALSE;
-            taskEXIT_CRITICAL();
+            completed = item;
+            taskYIELD();
         }
     }
 }
+
+#endif /* AOS_WORKQUEUE_ENABLE */
 
 static TickType_t milliseconds_to_ticks(uint32_t milliseconds)
 {
@@ -105,18 +148,27 @@ static TickType_t milliseconds_to_ticks(uint32_t milliseconds)
     return (TickType_t)ticks;
 }
 
+/* Only blocking waits interpret portMAX_DELAY as infinity. Timers/delays
+ * retain their full finite range. CMake enforces 32-bit ticks at 1000 Hz. */
+static TickType_t finite_wait_ticks(uint32_t milliseconds)
+{
+    const TickType_t ticks = milliseconds_to_ticks(milliseconds);
+    return ticks == portMAX_DELAY ? portMAX_DELAY - 1U : ticks;
+}
+
 aStatus_t aOSInit(void)
 {
-    aStatus_t status;
-
-    s_pre_scheduler_errno = A_ERRNO_NONE;
-    aOSRecordFault(AOS_FAULT_NONE, A_STATUS_OK, NULL);
-    if (s_work_task != NULL) {
-        return A_STATUS_OK;
-    }
-    status = aOSCreateTask(work_task, "aOSWork", AOS_WORKER_STACK_WORDS, NULL,
-                           AOS_WORKER_PRIORITY, &s_work_task);
-    return status;
+    static aBool_t initialized;
+    if (initialized) return A_STATUS_OK;
+    if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
+        return A_STATUS_NOT_READY;
+#if AOS_WORKQUEUE_ENABLE
+    aStatus_t status = aOSCreateTask(work_task, "aOSWork",
+        AOS_WORKER_STACK_BYTES, NULL, AOS_WORKER_PRIORITY, &s_work_task);
+    if (status != A_STATUS_OK) return status;
+#endif
+    initialized = A_TRUE;
+    return A_STATUS_OK;
 }
 
 aStatus_t aOSValidateIsrPriority(uint32_t priority)
@@ -131,7 +183,23 @@ aStatus_t aOSValidateIsrPriority(uint32_t priority)
 void aOSDeleteTask(aOSTaskHandle_t handle)
 {
     if (handle != NULL) {
+        taskENTER_CRITICAL();
+        void *start = pvTaskGetThreadLocalStoragePointer(
+            (TaskHandle_t)handle, AOS_START_TLS_INDEX);
+        vTaskSetThreadLocalStoragePointer(
+            (TaskHandle_t)handle, AOS_START_TLS_INDEX, NULL);
+        vPortFree(start);
         vTaskDelete((TaskHandle_t)handle);
+        taskEXIT_CRITICAL();
+    }
+}
+
+void aOSTaskExit(void)
+{
+    /* NULL 的“删除当前任务”语义仅封装在后端，不暴露给应用层。 */
+    vTaskDelete(NULL);
+    /* 正常情况下不会继续执行，防止任务入口意外返回。 */
+    for (;;) {
     }
 }
 
@@ -157,23 +225,40 @@ void aOSRecordFault(aOSFaultCode_t code, aStatus_t status,
 }
 
 aStatus_t aOSCreateTask(aOSTaskFunction_t function, const char *name,
-                        uint16_t stack_words, void *argument,
+                        size_t stack_bytes, void *argument,
                         uint32_t priority, aOSTaskHandle_t *handle)
 {
-    if ((function == NULL) || (name == NULL) || (stack_words == 0U) ||
-        (priority >= configMAX_PRIORITIES)) {
+    if (handle != NULL) *handle = NULL;
+    if (function == NULL || name == NULL ||
+        priority < AOS_TASK_PRIO_LOWEST || priority > AOS_TASK_PRIO_REALTIME ||
+        priority >= configMAX_PRIORITIES ||
+        stack_bytes > (size_t)UINT16_MAX * sizeof(StackType_t)) {
         return A_STATUS_INVALID_PARAM;
     }
-
-    return xTaskCreate(function, name, stack_words, argument,
-                       (UBaseType_t)priority, (TaskHandle_t *)handle) == pdPASS
-               ? A_STATUS_OK
-               : A_STATUS_NO_MEMORY;
+    const size_t words = stack_bytes == 0U ? configMINIMAL_STACK_SIZE
+        : (stack_bytes + sizeof(StackType_t) - 1U) / sizeof(StackType_t);
+    aOSTaskStart_t *start = pvPortMalloc(sizeof(*start));
+    if (start == NULL) return A_STATUS_NO_MEMORY;
+    *start = (aOSTaskStart_t){ function, argument };
+    TaskHandle_t task = NULL;
+    /* Publish bootstrap ownership before the new task can execute. */
+    taskENTER_CRITICAL();
+    const BaseType_t result = xTaskCreate(os_task_entry, name, (uint16_t)words,
+                                         start, (UBaseType_t)priority, &task);
+    if (result == pdPASS) {
+        vTaskSetThreadLocalStoragePointer(task, AOS_START_TLS_INDEX, start);
+        if (handle != NULL) *handle = task;
+    }
+    taskEXIT_CRITICAL();
+    if (result != pdPASS) vPortFree(start);
+    return result == pdPASS ? A_STATUS_OK : A_STATUS_NO_MEMORY;
 }
 
 void aOSRun(void)
 {
     vTaskStartScheduler();
+    aOSRecordFault(AOS_FAULT_SCHEDULER_RETURNED, A_STATUS_ERROR,
+                   "vTaskStartScheduler returned");
     for (;;) {
     }
 }
@@ -283,7 +368,7 @@ aStatus_t aOSWaitObjectWait(aOSWaitObject_t object, aTimeout_t timeout)
 
         ticks = remaining.type == A_TIMEOUT_TYPE_FOREVER
                     ? portMAX_DELAY
-                    : milliseconds_to_ticks(remaining.milliseconds);
+                    : finite_wait_ticks(remaining.milliseconds);
         (void)ulTaskNotifyTakeIndexed(AOS_WAIT_NOTIFICATION_INDEX,
                                       pdTRUE, ticks);
     }
@@ -298,6 +383,10 @@ void aOSWaitObjectNotify(aOSWaitObject_t object)
     }
 
     taskENTER_CRITICAL();
+    if (wait_object->pending) {
+        taskEXIT_CRITICAL();
+        return;
+    }
     wait_object->pending = A_TRUE;
     if (wait_object->waiting_task != NULL) {
         (void)xTaskNotifyGiveIndexed(wait_object->waiting_task,
@@ -317,6 +406,10 @@ void aOSWaitObjectNotifyFromISR(aOSWaitObject_t object)
     }
 
     interrupt_mask = taskENTER_CRITICAL_FROM_ISR();
+    if (wait_object->pending) {
+        taskEXIT_CRITICAL_FROM_ISR(interrupt_mask);
+        return;
+    }
     wait_object->pending = A_TRUE;
     if (wait_object->waiting_task != NULL) {
         vTaskNotifyGiveIndexedFromISR(
@@ -327,20 +420,23 @@ void aOSWaitObjectNotifyFromISR(aOSWaitObject_t object)
     portYIELD_FROM_ISR(higher_priority_task_woken);
 }
 
-void aOSWorkItemInit(aOSWorkItem_t *item)
+#if AOS_WORKQUEUE_ENABLE
+void aOSWorkItemInit(aOSWorkItem_t *item,
+                      aOSWorkFunction_t function, void *argument)
 {
     if (item == NULL) return;
     item->next = NULL;
-    item->function = NULL;
-    item->argument = NULL;
+    item->function = function;
+    item->argument = argument;
+    item->canceling = A_FALSE;
     item->queued = A_FALSE;
     item->running = A_FALSE;
 }
 
-aStatus_t aOSWorkSubmit(aOSWorkItem_t *item,
-                        aOSWorkFunction_t function, void *argument)
+static aStatus_t work_submit_task(aOSWorkItem_t *item)
 {
-    if ((item == NULL) || (function == NULL)) {
+    aBool_t notify;
+    if ((item == NULL) || (item->function == NULL)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (s_work_task == NULL) {
@@ -348,43 +444,96 @@ aStatus_t aOSWorkSubmit(aOSWorkItem_t *item,
     }
 
     taskENTER_CRITICAL();
-    if (item->queued) {
+    if (item->canceling || item->queued) {
+        aStatus_t status = item->canceling ? A_STATUS_BUSY : A_STATUS_OK;
         taskEXIT_CRITICAL();
-        return A_STATUS_BUSY;
+        return status;
     }
-    item->function = function;
-    item->argument = argument;
     work_append_locked(item);
-    (void)xTaskNotifyGiveIndexed((TaskHandle_t)s_work_task,
-                                 AOS_WORK_NOTIFICATION_INDEX);
+    notify = s_work_waiting;
+    if (notify) {
+        s_work_waiting = A_FALSE;
+    }
     taskEXIT_CRITICAL();
+    /* worker 生命周期固定；解锁后通知，不延长队列的中断屏蔽窗口。 */
+    if (notify) {
+        (void)xTaskNotifyGiveIndexed((TaskHandle_t)s_work_task,
+                                     AOS_WORK_NOTIFICATION_INDEX);
+    }
     return A_STATUS_OK;
 }
 
-aStatus_t aOSWorkSubmitFromISR(aOSWorkItem_t *item,
-                               aOSWorkFunction_t function, void *argument)
+static aStatus_t work_submit_isr(aOSWorkItem_t *item)
 {
     BaseType_t higher_priority_task_woken = pdFALSE;
     UBaseType_t interrupt_mask;
+    aBool_t notify;
 
-    if ((item == NULL) || (function == NULL) || (s_work_task == NULL)) {
+    if ((item == NULL) || (item->function == NULL)) {
         return A_STATUS_INVALID_PARAM;
+    }
+    if (s_work_task == NULL) {
+        return A_STATUS_NOT_READY;
     }
 
     interrupt_mask = taskENTER_CRITICAL_FROM_ISR();
-    if (item->queued) {
+    if (item->canceling || item->queued) {
+        aStatus_t status = item->canceling ? A_STATUS_BUSY : A_STATUS_OK;
         taskEXIT_CRITICAL_FROM_ISR(interrupt_mask);
-        return A_STATUS_BUSY;
+        return status;
     }
-    item->function = function;
-    item->argument = argument;
     work_append_locked(item);
-    vTaskNotifyGiveIndexedFromISR((TaskHandle_t)s_work_task,
-                                  AOS_WORK_NOTIFICATION_INDEX,
-                                  &higher_priority_task_woken);
+    notify = s_work_waiting;
+    if (notify) {
+        s_work_waiting = A_FALSE;
+    }
     taskEXIT_CRITICAL_FROM_ISR(interrupt_mask);
+    if (notify) {
+        vTaskNotifyGiveIndexedFromISR((TaskHandle_t)s_work_task,
+                                      AOS_WORK_NOTIFICATION_INDEX,
+                                      &higher_priority_task_woken);
+    }
     portYIELD_FROM_ISR(higher_priority_task_woken);
     return A_STATUS_OK;
+}
+
+aStatus_t aOSWorkSubmit(aOSWorkItem_t *item)
+{
+    return xPortIsInsideInterrupt() ? work_submit_isr(item) : work_submit_task(item);
+}
+
+aStatus_t aOSWorkCancel(aOSWorkItem_t *item)
+{
+    if (item == NULL) return A_STATUS_INVALID_PARAM;
+    const aBool_t isr = xPortIsInsideInterrupt() ? A_TRUE : A_FALSE;
+    UBaseType_t key = 0U;
+    if (isr) key = taskENTER_CRITICAL_FROM_ISR();
+    else taskENTER_CRITICAL();
+    aOSWorkItem_t *previous = NULL;
+    for (aOSWorkItem_t *cursor = s_work_head; cursor; cursor = cursor->next) {
+        if (cursor == item) {
+            if (previous) previous->next = cursor->next;
+            else s_work_head = cursor->next;
+            if (s_work_tail == cursor) s_work_tail = previous;
+            item->next = NULL;
+            item->queued = A_FALSE;
+            break;
+        }
+        previous = cursor;
+    }
+    item->canceling = item->running;
+    const aStatus_t status = item->running ? A_STATUS_BUSY : A_STATUS_OK;
+    if (isr) taskEXIT_CRITICAL_FROM_ISR(key);
+    else taskEXIT_CRITICAL();
+    return status;
+}
+
+aStatus_t aOSWorkCancelSync(aOSWorkItem_t *item, aTimeout_t timeout)
+{
+    if (item == NULL || !aTimeoutIsValid(timeout)) return A_STATUS_INVALID_PARAM;
+    if (xPortIsInsideInterrupt() || aOSIsWorkContext()) return A_STATUS_BUSY;
+    (void)aOSWorkCancel(item);
+    return aOSWorkWaitIdle(item, timeout);
 }
 
 aBool_t aOSIsWorkContext(void)
@@ -398,9 +547,10 @@ aStatus_t aOSWorkWaitIdle(aOSWorkItem_t *item, aTimeout_t timeout)
 {
     aTimepoint_t deadline;
 
-    if (item == NULL) {
+    if ((item == NULL) || !aTimeoutIsValid(timeout)) {
         return A_STATUS_INVALID_PARAM;
     }
+    if (xPortIsInsideInterrupt()) return A_STATUS_BUSY;
     deadline = aTimepointCalc(timeout, aOSGetUptimeMs());
     for (;;) {
         aBool_t busy;
@@ -422,13 +572,45 @@ aStatus_t aOSWorkWaitIdle(aOSWorkItem_t *item, aTimeout_t timeout)
     }
 }
 
+#endif /* AOS_WORKQUEUE_ENABLE */
+
+void aOSNotifyGive(aOSWaitObject_t object)
+{
+    if (xPortIsInsideInterrupt()) {
+        aOSWaitObjectNotifyFromISR(object);
+    } else {
+        aOSWaitObjectNotify(object);
+    }
+}
+
 static void os_timer_dispatch(TimerHandle_t timer_handle)
 {
     aOSPrivateTimer_t *timer = pvTimerGetTimerID(timer_handle);
+    aOSTimerCallback_t callback = NULL;
+    void *argument = NULL;
 
-    if ((timer != NULL) && (timer->callback != NULL)) {
-        timer->callback(timer->argument);
+    /* Stop suppresses queued expiry; a restart rejects an old early expiry.
+     * The user callback is never called with interrupts masked. */
+    taskENTER_CRITICAL();
+    if (timer->armed && !timer->deleting &&
+        (TickType_t)(xTaskGetTickCount() - timer->started) >= timer->duration) {
+        timer->armed = A_FALSE;
+        timer->running = A_TRUE;
+        callback = timer->callback;
+        argument = timer->argument;
     }
+    taskEXIT_CRITICAL();
+    if (callback != NULL) callback(argument);
+    taskENTER_CRITICAL();
+    timer->running = A_FALSE;
+    taskEXIT_CRITICAL();
+}
+
+static void os_timer_quiesced(void *argument, uint32_t unused)
+{
+    (void)unused;
+    /* FIFO after DELETE: no timer callback can access its wrapper again. */
+    (void)xSemaphoreGive((SemaphoreHandle_t)argument);
 }
 
 aStatus_t aOSTimerCreate(aOSTimer_t *timer_out,
@@ -439,15 +621,27 @@ aStatus_t aOSTimerCreate(aOSTimer_t *timer_out,
     if ((timer_out == NULL) || (callback == NULL) || (*timer_out != NULL)) {
         return A_STATUS_INVALID_PARAM;
     }
+    if (xPortIsInsideInterrupt()) return A_STATUS_NOT_READY;
     timer = aOSAlloc(sizeof(*timer));
     if (timer == NULL) {
         return A_STATUS_NO_MEMORY;
     }
     timer->callback = callback;
     timer->argument = argument;
+    timer->armed = A_FALSE;
+    timer->running = A_FALSE;
+    timer->deleting = A_FALSE;
+    timer->started = 0U;
+    timer->duration = 0U;
+    timer->quiesced = xSemaphoreCreateBinary();
+    if (timer->quiesced == NULL) {
+        aOSFree(timer);
+        return A_STATUS_NO_MEMORY;
+    }
     timer->timer = xTimerCreate("aOSTimer", 1U, pdFALSE, timer,
                                 os_timer_dispatch);
     if (timer->timer == NULL) {
+        vSemaphoreDelete(timer->quiesced);
         aOSFree(timer);
         return A_STATUS_NO_MEMORY;
     }
@@ -463,32 +657,71 @@ aStatus_t aOSTimerStart(aOSTimer_t timer_object, uint32_t milliseconds)
     if ((timer == NULL) || (milliseconds == 0U)) {
         return A_STATUS_INVALID_PARAM;
     }
+    if (xPortIsInsideInterrupt()) return A_STATUS_NOT_READY;
     ticks = milliseconds_to_ticks(milliseconds);
-    return xTimerChangePeriod(timer->timer, ticks, 0U) == pdPASS
-               ? A_STATUS_OK : A_STATUS_BUSY;
+    taskENTER_CRITICAL();
+    if (timer->deleting || (timer->running &&
+        xTaskGetCurrentTaskHandle() != xTimerGetTimerDaemonTaskHandle())) {
+        taskEXIT_CRITICAL();
+        return A_STATUS_BUSY;
+    }
+    BaseType_t accepted = xTimerChangePeriod(timer->timer, ticks, 0U);
+    if (accepted == pdPASS) {
+        timer->started = xTaskGetTickCount();
+        timer->duration = ticks;
+        timer->armed = A_TRUE;
+    }
+    taskEXIT_CRITICAL();
+    return accepted == pdPASS ? A_STATUS_OK : A_STATUS_BUSY;
 }
 
-void aOSTimerStop(aOSTimer_t timer_object)
+aStatus_t aOSTimerStop(aOSTimer_t timer_object)
 {
     aOSPrivateTimer_t *timer = timer_object;
 
-    if (timer != NULL) {
-        (void)xTimerStop(timer->timer, 0U);
-    }
+    if (timer == NULL) return A_STATUS_OK;
+    if (xPortIsInsideInterrupt()) return A_STATUS_NOT_READY;
+    taskENTER_CRITICAL();
+    timer->armed = A_FALSE;
+    BaseType_t accepted = timer->deleting ? pdPASS
+        : xTimerStop(timer->timer, 0U);
+    taskEXIT_CRITICAL();
+    return accepted == pdPASS ? A_STATUS_OK : A_STATUS_BUSY;
 }
 
-void aOSTimerDestroy(aOSTimer_t *timer_object)
+aStatus_t aOSTimerDestroy(aOSTimer_t *timer_object)
 {
     aOSPrivateTimer_t *timer;
 
     if ((timer_object == NULL) || (*timer_object == NULL)) {
-        return;
+        return A_STATUS_OK;
+    }
+    if (xPortIsInsideInterrupt() ||
+        xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
+        return A_STATUS_NOT_READY;
+    }
+    if (xTaskGetCurrentTaskHandle() == xTimerGetTimerDaemonTaskHandle()) {
+        return A_STATUS_BUSY;
     }
     timer = *timer_object;
+    (void)aOSTimerStop(timer);
+    if (!timer->deleting) {
+        if (xTimerDelete(timer->timer, portMAX_DELAY) != pdPASS) {
+            return A_STATUS_BUSY;
+        }
+        taskENTER_CRITICAL();
+        timer->deleting = A_TRUE;
+        taskEXIT_CRITICAL();
+    }
+    if (xTimerPendFunctionCall(os_timer_quiesced, timer->quiesced,
+                               0U, portMAX_DELAY) != pdPASS) {
+        return A_STATUS_BUSY; /* Retain wrapper; a later Destroy may retry. */
+    }
+    (void)xSemaphoreTake(timer->quiesced, portMAX_DELAY);
+    vSemaphoreDelete(timer->quiesced);
     *timer_object = NULL;
-    (void)xTimerStop(timer->timer, portMAX_DELAY);
-    (void)xTimerDelete(timer->timer, portMAX_DELAY);
     aOSFree(timer);
+    return A_STATUS_OK;
 }
 
 void aOSCriticalEnter(void) { taskENTER_CRITICAL(); }
@@ -538,17 +771,20 @@ aStatus_t aOSMutexLock(aOSMutex_t mutex, aTimeout_t timeout)
         return A_STATUS_NOT_READY;
     }
 
-    ticks = timeout.type == A_TIMEOUT_TYPE_FOREVER
-                ? portMAX_DELAY
-                : milliseconds_to_ticks(timeout.milliseconds);
-    if (xSemaphoreTake((SemaphoreHandle_t)mutex, ticks) == pdTRUE) {
-        return A_STATUS_OK;
+    const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    aTimeout_t remaining = timeout;
+    for (;;) {
+        ticks = remaining.type == A_TIMEOUT_TYPE_FOREVER
+            ? portMAX_DELAY : finite_wait_ticks(remaining.milliseconds);
+        if (xSemaphoreTake((SemaphoreHandle_t)mutex, ticks) == pdTRUE)
+            return A_STATUS_OK;
+        if (timeout.type == A_TIMEOUT_TYPE_RELATIVE && timeout.milliseconds == 0U)
+            return A_STATUS_BUSY;
+        remaining = aTimepointRemaining(&end, aOSGetUptimeMs());
+        if (remaining.type == A_TIMEOUT_TYPE_RELATIVE && remaining.milliseconds == 0U)
+            return A_STATUS_TIMEOUT;
+        /* Recompute after a bounded chunk or a backend early wake. */
     }
-
-    return ((timeout.type == A_TIMEOUT_TYPE_RELATIVE) &&
-            (timeout.milliseconds == 0U))
-               ? A_STATUS_BUSY
-               : A_STATUS_TIMEOUT;
 }
 
 aStatus_t aOSMutexUnlock(aOSMutex_t mutex)
@@ -598,16 +834,20 @@ aStatus_t aOSRecursiveMutexLock(aOSRecursiveMutex_t mutex,
          (timeout.milliseconds != 0U))) {
         return A_STATUS_NOT_READY;
     }
-    ticks = timeout.type == A_TIMEOUT_TYPE_FOREVER
-                ? portMAX_DELAY
-                : milliseconds_to_ticks(timeout.milliseconds);
-    if (xSemaphoreTakeRecursive((SemaphoreHandle_t)mutex, ticks) == pdTRUE) {
-        return A_STATUS_OK;
+    const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    aTimeout_t remaining = timeout;
+    for (;;) {
+        ticks = remaining.type == A_TIMEOUT_TYPE_FOREVER
+            ? portMAX_DELAY : finite_wait_ticks(remaining.milliseconds);
+        if (xSemaphoreTakeRecursive((SemaphoreHandle_t)mutex, ticks) == pdTRUE)
+            return A_STATUS_OK;
+        if (timeout.type == A_TIMEOUT_TYPE_RELATIVE && timeout.milliseconds == 0U)
+            return A_STATUS_BUSY;
+        remaining = aTimepointRemaining(&end, aOSGetUptimeMs());
+        if (remaining.type == A_TIMEOUT_TYPE_RELATIVE && remaining.milliseconds == 0U)
+            return A_STATUS_TIMEOUT;
+        /* Recompute after a bounded chunk or a backend early wake. */
     }
-    return ((timeout.type == A_TIMEOUT_TYPE_RELATIVE) &&
-            (timeout.milliseconds == 0U))
-               ? A_STATUS_BUSY
-               : A_STATUS_TIMEOUT;
 }
 
 aStatus_t aOSRecursiveMutexUnlock(aOSRecursiveMutex_t mutex)
@@ -677,9 +917,7 @@ void vApplicationMallocFailedHook(void)
 {
     aOSRecordFault(AOS_FAULT_MALLOC_FAILED, A_STATUS_NO_MEMORY,
                    "FreeRTOS malloc failed");
-    taskDISABLE_INTERRUPTS();
-    for (;;) {
-    }
+    /* Allocation failure is recoverable; the caller owns the fatal policy. */
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t task, char *task_name)

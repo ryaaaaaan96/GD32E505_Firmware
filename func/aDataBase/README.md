@@ -20,8 +20,8 @@ if (aDataBaseBindFlash25q(&flash_handle) == A_STATUS_OK) {
 }
 ```
 
-设备绑定与分区策略由本模块维护。产品分区参数位于本模块的
-`port/include/aDatabase_flash_layout.h`。FlashDB 的 FAL API 仍为上游要求的全局接口，绑定
+设备绑定与分区策略由本模块维护。产品分区参数位于产品的
+`config/aDatabase_flash_layout.h`（通过 `ADATABASE_LAYOUT_FILE` 注入）。FlashDB 的 FAL API 仍为上游要求的全局接口，绑定
 操作必须在任何数据库实例初始化之前完成。关闭所有数据库、停止在途调用后才能
 调用 aDataBaseUnbindStorage；生命周期操作由应用串行管理。
 

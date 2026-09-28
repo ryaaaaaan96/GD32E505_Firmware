@@ -15,7 +15,7 @@
 `gd32e50x_libopt.h` 位于构建目录，不修改官方库。SPL 的编译清单消费根配置
 resolver 给出的有效模块值，不在 aDrv 目录内补齐跨层依赖。
 
-每个驱动模块独立实现。USART 进一步拆成基础轮询、可选 IRQ 和可选 Async-DMA
+每个驱动模块独立实现。USART 进一步拆成基础轮询、可选 IRQ 和可选硬件 DMA
 源码；未启用能力时不编译对应源码，并通过 aDrv target 的 public compile
 definitions 隐藏不可用 API，不提供 stub。DMA 通道和
 外设请求映射只存在于 `aDrv_usart_async.c`，不会暴露给 device 或 app。当前

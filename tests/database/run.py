@@ -10,7 +10,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-storage-") as directory:
     executable = str(Path(directory) / "storage")
     command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
                "-Ifunc/aDataBase", "-Ifunc/aDataBase/port/include",
-               "-Iplatform/aLib/include", "tests/database/test_storage.c",
+               "-Iplatform/aLib/include", "-Iconfig", "tests/database/test_storage.c",
                "func/aDataBase/port/fal_storage_port.c", "-o", executable]
     if os.environ.get("SANITIZE"):
         command[1:1] = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]

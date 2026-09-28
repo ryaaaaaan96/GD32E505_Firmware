@@ -48,16 +48,16 @@ typedef bool aBool_t;
 
 /** @brief 项目流式 I/O 错误码，不保证与 POSIX errno 数值相同。 */
 typedef enum {
-    A_ERRNO_NONE = 0,
-    A_EINVAL,
-    A_EAGAIN,
-    A_ETIMEDOUT,
-    A_EIO,
-    A_ENODEV,
-    A_ENOTSUP,
-    A_EINTR,
-    A_ENOMEM,
-    A_ECANCELED,
+    A_ERRNO_NONE = 0, /**< 无错误。 */
+    A_EINVAL, /**< 参数无效。 */
+    A_EAGAIN, /**< 当前资源/数据未就绪，可稍后重试。 */
+    A_ETIMEDOUT, /**< 等待预算耗尽。 */
+    A_EIO, /**< 一般 I/O 错误。 */
+    A_ENODEV, /**< 设备未就绪或不存在。 */
+    A_ENOTSUP, /**< 能力/操作不支持。 */
+    A_EINTR, /**< 操作被中断，保留供后端或上层使用。 */
+    A_ENOMEM, /**< 内存分配失败。 */
+    A_ECANCELED, /**< 请求取消。 */
 } aErrno_t;
 
 /**
@@ -94,8 +94,8 @@ static inline aErrno_t aStatusToErrno(aStatus_t status)
 
 /** @brief 有限相对超时或无限等待；不存在隐式绝对日期时间。 */
 typedef enum {
-    A_TIMEOUT_TYPE_RELATIVE = 0,
-    A_TIMEOUT_TYPE_FOREVER,
+    A_TIMEOUT_TYPE_RELATIVE = 0, /**< 有限相对预算；0 毫秒表示不等待。 */
+    A_TIMEOUT_TYPE_FOREVER, /**< 无限等待，忽略毫秒字段。 */
 } aTimeoutType_t;
 
 /** @brief 等待预算；通过 A_TIMEOUT_* 宏构造。 */

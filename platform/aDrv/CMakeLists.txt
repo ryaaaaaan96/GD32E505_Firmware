@@ -80,7 +80,7 @@ if(ADRV_MODULE_USART)
         )
     endif()
 
-    if(ADRV_USART_ASYNC)
+    if(ADRV_USART_DMA)
         list(APPEND ADRV_SOURCES
             src/usart/aDrv_usart_async.c
         )
@@ -176,7 +176,7 @@ target_compile_definitions(
     aDrv
     PUBLIC
         ADRV_USART_INTERRUPT_ENABLE=$<BOOL:${ADRV_USART_INTERRUPT}>
-        ADRV_USART_ASYNC_ENABLE=$<BOOL:${ADRV_USART_ASYNC}>
+        ADRV_USART_DMA_ENABLE=$<BOOL:${ADRV_USART_DMA}>
 )
 
 target_include_directories(
@@ -205,7 +205,7 @@ message(
 message(
     STATUS
     "aDrv USART capabilities: interrupt=${ADRV_USART_INTERRUPT}, "
-    "async=${ADRV_USART_ASYNC}"
+    "dma=${ADRV_USART_DMA}"
 )
 
 message(

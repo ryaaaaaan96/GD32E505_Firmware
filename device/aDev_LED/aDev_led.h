@@ -17,6 +17,7 @@
 #include "aDrv_gpio.h"
 #include "aLib.h"
 
+/** @brief LED 的电气有效电平；业务始终用逻辑亮/灭操作。 */
 typedef enum {
     ADEV_LED_ACTIVE_LOW,
     ADEV_LED_ACTIVE_HIGH,
@@ -31,8 +32,8 @@ typedef struct {
 
 /** @brief aDevLedHandle_t 驱动/设备状态；调用方提供存储，字段仅由所属模块维护。 */
 typedef struct {
-    aDrvGpioHandle_t gpio;
-    aDevLedActiveLevel_t active_level;
+    aDrvGpioHandle_t gpio; /**< 底层 GPIO 状态，不重复保存 initialized。 */
+    aDevLedActiveLevel_t active_level; /**< 从配置保存的有效电平。 */
 } aDevLedHandle_t;
 
 /**

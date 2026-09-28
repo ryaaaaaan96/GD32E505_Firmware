@@ -162,3 +162,8 @@ docs 只维护以下四份现行说明，不保留旧方案和迁移过程：
 
 模块 README 用于模块本地使用说明；根 DESIGN_REVIEW.md 保留评审讨论及用户回复，
 属于历史记录，不是当前设计依据。修改接口时须同步公共头注释及相应现行文档。
+
+任务栈以字节配置（APP_*_STACK_BYTES / AOS_WORKER_STACK_BYTES），任务入口允许
+自然返回。Shell 每轮最多读取 64 字节，成功后继续处理，仅空读或错误时退避。
+OS 分配失败记录诊断后返回，应用决定 fatal 策略。当前 FreeRTOS 时基固定为
+32 位 tick / 1000 Hz。可复用库入口为 cmake/AclassLibraries.cmake，产品 app 单独创建。

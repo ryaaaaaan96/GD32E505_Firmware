@@ -12,9 +12,9 @@ with tempfile.TemporaryDirectory(prefix="aclass-usart-") as directory:
         "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
         *(["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
           if os.environ.get("SANITIZE") else []),
-        "-DADRV_USART_INTERRUPT_ENABLE=1", "-DADRV_USART_ASYNC_ENABLE=1",
+        "-DADRV_USART_INTERRUPT_ENABLE=1", "-DADRV_USART_DMA_ENABLE=1",
         *[f"-DADEV_USART_{feature}_ENABLE=1" for feature in (
-            "INTERRUPT", "DMA", "ASYNC", "RS485",
+            "INTERRUPT", "DIRECT", "ASYNC", "RS485",
         )],
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
         "-Itests/usart/mocks", "-Idevice/aDev_usart/include", "-Idevice/aDev_usart/src",

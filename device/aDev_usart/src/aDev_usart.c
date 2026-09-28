@@ -3,45 +3,6 @@
 #include <limits.h>
 #include <string.h>
 
-void aDevUsartEventWork(void *argument)
-{
-    aDevUsartHandle_t *handle = argument;
-
-    for (;;) {
-        uint32_t events = atomic_exchange_explicit(
-            &handle->pending_events, 0U, memory_order_acquire);
-        aDevUsartEventCallback_t callback;
-        void *callback_argument;
-
-        if (events == 0U) return;
-        if (aOSMutexLock(handle->event_mutex, A_TIMEOUT_FOREVER) !=
-            A_STATUS_OK) {
-            continue;
-        }
-        callback = handle->event_callback;
-        callback_argument = handle->event_argument;
-        (void)aOSMutexUnlock(handle->event_mutex);
-        if (callback == NULL) continue;
-
-        for (uint32_t event = 0U; event <= ADEV_USART_EVENT_RX_ERROR;
-             ++event) {
-            if ((events & (1UL << event)) != 0U) {
-                callback((aDevUsartEvent_t)event, callback_argument);
-            }
-        }
-    }
-}
-
-void aDevUsartNotifyEvent(aDevUsartHandle_t *handle,
-                          aDevUsartEvent_t event)
-{
-    const uint32_t event_bit = 1UL << (uint32_t)event;
-    atomic_fetch_or_explicit(&handle->pending_events, event_bit,
-                             memory_order_release);
-    (void)aOSWorkSubmitFromISR(&handle->event_work,
-                               aDevUsartEventWork, handle);
-}
-
 #if ADEV_USART_NEEDS_IRQ
 aStatus_t aDevUsartRegisterIrqCallback(aDevUsartHandle_t *handle,
                                        aDrvUsartExti_t trigger,
@@ -95,20 +56,14 @@ static aStatus_t wait_objects_create(aDevUsartHandle_t *handle)
 {
     aStatus_t status;
 
-    if (ADEV_USART_DMA_ENABLE || ((handle->mode & ADEV_USART_TX_MASK) ==
-         ADEV_USART_TX_INTERRUPT_BUFFERED) ||
-        ((handle->mode & ADEV_USART_TX_MASK) ==
-         ADEV_USART_TX_DMA_BUFFERED)) {
+    if ((handle->mode & ADEV_USART_TX_MASK) != ADEV_USART_TX_POLLING) {
         status = aOSWaitObjectCreate(&handle->tx_wait_object);
         if (status != A_STATUS_OK) {
             return status;
         }
     }
 
-    if (ADEV_USART_DMA_ENABLE || (handle->mode & ADEV_USART_RX_MASK) ==
-            ADEV_USART_RX_INTERRUPT_BUFFERED ||
-        (handle->mode & ADEV_USART_RX_MASK) ==
-            ADEV_USART_RX_DMA_BUFFERED) {
+    if ((handle->mode & ADEV_USART_RX_MASK) != ADEV_USART_RX_POLLING) {
         status = aOSWaitObjectCreate(&handle->rx_wait_object);
         if (status != A_STATUS_OK) {
             aOSWaitObjectDestroy(&handle->tx_wait_object);
@@ -137,11 +92,6 @@ static aStatus_t mutexes_create(aDevUsartHandle_t *handle)
         aOSMutexDestroy(&handle->tx_mutex);
         return status;
     }
-    status = aOSMutexCreate(&handle->event_mutex);
-    if (status != A_STATUS_OK) {
-        aOSMutexDestroy(&handle->rx_mutex);
-        aOSMutexDestroy(&handle->tx_mutex);
-    }
     return status;
 }
 
@@ -149,7 +99,6 @@ static void mutexes_destroy(aDevUsartHandle_t *handle)
 {
     aOSMutexDestroy(&handle->rx_mutex);
     aOSMutexDestroy(&handle->tx_mutex);
-    aOSMutexDestroy(&handle->event_mutex);
 }
 
 void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
@@ -167,10 +116,7 @@ void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
     config->tx_buffer_size = 0U;
     config->rs485.enabled = A_FALSE;
     config->rs485.de_pin = ADRV_PIN_NONE;
-    config->rs485.re_pin = ADRV_PIN_NONE;
     config->rs485.de_active_level = ADRV_GPIO_HIGH;
-    config->rs485.re_active_level = ADRV_GPIO_LOW;
-    config->rs485.receive_during_tx = A_FALSE;
 }
 
 static void handle_struct_init(aDevUsartHandle_t *handle, aBool_t dynamic)
@@ -178,12 +124,7 @@ static void handle_struct_init(aDevUsartHandle_t *handle, aBool_t dynamic)
     memset(handle, 0, sizeof(*handle));
     aDrvUsartHandleStructInit(&handle->drv_handle);
     aDrvGpioHandleStructInit(&handle->de_gpio);
-    aDrvGpioHandleStructInit(&handle->re_gpio);
     handle->mode = ADEV_USART_TX_POLLING | ADEV_USART_RX_POLLING;
-    aOSWorkItemInit(&handle->event_work);
-    aOSWorkItemInit(&handle->tx_completion_work);
-    aOSWorkItemInit(&handle->rx_completion_work);
-    atomic_init(&handle->pending_events, 0U);
     atomic_init(&handle->tx_completion_claimed, A_TRUE);
     handle->dynamic_storage = dynamic;
 }
@@ -200,11 +141,11 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
     const aDevUsartMode_t rx = config->mode & ADEV_USART_RX_MASK;
     if (((tx == ADEV_USART_TX_INTERRUPT_BUFFERED) &&
          !ADEV_USART_INTERRUPT_ENABLE) ||
-        ((tx == ADEV_USART_TX_DMA_BUFFERED) && !ADEV_USART_DMA_ENABLE) ||
+        ((tx == ADEV_USART_TX_DMA_BUFFERED) && !ADEV_USART_DMA_BACKEND_ENABLE) ||
         ((rx == ADEV_USART_RX_INTERRUPT_BUFFERED) &&
          !ADEV_USART_INTERRUPT_ENABLE) ||
         ((rx == ADEV_USART_RX_DMA_BUFFERED) &&
-         !ADEV_USART_DMA_ENABLE) ||
+         !ADEV_USART_DMA_BACKEND_ENABLE) ||
         ((config->mode & ADEV_USART_OPTION_RX_IDLE) &&
          !ADEV_USART_INTERRUPT_ENABLE) ||
         (config->rs485.enabled && !ADEV_USART_RS485_ENABLE)) {
@@ -216,10 +157,7 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
 
     if (config->rs485.enabled &&
         ((config->rs485.de_pin == config->drv_config.tx_pin) ||
-         (config->rs485.de_pin == config->drv_config.rx_pin) ||
-         ((config->rs485.re_pin != ADRV_PIN_NONE) &&
-          ((config->rs485.re_pin == config->drv_config.tx_pin) ||
-           (config->rs485.re_pin == config->drv_config.rx_pin))))) {
+         (config->rs485.de_pin == config->drv_config.rx_pin))) {
         return A_STATUS_INVALID_PARAM;
     }
 
@@ -229,6 +167,16 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
     }
     handle->mode = config->mode;
     handle->interrupt_priority = config->interrupt_priority;
+
+#if ADEV_USART_DMA_BACKEND_ENABLE
+    if (((config->mode & ADEV_USART_TX_MASK) == ADEV_USART_TX_DMA_BUFFERED &&
+         !aDrvUsartAsyncTxIsSupported(&handle->drv_handle)) ||
+        ((config->mode & ADEV_USART_RX_MASK) == ADEV_USART_RX_DMA_BUFFERED &&
+         !aDrvUsartAsyncRxIsSupported(&handle->drv_handle))) {
+        (void)aDrvUsartDeInitStatic(&handle->drv_handle);
+        return A_STATUS_UNSUPPORTED;
+    }
+#endif
 
 #if ADEV_USART_RS485_ENABLE
     status = aDevUsartRS485Init(handle, &config->rs485);
@@ -311,22 +259,21 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
         return A_STATUS_INVALID_PARAM;
     }
     /* A worker must never wait on another item in its own serialized queue. */
-    if (aOSIsWorkContext()) return A_STATUS_BUSY;
+    if (handle->rx_dispatching) return A_STATUS_BUSY;
 
     if (!handle->drv_handle.initialized) {
         return A_STATUS_NOT_READY;
     }
     if ((handle->tx_state != ADEV_USART_TX_IDLE) ||
         (handle->rx_state != ADEV_USART_RX_IDLE) ||
-        (handle->rx_request_head != NULL) ||
-        (handle->rx_complete_head != NULL) ||
+        handle->rx_dispatching ||
         handle->rs485_transmitting ||
         ((handle->tx_count != 0U) && (handle->tx_error == A_STATUS_OK)) ||
         (handle->tx_dma_active != 0U)) {
         return A_STATUS_BUSY;
     }
 
-#if ADEV_USART_DMA_ENABLE
+#if ADEV_USART_DMA_BACKEND_ENABLE
     if (handle->rx_dma_active) {
         (void)aDrvUsartSetInterruptEnabled(
             &handle->drv_handle, ADRV_USART_EXTI_IDLE, A_FALSE);
@@ -337,25 +284,11 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
 
 #endif
 
-    aOSTimerStop(handle->tx_deadline_timer);
-    aOSTimerStop(handle->rx_deadline_timer);
-    status = aOSWorkWaitIdle(&handle->tx_completion_work,
-                             A_TIMEOUT_FOREVER);
-    if (status == A_STATUS_OK) {
-        status = aOSWorkWaitIdle(&handle->rx_completion_work,
-                                 A_TIMEOUT_FOREVER);
-    }
+    /* First quiesce timer callbacks, then drain any work they submitted. */
+    status = aOSTimerDestroy(&handle->tx_deadline_timer);
     if (status != A_STATUS_OK) return status;
-    aOSTimerDestroy(&handle->tx_deadline_timer);
-    aOSTimerDestroy(&handle->rx_deadline_timer);
 
-    status = aDevUsartUnregisterEventCallback(handle);
-    if (status == A_STATUS_OK) {
-        status = aDrvUsartDeInitStatic(&handle->drv_handle);
-    }
-    if (status == A_STATUS_OK) {
-        status = aOSWorkWaitIdle(&handle->event_work, A_TIMEOUT_FOREVER);
-    }
+    status = aDrvUsartDeInitStatic(&handle->drv_handle);
     if (status == A_STATUS_OK) {
 #if ADEV_USART_RS485_ENABLE
         status = aDevUsartRS485DeInit(handle);
@@ -384,48 +317,6 @@ aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle)
     return status;
 }
 
-aStatus_t aDevUsartRegisterEventCallback(
-    aDevUsartHandle_t *handle,
-    aDevUsartEventCallback_t callback,
-    void *argument)
-{
-    if ((handle == NULL) || (callback == NULL)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    if (!handle->drv_handle.initialized) {
-        return A_STATUS_NOT_READY;
-    }
-
-    const aStatus_t status = aOSMutexLock(
-        handle->event_mutex, A_TIMEOUT_FOREVER);
-    if (status != A_STATUS_OK) return status;
-    atomic_store_explicit(&handle->pending_events, 0U, memory_order_release);
-    handle->event_argument = argument;
-    handle->event_callback = callback;
-    (void)aOSMutexUnlock(handle->event_mutex);
-    return status;
-}
-
-aStatus_t aDevUsartUnregisterEventCallback(
-    aDevUsartHandle_t *handle)
-{
-    if (handle == NULL) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    if (!handle->drv_handle.initialized) {
-        return A_STATUS_NOT_READY;
-    }
-
-    const aStatus_t status = aOSMutexLock(
-        handle->event_mutex, A_TIMEOUT_FOREVER);
-    if (status != A_STATUS_OK) return status;
-    atomic_store_explicit(&handle->pending_events, 0U, memory_order_release);
-    handle->event_callback = NULL;
-    handle->event_argument = NULL;
-    (void)aOSMutexUnlock(handle->event_mutex);
-    return status;
-}
-
 aBool_t aDevUsartIsSupported(const aDevUsartHandle_t *handle,
                              aDevUsartCapability_t capability)
 {
@@ -433,14 +324,26 @@ aBool_t aDevUsartIsSupported(const aDevUsartHandle_t *handle,
         return A_FALSE;
     }
 
-#if ADEV_USART_DMA_ENABLE
+#if ADEV_USART_DIRECT_ENABLE
     switch (capability) {
     case ADEV_USART_CAP_TX_DIRECT:
-        return ADEV_USART_DMA_ENABLE &&
+        if ((handle->mode & ADEV_USART_TX_MASK) == ADEV_USART_TX_POLLING)
+            return A_TRUE;
+#if ADEV_USART_DMA_BACKEND_ENABLE
+        return (handle->mode & ADEV_USART_TX_MASK) == ADEV_USART_TX_DMA_BUFFERED &&
                aDrvUsartAsyncTxIsSupported(&handle->drv_handle);
+#else
+        return A_FALSE;
+#endif
     case ADEV_USART_CAP_RX_DIRECT:
-        return ADEV_USART_DMA_ENABLE &&
+        if ((handle->mode & ADEV_USART_RX_MASK) == ADEV_USART_RX_POLLING)
+            return A_TRUE;
+#if ADEV_USART_DMA_BACKEND_ENABLE
+        return (handle->mode & ADEV_USART_RX_MASK) == ADEV_USART_RX_DMA_BUFFERED &&
                aDrvUsartAsyncRxIsSupported(&handle->drv_handle);
+#else
+        return A_FALSE;
+#endif
     default:
         return A_FALSE;
     }

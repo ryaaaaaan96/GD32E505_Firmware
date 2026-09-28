@@ -13,6 +13,7 @@
 #include "aDev_led.h"
 #if ASHELL_ENABLED
 #include "aDev_usart.h"
+/** @brief 应用控制台身份，不是 aDrvUsartId_t 硬件实例编号。 */
 typedef enum {
     APP_USART_CONSOLE = 0,
 } appUsartId_t;

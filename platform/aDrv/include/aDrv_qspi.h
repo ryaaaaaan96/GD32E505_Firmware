@@ -13,24 +13,29 @@
 
 #include "aDrv_gpio.h"
 
+/** @brief 命令的数据阶段方向，不是异步/同步执行方式。 */
 #define ADRV_QSPI_FMODE_INDIRECT_WRITE 0U
 #define ADRV_QSPI_FMODE_INDIRECT_READ  1U
 
+/** @brief 指令阶段线数；NONE 表示无该阶段，组合支持情况取决于 port。 */
 #define ADRV_QSPI_INST_NONE    0U
 #define ADRV_QSPI_INST_1_LINE  1U
 #define ADRV_QSPI_INST_2_LINES 2U
 #define ADRV_QSPI_INST_4_LINES 4U
 
+/** @brief 地址阶段线数；NONE 时命令 Address 必须为 0。 */
 #define ADRV_QSPI_ADDR_NONE    0U
 #define ADRV_QSPI_ADDR_1_LINE  1U
 #define ADRV_QSPI_ADDR_2_LINES 2U
 #define ADRV_QSPI_ADDR_4_LINES 4U
 
+/** @brief 数据阶段线数；NONE 用于写使能、擦除等无数据命令。 */
 #define ADRV_QSPI_DATA_NONE    0U
 #define ADRV_QSPI_DATA_1_LINE  1U
 #define ADRV_QSPI_DATA_2_LINES 2U
 #define ADRV_QSPI_DATA_4_LINES 4U
 
+/** @brief SQPI 逻辑实例，当前 port 仅一个控制器。 */
 typedef enum {
     ADRV_QSPI_1,
 } aDrvQspiId_t;
@@ -50,13 +55,13 @@ typedef struct {
 
 /** @brief aDrvQspiHandle_t 驱动/设备状态；调用方提供存储，字段仅由所属模块维护。 */
 typedef struct {
-    uintptr_t instance;
-    aDrvQspiId_t qspiId;
-    aDrvGpioPin_t csPin;
-    uint32_t address;
-    uint32_t transferLength;
-    uint8_t functionalMode;
-    aBool_t initialized;
+    uintptr_t instance; /**< 内部 SQPI 寄存器基址。 */
+    aDrvQspiId_t qspiId; /**< 已绑定的逻辑实例。 */
+    aDrvGpioPin_t csPin; /**< 已配置的片选引脚。 */
+    uint32_t address; /**< 最近 Command 的字节地址。 */
+    uint32_t transferLength; /**< 最近 Command 的数据长度约束，字节。 */
+    uint8_t functionalMode; /**< 最近 Command 的读写方向。 */
+    aBool_t initialized; /**< 控制器是否已初始化。 */
 } aDrvQspiHandle_t;
 
 /** @brief aDrvQspiCmd_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */

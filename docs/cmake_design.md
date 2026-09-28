@@ -22,10 +22,10 @@
 ## 配置顺序
 
 1. include Aclass.cmake，调用 `aclass_select()`，在 project() 前选择工具链和 MCU。
-2. 加载 ACLASS_CONFIG_FILE，默认 config/aclass_config.cmake。
-3. include aclass_resolve.cmake，检查依赖。
-4. project() 启用编译器，aclass_initialize() 设置 C11、输出目录和选项 target。
-5. 加入 platform、device、func、app，由 app 创建 ELF。
+2. project() 启用编译器，aclass_initialize() 设置 C11、输出目录和选项 target。
+3. include AclassLibraries.cmake，调用 aclass_add_libraries(CONFIG_FILE ...)。
+4. 库入口加载产品配置并执行 resolver，再加入 platform、device、func。
+5. 产品自行加入 app，由 app 创建 ELF。
 
 MCU gd32e505 映射到 config/mcu_gd32e505.cmake，TOOLCHAIN GCC 映射到
 cmake/toolchains/GCC.cmake。链接脚本相对工程根目录解析，也接受绝对路径。
@@ -37,20 +37,38 @@ resolver 先校验布尔输入，再按 func、device、driver 的模块顺序�
 
 ## 能力裁剪
 
-USART 保留 INTERRUPT、DMA、ASYNC、RS485 四组 device 能力；
+USART 保留 INTERRUPT、DIRECT、ASYNC、RS485 四组 device 能力；
 导出的 C 宏统一使用 `ADEV_USART_<能力>_ENABLE`，值为 0 或 1，
-例如 `ADEV_USART_DMA_ENABLE`；代码通过 `#if` 判断，不用 `#ifdef`。
-CMake 输入仍为 `*_REQUESTED`，解析结果仍为 `*_ENABLED`，不与 C 宏混用。
+例如 `ADEV_USART_DIRECT_ENABLE`；代码通过 `#if` 判断，不用 `#ifdef`。
+CMake 输入仍为 `*_REQUESTED`，device/func 解析结果为 `*_ENABLED`；
+driver 解析结果沿用 `ADRV_MODULE_*`、`ADRV_USART_*`，不与公开 C 宏混用。
+
+USART 开关按职责区分，不把硬件 DMA 与业务异步 API 合并：
+
+| 公开 C 宏 | 含义 |
+|---|---|
+| `ADRV_USART_DMA_ENABLE` | driver USART 的 DMA 启停、进度查询等硬件操作 |
+| `ADEV_USART_DIRECT_ENABLE` | 同步用户缓冲区直传 API，不规定是否使用 DMA |
+| `ADEV_USART_ASYNC_ENABLE` | device 异步请求、取消、超时及来源上下文回调 |
+
+底层 DMA 的请求变量为 `ADRV_USART_DMA_REQUESTED`，解析结果为 `ADRV_USART_DMA`。
+通用 DMA 驱动仍通过 `ADRV_MODULE_DMA_REQUESTED` 独立选择，它不代表 USART 专用支持。
+DIRECT 不依赖 DMA，默认可使用轮询直传。DMA 数据路径由底层 DMA/IRQ 能力提供，
+统一在初始化 mode 的 TX/RX 字段中选择；不能用 DIRECT 开关控制 DMA ring。
+当前 ASYNC 需要底层 DMA/IRQ，但不依赖同步 DIRECT API。私有的
+`ADEV_USART_DMA_BACKEND_ENABLE` 仅从底层能力派生，不是产品配置或公开 API 开关。
+底层现有函数名中的 `Async` 仍表示非阻塞硬件启动，本次配置重命名不修改函数 ABI。
+
 TX/RX 模式和 IDLE 在初始化时选择。主要依赖如下：
 
 | 请求 | 必需能力 |
 |---|---|
 | device USART | driver USART |
 | device INTERRUPT | driver USART interrupt |
-| device DMA | driver USART async、interrupt |
-| device ASYNC | device DMA |
+| device DIRECT | device USART；后端在初始化选择 |
+| device ASYNC | driver USART DMA、interrupt，不依赖 device DIRECT |
 | device RS485 | driver GPIO、USART interrupt |
-| driver USART async | driver USART、DMA |
+| driver USART DMA | driver USART、通用 DMA 驱动 |
 | 数据库 FLASH25Q 后端 | device Flash25Q，继而依赖 QSPI/GPIO |
 | 数据库 CUSTOM 后端 | 调用者注入存储操作，不依赖 Flash25Q |
 
@@ -61,7 +79,8 @@ aDrv 按有效能力选择 SPL、USART IRQ/DMA 源码，生成
 generated/aDrv/gd32e50x_libopt.h；不修改官方 SPL，不编译 IRQ/Async stub。
 aDevUsart 固定编译公共管理、TX、RX 三个源文件，内部用能力宏裁剪代码及公共声明；
 RS485 源文件按开关加入。设备层没有 TX Queue。
-编译能力开启不代表每个硬件实例都支持，运行时仍校验模式和 DMA 路由。
+编译能力开启不代表每个硬件实例都支持，初始化校验模式和 DMA 路由；
+没有 DMA/IRQ 时显式选择 DMA 后端返回 UNSUPPORTED，不退化为轮询。
 
 Shell 是例外：关闭后保留 aShell target 和空实现，允许已有打印调用继续编译；
 app 不创建 Shell 任务和 console 资源。启用时 Shell 也不创建任务，任务归 app。
@@ -91,3 +110,18 @@ firmware-<配置>.json。debug.py 从 JSON 读取 ELF 和调试器件名，支�
 `cmake -P tests/config/test_resolver.cmake` 验证依赖成功/失败路径；
 `python3 tests/config/build_matrix.py` 验证六种 USART 组合、两个数据库后端的
 编译、链接和符号裁剪。构建验证不代表硬件验证。
+
+## 外部产品接入
+
+`aclass_select(PRODUCT_DIR ...)` 指定产品根目录，默认当前源码目录。
+MCU profile 和链接脚本从产品目录解析，工具链脚本从平台库自身目录解析。
+`ACLASS_FREERTOS_CONFIG_FILE` 可显式指定 OS 参数文件；默认产品的
+config/freeRTOS_config.cmake。平台库不再根据顶层 CMAKE_SOURCE_DIR 寻找产品配置。
+
+独立产品在 project() 前调用 aclass_select，之后调用 aclass_initialize 和
+aclass_add_libraries(CONFIG_FILE <绝对路径>)，最后自行创建应用目标。
+库入口不创建 main 或固件目标，构建产物仍使用顶层统一 lib/bin 目录。
+当前只实现 Embedded/FreeRTOS，选择其他后端仍明确报错。
+
+启用数据库必须提供 ADATABASE_LAYOUT_FILE，模块复制产品头到构建目录。
+本示例布局为 config/aDatabase_flash_layout.h；不同产品可提供自己的布局。

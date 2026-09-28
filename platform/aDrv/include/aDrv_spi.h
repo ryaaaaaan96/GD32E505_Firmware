@@ -13,33 +13,39 @@
 
 #include "aDrv_gpio.h"
 
+/** @brief 逻辑实例；当前 GD32 的 1/2/3 分别映射 SPI0/1/2。 */
 typedef enum {
     ADRV_SPI_1,
     ADRV_SPI_2,
     ADRV_SPI_3,
 } aDrvSpiId_t;
 
+/** @brief SPI 从机/主机角色；引脚适配能力以芯片 port 为准。 */
 typedef enum {
     ADRV_SPI_MODE_SLAVE,
     ADRV_SPI_MODE_MASTER,
 } aDrvSpiMode_t;
 
+/** @brief 时钟空闲电平。 */
 typedef enum {
     ADRV_SPI_POLARITY_LOW,
     ADRV_SPI_POLARITY_HIGH,
 } aDrvSpiClockPolarity_t;
 
+/** @brief 相对于空闲电平的第一/第二时钟边沿采样。 */
 typedef enum {
     ADRV_SPI_PHASE_1EDGE,
     ADRV_SPI_PHASE_2EDGE,
 } aDrvSpiClockPhase_t;
 
+/** @brief 片选控制方式；硬件模式的具体限制见 config.csMode。 */
 typedef enum {
     ADRV_SPI_CS_SOFT,
     ADRV_SPI_CS_HARD_INPUT,
     ADRV_SPI_CS_HARD_OUTPUT,
 } aDrvSpiCsMode_t;
 
+/** @brief 数据帧内部的发送位序，不表示 CPU 内存字节序。 */
 typedef enum {
     ADRV_SPI_BITORDER_MSB,
     ADRV_SPI_BITORDER_LSB,
@@ -63,12 +69,12 @@ typedef struct {
 
 /** @brief aDrvSpiHandle_t 驱动/设备状态；调用方提供存储，字段仅由所属模块维护。 */
 typedef struct {
-    uintptr_t instance;
-    aDrvSpiId_t spiId;
-    aDrvGpioHandle_t csGpio;
-    uint8_t dataBytes;
-    aBool_t softwareCs;
-    aBool_t initialized;
+    uintptr_t instance; /**< 内部寄存器基址。 */
+    aDrvSpiId_t spiId; /**< 已绑定的逻辑实例。 */
+    aDrvGpioHandle_t csGpio; /**< 软件片选 GPIO 句柄。 */
+    uint8_t dataBytes; /**< 每帧占用 1 或 2 个内存字节。 */
+    aBool_t softwareCs; /**< 是否使用 GPIO 软件片选。 */
+    aBool_t initialized; /**< 底层实例是否已配置。 */
 } aDrvSpiHandle_t;
 
 /**

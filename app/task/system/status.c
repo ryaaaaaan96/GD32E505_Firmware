@@ -1,8 +1,7 @@
 #include "status.h"
 #include "app_system_device.h"
 #include "aOS.h"
-
-#define ASYSTEM_STATUS_BLINK_PERIOD_MS 500U
+#include "app_config.h"
 
 static void statusTask(void *argument)
 {
@@ -25,6 +24,6 @@ aStatus_t statusInit(void)
     if (status != A_STATUS_OK) {
         return status;
     }
-    return aOSCreateTask(statusTask, "status", 256U, led,
-                         AOS_TASK_PRIO_NORMAL, NULL);
+    return aOSCreateTask(statusTask, "status", ASYSTEM_STATUS_TASK_STACK_BYTES, led,
+                         ASYSTEM_STATUS_TASK_PRIORITY, NULL);
 }

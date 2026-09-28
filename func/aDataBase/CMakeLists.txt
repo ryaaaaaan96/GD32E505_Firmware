@@ -1,3 +1,10 @@
+if(NOT ADATABASE_LAYOUT_FILE OR NOT EXISTS "${ADATABASE_LAYOUT_FILE}")
+    message(FATAL_ERROR "aDataBase requires product ADATABASE_LAYOUT_FILE")
+endif()
+set(layout_dir "${CMAKE_CURRENT_BINARY_DIR}/include")
+configure_file("${ADATABASE_LAYOUT_FILE}"
+    "${layout_dir}/aDatabase_flash_layout.h" COPYONLY)
+
 set(FLASHDB_SOURCES
     flashDB/src/fdb.c
     flashDB/src/fdb_kvdb.c
@@ -16,6 +23,7 @@ target_include_directories(
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/port/include"
+        "${layout_dir}"
         "${CMAKE_CURRENT_SOURCE_DIR}/flashDB/inc"
 )
 
