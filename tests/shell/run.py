@@ -7,7 +7,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[2]
 common = [
-    "gcc", "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+    "gcc", "-std=c11", "-pthread", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
     "-Ifunc/aShell/include", "-Iplatform/aLib/include",
 ]
 enabled = [

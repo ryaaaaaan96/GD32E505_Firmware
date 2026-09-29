@@ -12,6 +12,7 @@ ASHELL_CMD_EXPORT(disabled, disabled_command, "Not linked");
 int main(void)
 {
     aShellConfig_t config;
+    aShellOutputStats_t stats;
     int side_effect = 0;
 
     aShellConfigStructInit(&config);
@@ -19,8 +20,10 @@ int main(void)
     assert(!aShellIsEnabled());
     assert(aShellInit(NULL) == A_STATUS_OK);
     assert(aShellProcess() == A_STATUS_OK);
-    ASHELL_PRINT("disabled %d", ++side_effect);
+    assert(ASHELL_PRINT("disabled %d", ++side_effect) == A_STATUS_OK);
     assert(side_effect == 0);
+    assert(aShellGetOutputStats(&stats) == A_STATUS_OK);
+    assert(stats.pending_bytes == 0U && stats.dropped_messages == 0U);
     assert(aShellDeInit() == A_STATUS_OK);
     return 0;
 }

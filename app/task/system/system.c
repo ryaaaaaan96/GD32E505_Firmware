@@ -46,14 +46,14 @@ static aStatus_t statusInit(void)
     return A_STATUS_OK;
 }
 
-/* 应用层负责创建和调度任务，aShell 只负责处理输入。 */
+/* 应用任务统一驱动 Shell 输入处理和输出队列发送。 */
 #if ASHELL_ENABLED
 
 static void shellTask(void *argument)
 {
     (void)argument;
     for (;;) {
-        /* 成功时继续排空输入；错误或非阻塞空读时退避。 */
+        /* Process 同时消费输出；无输入或 I/O 错误时短暂退避。 */
         if (aShellProcess() != A_STATUS_OK) {
             aOSDelayMs(1U);
         }

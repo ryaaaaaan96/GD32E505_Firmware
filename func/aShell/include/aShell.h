@@ -33,7 +33,11 @@ typedef int (*aShellCommandFn_t)(int argc, char **argv);
 /* No descriptor, callback reference or argument evaluation when disabled. */
 #define ASHELL_CMD_EXPORT(name, callback, description) \
     _Static_assert(sizeof(&(callback)) != 0U, "Shell command disabled")
-#define ASHELL_PRINT(...) ((aStatus_t)A_STATUS_OK)
+static inline aStatus_t aShellPrintDisabled(void)
+{
+    return A_STATUS_OK;
+}
+#define ASHELL_PRINT(...) aShellPrintDisabled()
 #endif
 
 typedef struct {
@@ -60,7 +64,7 @@ aStatus_t aShellInit(const aShellConfig_t *config);
  */
 aStatus_t aShellProcess(void);
 
-/** 丢弃未发送数据并释放内部锁；返回 OK、NOT_READY 或锁错误。
+/** 丢弃未发送数据并释放内部锁；返回 OK 或 NOT_READY。
  * 必须先停止处理任务和所有并发 API 用户。
  */
 aStatus_t aShellDeInit(void);
