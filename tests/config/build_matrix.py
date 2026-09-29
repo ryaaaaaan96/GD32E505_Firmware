@@ -9,6 +9,8 @@ root = Path(__file__).resolve().parents[2]
 toolchain = os.environ.get("ARM_GCC_ROOT", str(Path.home() / "Tools/toolchain/mcu_arm_toolchain/arm-none-eabi-15.3"))
 profiles = {
     # device interrupt/direct/async/rs485, then driver DMA backend.
+    "static_only": (False, False, False, False, False),
+    "both_allocations": (True, False, False, False, False),
     "polling": (False, False, False, False, False),
     "interrupt": (True, False, False, False, False),
     "direct_polling": (False, True, False, False, False),
@@ -44,6 +46,10 @@ with tempfile.TemporaryDirectory(prefix="aclass-matrix-") as directory:
     for name, values in profiles.items():
         config = base / (name + ".cmake")
         lines = [f'include("{root}/config/aclass_config.cmake")', "set(ASHELL_REQUESTED OFF)"]
+        lines += [
+            f"set(ADEV_USART_STATIC_REQUESTED {'ON' if name in ('static_only', 'both_allocations') else 'OFF'})",
+            f"set(ADEV_USART_DYNAMIC_REQUESTED {'OFF' if name == 'static_only' else 'ON'})",
+        ]
         lines.append(f"set(AOS_WORKQUEUE_REQUESTED {'ON' if name == 'full_worker' else 'OFF'})")
         if name.startswith("database_"):
             backend = name.removeprefix("database_").upper()
@@ -75,6 +81,9 @@ with tempfile.TemporaryDirectory(prefix="aclass-matrix-") as directory:
         # Inspect the archive, not only the final ELF (which uses linker GC).
         nm = str(Path(toolchain) / "bin/arm-none-eabi-nm")
         symbols = subprocess.check_output([nm, str(build / "lib/libaDevUsart.a")], text=True)
+        assert (" T aDevUsartInitStatic" in symbols) == (name in ("static_only", "both_allocations")), name
+        assert (" T aDevUsartCreate" in symbols) == (name != "static_only"), name
+        assert (" T aDevUsartDestroy" in symbols) == (name != "static_only"), name
         assert "aOSWork" not in symbols, name
         os_symbols = subprocess.check_output([nm, str(build / "lib/libaOS.a")], text=True)
         assert ("aOSWorkSubmit" in os_symbols) == (name == "full_worker"), name

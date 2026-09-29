@@ -21,8 +21,11 @@ aStatus_t aDevUsartRS485Init(aDevUsartHandle_t *handle,
 {
     aStatus_t status;
     handle->rs485 = *config;
-    if (!config->enabled) {
+    if (config->mode == ADEV_USART_RS485_NONE) {
         return A_STATUS_OK;
+    }
+    if (config->mode != ADEV_USART_RS485_GPIO_DE) {
+        return A_STATUS_UNSUPPORTED;
     }
     if ((config->de_pin == ADRV_PIN_NONE) ||
         ((config->de_active_level != ADRV_GPIO_LOW) &&
@@ -41,7 +44,8 @@ aStatus_t aDevUsartRS485Init(aDevUsartHandle_t *handle,
 aStatus_t aDevUsartRS485Begin(aDevUsartHandle_t *handle)
 {
     aStatus_t status;
-    if (!handle->rs485.enabled || handle->rs485_transmitting) {
+    if ((handle->rs485.mode == ADEV_USART_RS485_NONE) ||
+        handle->rs485_transmitting) {
         return A_STATUS_OK;
     }
     status = aDrvGpioWrite(&handle->de_gpio, handle->rs485.de_active_level);
@@ -54,7 +58,8 @@ aStatus_t aDevUsartRS485Begin(aDevUsartHandle_t *handle)
 aStatus_t aDevUsartRS485Complete(aDevUsartHandle_t *handle)
 {
     aStatus_t status;
-    if (!handle->rs485.enabled || !handle->rs485_transmitting) {
+    if ((handle->rs485.mode == ADEV_USART_RS485_NONE) ||
+        !handle->rs485_transmitting) {
         return A_STATUS_OK;
     }
     status = aDrvGpioWrite(&handle->de_gpio,

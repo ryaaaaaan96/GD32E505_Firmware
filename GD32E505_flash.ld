@@ -20,14 +20,24 @@ SECTIONS
         *(.text*) *(.rodata*) KEEP(*(.init)) KEEP(*(.fini))
         . = ALIGN(4); _etext = .;
     } > FLASH :text
-    .shellCommand :
+    /* aShell GCC exports; keep before RAM data load images. */
+    .ashell_commands (READONLY) : ALIGN(8)
     {
-        . = ALIGN(4);
-        PROVIDE_HIDDEN(_shell_command_start = .);
-        KEEP(*(shellCommand))
-        PROVIDE_HIDDEN(_shell_command_end = .);
-        . = ALIGN(4);
+        cmd_table = .;
+        KEEP(*(SORT_BY_NAME(.ashell_cmd.*)))
+        __ashell_commands_end = .;
     } > FLASH :text
+    .ashell_marks (READONLY) :
+    {
+        KEEP(*(.ashell_mark.*))
+    } > FLASH :text
+    .ashell_command_count (READONLY) : ALIGN(2)
+    {
+        cmd_table_size = .;
+        SHORT(SIZEOF(.ashell_marks))
+    } > FLASH :text
+    ASSERT(SIZEOF(.ashell_marks) <= 65535,
+           "aShell command count exceeds uint16_t")
     .ARM.extab : { *(.ARM.extab*) } > FLASH :text
     .ARM.exidx : { __exidx_start = .; *(.ARM.exidx*) __exidx_end = .; } > FLASH :text
     .preinit_array :

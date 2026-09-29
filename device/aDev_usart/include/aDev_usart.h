@@ -24,6 +24,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef ADEV_USART_STATIC_ENABLE
+#define ADEV_USART_STATIC_ENABLE 0
+#endif
+#ifndef ADEV_USART_DYNAMIC_ENABLE
+#define ADEV_USART_DYNAMIC_ENABLE 0
+#endif
+
 /**
  * @brief USART 数据路径配置字。
  *
@@ -59,11 +66,17 @@ typedef uint32_t aDevUsartMode_t;
     (ADEV_USART_TX_MASK | ADEV_USART_RX_MASK | \
      ADEV_USART_OPTION_RX_IDLE)
 
-/** @brief 物理连接配置：默认 TTL 直连；启用后为单 DE 控制的 RS485。 */
+/** @brief RS485 发送方向控制方式。 */
+typedef enum {
+    ADEV_USART_RS485_NONE = 0, /**< 不控制 DE，包括外部自动换向电路。 */
+    ADEV_USART_RS485_GPIO_DE, /**< 驱动软件控制 GPIO，TC 后释放 DE。 */
+    ADEV_USART_RS485_UART_DE, /**< USART 外设自动 DE；当前后端不支持。 */
+} aDevUsartRS485Mode_t;
+
+/** @brief 方向控制配置，默认 NONE。 */
 typedef struct {
-    /** A_FALSE：TTL，不操作方向 GPIO；A_TRUE：RS485，使用下述 DE。 */
-    aBool_t enabled;
-    /** RS485 时必填 DE 引脚；由 APP 选择，不能与 USART TX/RX 重叠。 */
+    aDevUsartRS485Mode_t mode;
+    /** GPIO_DE 时必填，不能与 USART TX/RX 重叠；NONE 时忽略。 */
     aDrvGpioPin_t de_pin;
     aDrvGpioLevel_t de_active_level; /**< 发送使能的物理电平。 */
 } aDevUsartRS485Config_t;
@@ -75,8 +88,8 @@ typedef struct {
  * 配置结构仅初始化期间读取；其中的缓冲区必须持续有效到 DeInit 完成。
  * TX/RX 缓冲区必须互不重叠，运行期间不得被其他设备或业务直接改写。
  * DMA 缓冲区必须处于硬件可访问的内存；当前接口不自动执行 cache 一致性维护。
- * RS485 默认关闭；启用时需要 TC 中断能力，即使 TX 为轮询模式。
- * 当前不提供自动 DE、方向切换延迟或协议帧间隔配置。
+ * RS485 默认 NONE；GPIO_DE 需要 TC 中断能力，即使 TX 为轮询模式。
+ * UART_DE 当前返回 UNSUPPORTED；不提供方向延迟或协议帧间隔配置。
  */
 typedef struct {
     /** aDrv USART 基础配置：逻辑实例、TX/RX 引脚、波特率、校验和停止位。 */
@@ -139,7 +152,7 @@ typedef struct {
 } aDevUsartTxEvent_t;
 
 /**
- * @brief 单次 TX 终态回调，在 IRQ、取消调用者或定时服务上下文执行，不得阻塞。
+ * @brief 单次 TX 终态回调，统一在 USART ISR 中执行，不得阻塞。
  * @param[in] handle 原请求所属设备，回调期间不能销毁。
  * @param[in] event 本次终态快照，不得保留 event 指针。
  * @param[in] argument 原请求参数，模块不拥有其内存。
@@ -155,7 +168,7 @@ typedef enum {
     ADEV_USART_RX_EVENT_ERROR, /**< 接收/覆盖检测异常，订阅终止。 */
 } aDevUsartRxEventType_t;
 
-/** @brief RX 事件；数据直接借用初始化提供的接收区。 */
+/** @brief RX 事件；数据在当前回调期间稳定，回调返回后不得继续持有。 */
 typedef struct {
     aDevUsartRxEventType_t type; /**< 数据、超时、取消或错误。 */
     const void *buffer; /**< DATA_READY 的连续数据区间，仅回调期间借用。 */
@@ -165,7 +178,7 @@ typedef struct {
 } aDevUsartRxEvent_t;
 
 /**
- * @brief RX 持续数据回调，在事件来源上下文执行，不得阻塞。
+ * @brief RX 持续数据回调，统一在 USART/DMA ISR 中执行，不得阻塞。
  * @param[in] handle 原请求设备；不能在回调内销毁。
  * @param[in] event 终态及借用数据，仅当前回调有效；需要保留时自行复制。
  * @param[in] argument 原请求参数，模块不拥有其内存。
@@ -182,27 +195,22 @@ typedef struct {
     const void *buffer;             /**< DMA 源；回调前不得修改。 */
     size_t size;                    /**< 1..65535 字节。 */
     aTimeout_t timeout;             /**< 正毫秒数或 FOREVER。 */
-    aDevUsartTxCallback_t callback;  /**< 必填，在事件来源上下文执行。 */
+    aDevUsartTxCallback_t callback;  /**< 必填，统一在 ISR 中执行。 */
     void *argument;                 /**< 原样传给 callback，可为 NULL。 */
 } aDevUsartWriteRequest_t;
 
 
 /**
  * 持续异步接收订阅；提交时复制字段，不保存此结构体指针。
- * argument 必须保持有效到 callback 返回。
+ * buffer（DMA RX）和 argument 必须保持有效到 CANCELLED/ERROR 回调返回。
  */
 typedef struct {
+    void *buffer;                  /**< DMA RX 必填的独立快照区；IRQ RX 忽略，可为 NULL。 */
+    /**< DMA RX 至少等于 rx_buffer_size；不得与 ring/其他活动缓冲区重叠。 */
+    size_t buffer_size;
     aDevUsartRxCallback_t callback;  /**< 必填；通过 ReadAsync 设置，通过 Cancel 解除。 */
     void *argument;                 /**< 原样传给 callback，可为 NULL。 */
 } aDevUsartReadRequest_t;
-
-/** @brief 不透明句柄存储容量，字节；静态句柄仍可能分配内部 OS 对象。 */
-#define ADEV_USART_STATIC_STORAGE_SIZE 1024U
-/** @brief 应用持有的对齐存储区，初始化后至 DeInit 前禁止复制/移动。 */
-typedef union {
-    max_align_t alignment; /**< 保证内部状态的标准最大对齐，不由业务赋值。 */
-    uint8_t bytes[ADEV_USART_STATIC_STORAGE_SIZE]; /**< 私有存储，初始化后不可直接访问。 */
-} aDevUsartStorage_t;
 
 /**
  * @brief 填充 USART 配置默认值。
@@ -217,12 +225,11 @@ void aDevUsartConfigStructInit(aDevUsartConfig_t *config);
 /**
  * @brief 使用应用提供的静态存储初始化 USART。
  *
- * storage 必须在设备整个生命周期内保持有效。内部状态布局不对应用公开；静态
- * 存储区容量由 ADEV_USART_STATIC_STORAGE_SIZE 定义。
+ * 通过 aDev_usart_instance.h 声明完整对象，整个设备生命周期内保持有效。
+ * 对象无需预初始化；禁止对活动对象重复初始化。
  *
  * @param[in]  config 初始化配置。
- * @param[in,out] storage 调用方静态分配的存储区。
- * @param[out] handle_out 成功时返回不透明句柄。
+ * @param[in,out] handle 调用方提供的设备对象；仅初始化成功后可使用。
  *
  * @retval A_STATUS_OK 初始化成功。
  * @retval A_STATUS_INVALID_PARAM 指针、模式、底层配置或缓冲区配置无效。
@@ -231,9 +238,10 @@ void aDevUsartConfigStructInit(aDevUsartConfig_t *config);
  * @retval A_STATUS_NO_MEMORY 无法创建所需的 aOS 等待对象。
  * @retval A_STATUS_ERROR 其他底层初始化错误。
  */
+#if ADEV_USART_STATIC_ENABLE
 aStatus_t aDevUsartInitStatic(const aDevUsartConfig_t *config,
-                              aDevUsartStorage_t *storage,
-                              aDevUsartHandle_t **handle_out);
+                              aDevUsartHandle_t *handle);
+#endif
 
 /**
  * @brief 通过 aOS 分配句柄私有状态并初始化 USART。
@@ -242,8 +250,10 @@ aStatus_t aDevUsartInitStatic(const aDevUsartConfig_t *config,
  * @return InitStatic 的状态；分配私有状态失败返回 A_STATUS_NO_MEMORY。
  * @warning 只能在任务/启动上下文调用；成功后必须使用 Destroy 释放，不能直接 Free。
  */
+#if ADEV_USART_DYNAMIC_ENABLE
 aStatus_t aDevUsartCreate(const aDevUsartConfig_t *config,
                           aDevUsartHandle_t **handle_out);
+#endif
 
 /**
  * @brief 停止传输并反初始化 USART 设备。
@@ -266,7 +276,9 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle);
  * @return 也可能返回 DeInit 错误；失败时不释放内存。
  * @warning 遵循 DeInit 的并发/回调限制，不得与任何其他访问并发。
  */
+#if ADEV_USART_DYNAMIC_ENABLE
 aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle);
+#endif
 
 /**
  * @brief 从 USART 读取最多 buffer_size 字节。
@@ -410,7 +422,7 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
  * mode 的 TX 字段必须选择 TX_DMA_BUFFERED 且实例有 DMA 路由。
  * 不依赖同步 Direct API 开关；一次最大 65535 字节。timeout 是从提交入口开始的总预算。
  * 提交不等待 TX 锁，竞争时立即返回 BUSY；初始化耗尽预算返回 TIMEOUT。
- * callback 直接在事件来源上下文执行，不经过 worker；不得阻塞或重入 USART API。
+ * callback 统一在 USART ISR 中执行，不经过 worker；不得阻塞或重入 USART API。
  *
  * @param[in,out] handle 已初始化句柄。
  * @param[in] request 请求描述，提交时复制字段；buffer/argument 保持有效至回调结束。
@@ -427,29 +439,33 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
 /**
  * @brief 停止当前异步 TX；最终结果通过原请求 callback 报告。
  * @param[in,out] handle 已初始化句柄。
- * @retval A_STATUS_OK 已完成取消回调，buffer 不再被访问；线路可能仍在排空。
+ * @retval A_STATUS_OK 已受理取消；buffer/argument 保留至终态回调结束，线路可能仍在排空。
  * @retval A_STATUS_NOT_READY 未初始化或没有当前异步 TX。
  * @retval A_STATUS_INVALID_PARAM handle 为空。
  * @return 也可能返回 TX mutex 获取错误。
- * @warning 仅任务上下文；取消会同步调用原 callback，回调不得重入 USART API。
+ * @warning 仅任务上下文；取消挂起 USART IRQ，回调可能早于返回或稍后执行，不得重入 USART API。
  */
 #if ADEV_USART_ASYNC_ENABLE
 aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle);
 #endif
 
 /**
- * @brief 启用持续异步接收，共享初始化提供的 RX ring，无请求队列或内部数据快照。
+ * @brief 启用持续异步接收；IRQ RX 借用 ring，DMA RX 复制到调用者快照区。
  * @param[in,out] handle 已初始化的中断/DMA 缓冲接收实例。
- * @param[in] request 回调及参数，提交时复制；参数有效到 Cancel 成功返回或 ERROR 回调退出。
+ * @param[in] request 回调、快照区及参数，提交时复制字段；存储有效到 CANCELLED/ERROR 回调退出。
  * @retval A_STATUS_OK 已订阅；回调可能早于返回执行。
  * @retval A_STATUS_BUSY RX 已占用、回调在途或 ring 中仍有未读取数据。
  * @retval A_STATUS_UNSUPPORTED 当前后端不支持异步接收。
- * @retval A_STATUS_INVALID_PARAM 参数或回调为空。
+ * @retval A_STATUS_INVALID_PARAM 参数或回调为空，或 DMA 快照区为空、过小、与 RX ring 重叠。
  * @retval A_STATUS_NOT_READY 未初始化。
  * @note 任务上下文调用。活动期间 Read/ReadDirect 返回 BUSY；重复提交不替换回调。
  * 数据回调在 IRQ 来源上下文执行，允许有界解析，不得阻塞或重入 USART API。
- * 数据直接借用 ring，仅在回调期间读取；环绕最多分两次交付，不代表协议帧。
- * 循环 DMA 不因 ISR 暂停：应用必须在覆盖前处理完，溢出检测不构成零覆盖保证。
+ * IRQ RX 保留未消费区间至回调返回，零拷贝；环绕最多分两次交付。
+ * DMA RX 在 ISR 中一次复制当前可用数据至 request.buffer，校验覆盖后才交付；
+ * 已交付数据在回调期间稳定，回调返回后快照区可被下一次事件改写。
+ * 快照区由订阅独占，应用不得并发访问或修改；需要长期持有时在回调中另行复制。
+ * 环形 DMA 要求最坏中断延迟小于一圈接收时间，多圈合并的硬件标志无法恢复计数；
+ * 不承诺任意延迟下无丢包。回调长度不代表协议帧。
  * 无软件超时；需要停止时由 app 调用 Cancel。提交失败不回调。
  */
 #if ADEV_USART_ASYNC_ENABLE
@@ -460,11 +476,12 @@ aStatus_t aDevUsartReadAsync(
 /**
  * @brief 取消持续 RX 订阅，不关闭底层 ring 接收。
  * @param[in,out] handle 原订阅实例。
- * @retval A_STATUS_OK 已报告 CANCELLED，返回后不再使用回调参数。
- * @retval A_STATUS_BUSY 回调正在执行或其他 RX 操作占用。
+ * @retval A_STATUS_OK 已受理取消；快照区/参数保留至 CANCELLED 回调退出。
+ * @retval A_STATUS_BUSY 回调正在执行、取消待派发或其他 RX 操作占用。
  * @retval A_STATUS_NOT_READY 未初始化或没有订阅。
  * @retval A_STATUS_INVALID_PARAM handle 为空。
- * @note 任务上下文调用；取消回调在调用者上下文执行，不得重入 USART API。
+ * @note 任务上下文调用；取消回调在 USART ISR 中执行，可能早于返回或稍后执行。
+ * 终态回调结束前不得销毁句柄或重新订阅；回调内不得重入 USART API。
  */
 #if ADEV_USART_ASYNC_ENABLE
 aStatus_t aDevUsartReadAsyncCancel(aDevUsartHandle_t *handle);

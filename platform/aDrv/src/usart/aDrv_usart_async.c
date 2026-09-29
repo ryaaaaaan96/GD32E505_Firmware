@@ -178,12 +178,11 @@ static void tx_stop(aDrvUsartHandle_t *handle,
     aDrvPrivateUsartOwnerRelease(handle, ADRV_USART_OWNER_ASYNC_TX);
 }
 
-aBool_t aDrvUsartAsyncTxIsSupported(const aDrvUsartHandle_t *handle)
+aBool_t aDrvUsartDmaTxIsSupported(aDrvUsartId_t id)
 {
     aDrvDmaChannel_t channel;
 
-    return (handle != NULL) && (handle->initialized != 0U) &&
-           (tx_dma_channel_get(handle->id, &channel) == A_STATUS_OK);
+    return tx_dma_channel_get(id, &channel) == A_STATUS_OK;
 }
 
 aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *handle,
@@ -320,12 +319,11 @@ aStatus_t aDrvUsartAsyncTxAbort(aDrvUsartHandle_t *handle)
     return A_STATUS_OK;
 }
 
-aBool_t aDrvUsartAsyncRxIsSupported(const aDrvUsartHandle_t *handle)
+aBool_t aDrvUsartDmaRxIsSupported(aDrvUsartId_t id)
 {
     aDrvDmaChannel_t channel;
 
-    return (handle != NULL) && (handle->initialized != 0U) &&
-           (rx_dma_channel_get(handle->id, &channel) == A_STATUS_OK);
+    return rx_dma_channel_get(id, &channel) == A_STATUS_OK;
 }
 
 aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,

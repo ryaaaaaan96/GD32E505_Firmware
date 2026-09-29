@@ -59,7 +59,8 @@ static inline aStatus_t aFifoPush(aFifo_t *fifo, const void *element)
     if (fifo == NULL || element == NULL || fifo->storage == NULL)
         return A_STATUS_INVALID_PARAM;
     if (fifo->count == fifo->capacity) return A_STATUS_BUSY;
-    memcpy(fifo->storage + fifo->head * fifo->element_size, element, fifo->element_size);
+    memcpy(fifo->storage + fifo->head * fifo->element_size, element,
+        fifo->element_size);
     fifo->head = (fifo->head + 1U) % fifo->capacity;
     ++fifo->count;
     return A_STATUS_OK;
@@ -78,7 +79,8 @@ static inline aStatus_t aFifoPeek(const aFifo_t *fifo, void *element)
     if (fifo == NULL || element == NULL || fifo->storage == NULL)
         return A_STATUS_INVALID_PARAM;
     if (fifo->count == 0U) return A_STATUS_NOT_READY;
-    memcpy(element, fifo->storage + fifo->tail * fifo->element_size, fifo->element_size);
+    memcpy(element, fifo->storage + fifo->tail * fifo->element_size,
+        fifo->element_size);
     return A_STATUS_OK;
 }
 

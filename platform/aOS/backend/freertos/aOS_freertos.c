@@ -159,12 +159,20 @@ static TickType_t finite_wait_ticks(uint32_t milliseconds)
 aStatus_t aOSInit(void)
 {
     static aBool_t initialized;
+#if AOS_WORKQUEUE_ENABLE
+    aOSTaskConfig_t config = AOS_TASK_CONFIG_DEFAULT;
+    aStatus_t status;
+#endif
+
     if (initialized) return A_STATUS_OK;
     if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
         return A_STATUS_NOT_READY;
 #if AOS_WORKQUEUE_ENABLE
-    aStatus_t status = aOSCreateTask(work_task, "aOSWork",
-        AOS_WORKER_STACK_BYTES, NULL, AOS_WORKER_PRIORITY, &s_work_task);
+    config.name = "aOSWork";
+    config.function = work_task;
+    config.stack_bytes = AOS_WORKER_STACK_BYTES;
+    config.priority = AOS_WORKER_PRIORITY;
+    status = aOSCreateTask(&config, &s_work_task);
     if (status != A_STATUS_OK) return status;
 #endif
     initialized = A_TRUE;
@@ -224,11 +232,15 @@ void aOSRecordFault(aOSFaultCode_t code, aStatus_t status,
     g_aOSFaultRecord.code = (uint32_t)code;
 }
 
-aStatus_t aOSCreateTask(aOSTaskFunction_t function, const char *name,
-                        size_t stack_bytes, void *argument,
-                        uint32_t priority, aOSTaskHandle_t *handle)
+aStatus_t aOSCreateTask(const aOSTaskConfig_t *config, aOSTaskHandle_t *handle)
 {
     if (handle != NULL) *handle = NULL;
+    if (config == NULL) return A_STATUS_INVALID_PARAM;
+    const aOSTaskFunction_t function = config->function;
+    const char *name = config->name;
+    const size_t stack_bytes = config->stack_bytes;
+    void *argument = config->argument;
+    const uint32_t priority = config->priority;
     if (function == NULL || name == NULL ||
         priority < AOS_TASK_PRIO_LOWEST || priority > AOS_TASK_PRIO_REALTIME ||
         priority >= configMAX_PRIORITIES ||
@@ -499,7 +511,8 @@ static aStatus_t work_submit_isr(aOSWorkItem_t *item)
 
 aStatus_t aOSWorkSubmit(aOSWorkItem_t *item)
 {
-    return xPortIsInsideInterrupt() ? work_submit_isr(item) : work_submit_task(item);
+    return xPortIsInsideInterrupt() ? work_submit_isr(item) :
+        work_submit_task(item);
 }
 
 aStatus_t aOSWorkCancel(aOSWorkItem_t *item)
@@ -530,7 +543,8 @@ aStatus_t aOSWorkCancel(aOSWorkItem_t *item)
 
 aStatus_t aOSWorkCancelSync(aOSWorkItem_t *item, aTimeout_t timeout)
 {
-    if (item == NULL || !aTimeoutIsValid(timeout)) return A_STATUS_INVALID_PARAM;
+    if (item == NULL ||
+        !aTimeoutIsValid(timeout)) return A_STATUS_INVALID_PARAM;
     if (xPortIsInsideInterrupt() || aOSIsWorkContext()) return A_STATUS_BUSY;
     (void)aOSWorkCancel(item);
     return aOSWorkWaitIdle(item, timeout);
@@ -778,10 +792,12 @@ aStatus_t aOSMutexLock(aOSMutex_t mutex, aTimeout_t timeout)
             ? portMAX_DELAY : finite_wait_ticks(remaining.milliseconds);
         if (xSemaphoreTake((SemaphoreHandle_t)mutex, ticks) == pdTRUE)
             return A_STATUS_OK;
-        if (timeout.type == A_TIMEOUT_TYPE_RELATIVE && timeout.milliseconds == 0U)
+        if (timeout.type == A_TIMEOUT_TYPE_RELATIVE && timeout.milliseconds ==
+            0U)
             return A_STATUS_BUSY;
         remaining = aTimepointRemaining(&end, aOSGetUptimeMs());
-        if (remaining.type == A_TIMEOUT_TYPE_RELATIVE && remaining.milliseconds == 0U)
+        if (remaining.type == A_TIMEOUT_TYPE_RELATIVE &&
+            remaining.milliseconds == 0U)
             return A_STATUS_TIMEOUT;
         /* Recompute after a bounded chunk or a backend early wake. */
     }
@@ -841,10 +857,12 @@ aStatus_t aOSRecursiveMutexLock(aOSRecursiveMutex_t mutex,
             ? portMAX_DELAY : finite_wait_ticks(remaining.milliseconds);
         if (xSemaphoreTakeRecursive((SemaphoreHandle_t)mutex, ticks) == pdTRUE)
             return A_STATUS_OK;
-        if (timeout.type == A_TIMEOUT_TYPE_RELATIVE && timeout.milliseconds == 0U)
+        if (timeout.type == A_TIMEOUT_TYPE_RELATIVE && timeout.milliseconds ==
+            0U)
             return A_STATUS_BUSY;
         remaining = aTimepointRemaining(&end, aOSGetUptimeMs());
-        if (remaining.type == A_TIMEOUT_TYPE_RELATIVE && remaining.milliseconds == 0U)
+        if (remaining.type == A_TIMEOUT_TYPE_RELATIVE &&
+            remaining.milliseconds == 0U)
             return A_STATUS_TIMEOUT;
         /* Recompute after a bounded chunk or a backend early wake. */
     }

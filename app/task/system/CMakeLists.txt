@@ -2,7 +2,6 @@ target_sources(
     ${APP_TARGET}
     PRIVATE
         system.c
-        status.c
 )
 
 target_include_directories(

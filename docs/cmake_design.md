@@ -49,7 +49,7 @@ USART 开关按职责区分，不把硬件 DMA 与业务异步 API 合并：
 |---|---|
 | `ADRV_USART_DMA_ENABLE` | driver USART 的 DMA 启停、进度查询等硬件操作 |
 | `ADEV_USART_DIRECT_ENABLE` | 同步用户缓冲区直传 API，不规定是否使用 DMA |
-| `ADEV_USART_ASYNC_ENABLE` | device 异步请求、取消、超时及来源上下文回调 |
+| `ADEV_USART_ASYNC_ENABLE` | device 异步请求、取消、超时及统一 ISR 回调 |
 
 底层 DMA 的请求变量为 `ADRV_USART_DMA_REQUESTED`，解析结果为 `ADRV_USART_DMA`。
 通用 DMA 驱动仍通过 `ADRV_MODULE_DMA_REQUESTED` 独立选择，它不代表 USART 专用支持。

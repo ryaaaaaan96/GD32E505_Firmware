@@ -41,6 +41,28 @@ typedef void (*aOSTaskFunction_t)(void *argument);
 /** @brief 借用的 OS 任务标识，删除后失效；调用者不可解引用。 */
 typedef void *aOSTaskHandle_t;
 
+/** @brief 任务创建配置；创建期间读取字段，不保存配置结构体指针。 */
+typedef struct {
+    const char *name; /**< 后端在创建时复制名称，可按后端长度上限截断。 */
+    aOSTaskFunction_t function; /**< 必填入口，允许自然返回。 */
+    void *argument; /**< 借用参数，其对象须在任务访问期间有效。 */
+    size_t stack_bytes; /**< 字节数，0 使用后端默认容量；后端向上对齐。 */
+    uint32_t priority; /**< AOS_TASK_PRIO_LOWEST..REALTIME。 */
+} aOSTaskConfig_t;
+
+/** @brief 静态/局部初始化默认值；使用前必须设置 function。 */
+#define AOS_TASK_CONFIG_DEFAULT { "task", NULL, NULL, 0U, AOS_TASK_PRIO_NORMAL }
+
+/** @brief 重置所有字段为默认值；config 为 NULL 时不操作。 */
+static inline void aOSTaskConfigStructInit(aOSTaskConfig_t *config)
+{
+    if (config != NULL) {
+        const aOSTaskConfig_t defaults = AOS_TASK_CONFIG_DEFAULT;
+        *config = defaults;
+    }
+}
+
+
 /**
  * @brief 可合并通知的不透明等待对象。
  * 同一时刻只允许一个等待任务；多次通知可能合并，唤醒后必须再次检查业务条件。
@@ -126,20 +148,16 @@ aStatus_t aOSValidateIsrPriority(uint32_t priority);
 
 /**
  * @brief 创建任务，不负责应用模块初始化。
- * @param[in] function 任务入口，允许正常返回。
- * @param[in] name 非空任务名，由后端按名称长度上限保存。
- * @param[in] stack_bytes 栈容量，单位为字节；0 使用后端默认容量，向上对齐。
- * @param[in] argument 原样传给任务；其对象须在任务访问期间有效。
- * @param[in] priority 逻辑优先级 AOS_TASK_PRIO_LOWEST..REALTIME；后端映射，不保证调度效果一致。
- * @param[out] handle 可选输出，NULL 表示不获取句柄。
+ * @param[in] config 必填配置，只在调用期间读取；名称由后端复制，argument 不深拷贝。
+ * @param[out] handle 可选输出，NULL 表示不获取句柄；失败时清空输出。
  * @retval A_STATUS_OK 创建成功。
- * @retval A_STATUS_INVALID_PARAM 入口、名称、栈容量超出后端范围或优先级无效。
+ * @retval A_STATUS_INVALID_PARAM 配置、入口或名称为空，栈容量超出后端范围或优先级无效。
  * @retval A_STATUS_NO_MEMORY 分配失败。
- * @note 调度器启动后，新任务可能在本函数返回前运行。
+ * @note 仅启动阶段或任务上下文调用。调度器启动后，新任务可能在本函数返回前运行。
+ * 使用 aOSTaskConfigStructInit 或 AOS_TASK_CONFIG_DEFAULT 设置默认值；全零配置无效。
+ * 逻辑优先级由后端映射，不保证不同 OS 的调度效果一致。
  */
-aStatus_t aOSCreateTask(aOSTaskFunction_t function, const char *name,
-                        size_t stack_bytes, void *argument,
-                        uint32_t priority, aOSTaskHandle_t *handle);
+aStatus_t aOSCreateTask(const aOSTaskConfig_t *config, aOSTaskHandle_t *handle);
 
 /**
  * @brief 强制删除指定任务（后端受限能力）；普通关闭优先使用协作退出。

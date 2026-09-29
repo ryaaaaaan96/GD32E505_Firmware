@@ -1,14 +1,15 @@
 #include "app_system_device.h"
 #include <assert.h>
+#if ASHELL_ENABLED
+#include "aDev_usart.h"
+#include "aShell.h"
+#endif
 
 static unsigned led_calls, usart_calls;
 aStatus_t aDevLedInit(const aDevLedConfig_t *config, aDevLedHandle_t *handle)
 {
     assert(config != NULL && handle != NULL);
     assert(++led_calls == 1);
-    aDevLedHandle_t *nested = handle;
-    assert(appSystemStatusLedInit(APP_LED_STATUS, &nested) == A_STATUS_BUSY);
-    assert(nested == NULL);
 #ifdef LED_FAILURE
     return A_STATUS_ERROR;
 #else
@@ -16,20 +17,64 @@ aStatus_t aDevLedInit(const aDevLedConfig_t *config, aDevLedHandle_t *handle)
 #endif
 }
 #if ASHELL_ENABLED
-aStatus_t aDevUsartInitStatic(const aDevUsartConfig_t *config,
-                             aDevUsartStorage_t *storage,
-                             aDevUsartHandle_t **out)
+static aDevUsartHandle_t *expected_handle;
+static aSSize_t io_result = 2;
+static unsigned shell_calls, deinit_calls;
+static aStream_t stream;
+static char data[4];
+void aShellConfigStructInit(aShellConfig_t *config)
 {
-    assert(config != NULL && storage != NULL);
+    aStreamStructInit(&config->stream);
+    config->read_timeout = A_TIMEOUT_NO_WAIT;
+    config->write_timeout = A_TIMEOUT_MS(100U);
+}
+aStatus_t aShellInit(const aShellConfig_t *config)
+{
+    assert(usart_calls == 1 && expected_handle != NULL);
+    assert(++shell_calls == 1);
+    assert(config->stream.read && config->stream.write);
+    assert(config->stream.flush == NULL);
+    assert(config->read_timeout.milliseconds ==
+           A_TIMEOUT_MS(20U).milliseconds);
+    assert(config->write_timeout.milliseconds ==
+           A_TIMEOUT_MS(20U).milliseconds);
+    stream = config->stream;
+#ifdef SHELL_FAILURE
+    return A_STATUS_NO_MEMORY;
+#else
+    return A_STATUS_OK;
+#endif
+}
+aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle)
+{
+    assert(handle == expected_handle);
+    ++deinit_calls;
+    return A_STATUS_OK;
+}
+aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
+                       size_t size, aTimeout_t timeout)
+{
+    assert(handle == expected_handle && buffer == data && size == sizeof(data));
+    assert(timeout.type == A_TIMEOUT_TYPE_RELATIVE && timeout.milliseconds == 7U);
+    return io_result;
+}
+aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *buffer,
+                        size_t size, aTimeout_t timeout)
+{
+    assert(handle == expected_handle && buffer == data && size == sizeof(data));
+    assert(timeout.type == A_TIMEOUT_TYPE_RELATIVE && timeout.milliseconds == 9U);
+    return io_result;
+}
+aStatus_t aDevUsartCreate(const aDevUsartConfig_t *config,
+                             aDevUsartHandle_t **handle)
+{
+    assert(config != NULL && handle != NULL);
     assert(++usart_calls == 1);
-    aDevUsartHandle_t *nested = NULL;
-    assert(appSystemConsoleInit(APP_USART_CONSOLE, &nested) == A_STATUS_BUSY);
-    assert(nested == NULL);
 #ifdef USART_FAILURE
-    *out = NULL;
     return A_STATUS_ERROR;
 #else
-    *out = (aDevUsartHandle_t *)(void *)storage;
+    expected_handle = (aDevUsartHandle_t *)(void *)data;
+    *handle = expected_handle;
     return A_STATUS_OK;
 #endif
 }
@@ -38,36 +83,37 @@ int main(void)
 {
     aDevLedHandle_t *led = NULL;
     assert(led_calls == 0 && usart_calls == 0);
-    assert(appSystemStatusLedInit(APP_LED_STATUS, NULL) == A_STATUS_INVALID_PARAM);
-    assert(appSystemStatusLedInit((appLedId_t)999, &led) == A_STATUS_NOT_FOUND && led == NULL);
+    assert(appSystemStatusLedInit(NULL) == A_STATUS_INVALID_PARAM);
 #if ASHELL_ENABLED
-    aDevUsartHandle_t *usart = NULL;
-    assert(appSystemConsoleInit(APP_USART_CONSOLE, NULL) == A_STATUS_INVALID_PARAM);
-    assert(appSystemConsoleInit((appUsartId_t)999, &usart) == A_STATUS_NOT_FOUND && usart == NULL);
+    aStreamStructInit(&stream);
     assert(led_calls == 0 && usart_calls == 0);
     /* USART can initialize independently, before LED. */
 #if defined(USART_FAILURE)
-    assert(appSystemConsoleInit(APP_USART_CONSOLE, &usart) == A_STATUS_ERROR && usart == NULL);
-    assert(appSystemConsoleInit(APP_USART_CONSOLE, &usart) == A_STATUS_ERROR && usart == NULL);
+    assert(appSystemConsoleInit() == A_STATUS_ERROR);
+    assert(shell_calls == 0 && deinit_calls == 0);
     assert(usart_calls == 1);
+#elif defined(SHELL_FAILURE)
+    assert(appSystemConsoleInit() == A_STATUS_NO_MEMORY);
+    assert(shell_calls == 1 && deinit_calls == 1);
 #else
-    assert(appSystemConsoleInit(APP_USART_CONSOLE, &usart) == A_STATUS_OK && usart != NULL);
-    aDevUsartHandle_t *same_usart = NULL;
-    assert(appSystemConsoleInit(APP_USART_CONSOLE, &same_usart) == A_STATUS_OK);
-    assert(same_usart == usart && usart_calls == 1);
+    assert(appSystemConsoleInit() == A_STATUS_OK);
+    assert(shell_calls == 1 && deinit_calls == 0);
+    assert(stream.read && stream.write && !stream.flush);
+    assert(stream.read(data, sizeof(data), A_TIMEOUT_MS(7U)) == 2);
+    assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == 2);
+    io_result = -1;
+    assert(stream.read(data, sizeof(data), A_TIMEOUT_MS(7U)) == -1);
+    assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == -1);
+    assert(usart_calls == 1);
 #endif
 #else
     assert(usart_calls == 0);
 #endif
     assert(led_calls == 0);
 #ifdef LED_FAILURE
-    assert(appSystemStatusLedInit(APP_LED_STATUS, &led) == A_STATUS_ERROR && led == NULL);
-    assert(appSystemStatusLedInit(APP_LED_STATUS, &led) == A_STATUS_ERROR && led == NULL);
+    assert(appSystemStatusLedInit(&led) == A_STATUS_ERROR && led == NULL);
 #else
-    assert(appSystemStatusLedInit(APP_LED_STATUS, &led) == A_STATUS_OK && led != NULL);
-    aDevLedHandle_t *same_led = NULL;
-    assert(appSystemStatusLedInit(APP_LED_STATUS, &same_led) == A_STATUS_OK && same_led == led);
-    assert(appSystemStatusLedInit((appLedId_t)999, &same_led) == A_STATUS_NOT_FOUND && same_led == NULL);
+    assert(appSystemStatusLedInit(&led) == A_STATUS_OK && led != NULL);
 #endif
     assert(led_calls == 1);
     return 0;

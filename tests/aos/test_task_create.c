@@ -3,6 +3,7 @@
 #include <setjmp.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include "../../platform/aOS/backend/freertos/aOS_freertos.c"
 
 static void *tls[2];
@@ -42,21 +43,52 @@ static void body(void *arg)
 int main(void)
 {
     aOSTaskHandle_t task = NULL;
-    assert(aOSCreateTask(body, "test", 513, &ran, 4, &task) == A_STATUS_OK);
+    aOSTaskConfig_t config = AOS_TASK_CONFIG_DEFAULT;
+    assert(config.function == NULL && config.argument == NULL);
+    assert(config.stack_bytes == 0 && config.priority == AOS_TASK_PRIO_NORMAL);
+    assert(strcmp(config.name, "task") == 0);
+    aOSTaskConfigStructInit(NULL);
+    assert(aOSCreateTask(NULL, &task) == A_STATUS_INVALID_PARAM && task == NULL);
+    assert(aOSCreateTask(&config, &task) == A_STATUS_INVALID_PARAM);
+    config.function = body;
+    config.argument = &ran;
+    config.stack_bytes = 513;
+    assert(aOSCreateTask(&config, &task) == A_STATUS_OK);
     assert(stack_depth == 129 && allocated == 1 && task == tls);
+    /* Creation must not retain the caller's configuration storage. */
+    aOSTaskConfigStructInit(&config);
+    assert(config.function == NULL && config.argument == NULL);
+    assert(config.stack_bytes == 0 && config.priority == AOS_TASK_PRIO_NORMAL);
+    assert(strcmp(config.name, "task") == 0);
     if (setjmp(finished) == 0) entry(entry_arg);
     assert(ran == 1 && deleted == 1 && allocated == 0);
-    assert(aOSCreateTask(body, "test", 0, &ran, 4, &task) == A_STATUS_OK);
+    config.function = body;
+    config.argument = &ran;
+    assert(aOSCreateTask(&config, &task) == A_STATUS_OK);
     assert(stack_depth == configMINIMAL_STACK_SIZE);
     aOSDeleteTask(task); /* Never started: bootstrap must still be freed. */
     assert(allocated == 0 && tls[1] == NULL && deleted == 2 && depth == 0);
+    assert(aOSCreateTask(&config, NULL) == A_STATUS_OK);
+    if (setjmp(finished) == 0) entry(entry_arg);
+    assert(ran == 2 && allocated == 0);
     fail_create = 1;
-    assert(aOSCreateTask(body, "test", 512, NULL, 4, &task) == A_STATUS_NO_MEMORY);
+    task = tls;
+    assert(aOSCreateTask(&config, &task) == A_STATUS_NO_MEMORY);
     assert(allocated == 0 && task == NULL);
     fail_create = 0; fail_alloc = 1;
-    assert(aOSCreateTask(body, "test", 512, NULL, 4, &task) == A_STATUS_NO_MEMORY);
+    assert(aOSCreateTask(&config, &task) == A_STATUS_NO_MEMORY);
     assert(g_aOSFaultRecord.code == AOS_FAULT_MALLOC_FAILED && depth == 0);
-    assert(aOSCreateTask(body, "test", SIZE_MAX, NULL, 4, &task) == A_STATUS_INVALID_PARAM);
-    assert(aOSCreateTask(body, "test", 512, NULL, 0, &task) == A_STATUS_INVALID_PARAM);
-    puts("aOS stack bytes/default/return/early-delete/allocation failure passed");
+    config.stack_bytes = SIZE_MAX;
+    assert(aOSCreateTask(&config, &task) == A_STATUS_INVALID_PARAM);
+    config.stack_bytes = 512;
+    config.priority = 0;
+    assert(aOSCreateTask(&config, &task) == A_STATUS_INVALID_PARAM);
+    config.priority = AOS_TASK_PRIO_REALTIME + 1U;
+    assert(aOSCreateTask(&config, &task) == A_STATUS_INVALID_PARAM);
+    config.priority = AOS_TASK_PRIO_NORMAL;
+    config.name = NULL;
+    task = tls;
+    assert(aOSCreateTask(&config, &task) == A_STATUS_INVALID_PARAM && task == NULL);
+    assert(allocated == 0);
+    puts("aOS task config/default/stack/return/early-delete/allocation failure passed");
 }

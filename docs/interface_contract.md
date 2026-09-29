@@ -54,7 +54,7 @@ Doxygen 注释。第三方/官方原始头文件不做批量风格改写。
 - 有限超时通常约束一次调用的总等待预算，不能在每次内部重试时重新开始计时；特殊语义必须另行注明。
 - 不等待不代表请求一定成功，也不应启动之后无法在返回前停止的同步硬件操作。
 - 公共头文件必须说明能否阻塞、能否从 ISR 调用，以及锁和并发限制。
-- 异步回调上下文必须由具体 API 明确说明。当前 USART 数据/完成来自 ISR，取消来自调用任务，TX 超时来自定时服务；统一 ISR 分发后置，不能把目标契约当作当前保证。
+- 异步回调上下文必须由具体 API 明确说明。当前 USART Async 回调统一来自 USART/DMA ISR；任务取消和定时服务超时通过软件挂起 USART IRQ 派发。Cancel 成功仅表示受理，资源保留到终态回调退出。
 - 回调可能何时发生、能否重入/提交新请求、取消如何完成，都必须在接口中说明。
 
 ## 缓冲区和完成语义
@@ -66,20 +66,21 @@ Doxygen 注释。第三方/官方原始头文件不做批量风格改写。
   DMA 后端不可用时初始化失败，不得静默切换后端；同步 Direct 的编译开关不控制普通 DMA ring。
 - 区分提交成功、内部缓冲区接收、DMA 搬运完成和外设真正完成。
 - USART DMA 完成不等于线路发送完成；标为线路完成的事件必须以 USART TC 等等效状态为依据。
-- 异步请求描述符与数据缓冲区的生命周期分别说明。接收回调的数据是借用视图还是稳定快照，也必须明确。
+- 异步请求描述符与数据缓冲区的生命周期分别说明。接收回调的数据是借用视图还是稳定快照，也必须明确。USART IRQ RX 保留 ring 区间至回调返回；DMA RX 复制校验后交付调用者快照区，两者均只保证当前回调期间稳定。
 
 ## 应用设备按实例初始化
 
-- 每类提供 Init(id, &handle)：appSystemConsoleInit、appSystemStatusLedInit，保持类型明确，不新增通用 void* 接口。
-- 合并初始化和句柄获取，不再提供独立 Open。第一次调用初始化选中实例，后续返回同一句柄或保存的错误。
-- 失败清空输出；NULL 输出指针返回 INVALID_PARAM，未知/未配置编号返回 NOT_FOUND。
+- 按设备用途提供专用初始化：appSystemStatusLedInit(&handle) 返回 LED 句柄，
+  appSystemConsoleInit() 初始化控制台并通过 aStream_t 绑定 aShell 单例。
+- 合并初始化和句柄获取，不再提供独立 Open。直接初始化选中实例；应用保证每个实例只初始化一次。
+- 失败清空输出；NULL 输出指针返回 INVALID_PARAM。
 - 首次初始化可能耗时、分配 OS 资源并操作硬件，不能当作无副作用查询。
-- 仅在驱动/OS 就绪后、启动阶段单线程调用；同实例重入返回 BUSY，不表示线程安全。
-- 每实例保存自己的生命周期结果，不因其他设备初始化失败自动回滚。失败不自动重试。
+- 仅在驱动/OS 就绪后、启动阶段单线程调用，不支持重复或重入初始化。
+- 初始化错误直接返回上层，不缓存结果、不自动重试，也不因其他设备失败联动回滚。
 - 不在运行时检查跨设备资源冲突；后续可通过 Python/XML 添加构建期校验（当前未实现）。设备本身的参数、能力和初始化错误校验仍须保留。
 - 句柄为共享借用，禁止销毁、重新配置或反初始化；没有隐含独占锁或独立接收流。
 - 运行阶段使用或传递已获得的句柄，不依赖运行期首次 Init。
-- 不在各层机械复制 initialized 状态；应用的初始化阶段/结果用于管理该实例的幂等初始化，不替代底层有效性检查。
+- 应用设备层不增加初始化阶段/结果状态；底层设备有效性检查继续保留。
 - 如需查询不初始化、热重配置或运行期并发首次初始化，必须显式扩展契约与测试。
 
 ## 新接口审查清单
@@ -135,7 +136,11 @@ ISR 不使用任务 errno。各接口对取消、NO_WAIT 和部分进度的例�
 
 ## 任务栈与失败策略
 
-aOSCreateTask 的 stack_bytes 使用字节，0 选择后端默认栈；当前 FreeRTOS 向上对齐
+aOSCreateTask 接受 aOSTaskConfig_t 配置指针和可选输出句柄。
+配置通过 aOSTaskConfigStructInit 或 AOS_TASK_CONFIG_DEFAULT 初始化：名称 "task"、
+普通优先级、栈 0、参数和入口 NULL；入口必须由调用者设置。创建期间读取配置并
+复制名称，不保留配置指针，argument 为借用对象；失败清空输出句柄。
+配置中的 stack_bytes 使用字节，0 选择后端默认栈；当前 FreeRTOS 向上对齐
 到 StackType_t，现有应用和 worker 的栈字节数保持原容量。任务入口允许返回，后端
 包装入口负责退出；也可显式 aOSTaskExit。优先级使用 LOWEST..REALTIME 逻辑等级，
 FreeRTOS 当前直接映射 1..7，不承诺其他后端拥有相同调度效果。
@@ -147,3 +152,74 @@ OS 堆分配失败记录故障后返回，由调用方处理 NO_MEMORY；应用�
 当前 FreeRTOS 仅接受 32 位 tick / 1000 Hz；其他配置在构建阶段拒绝。
 有限等待不会使用 portMAX_DELAY 哨兵，长锁等待分段使用原截止预算。
 平台目前仍只实现 FreeRTOS；POSIX 线程、跨核同步和 Linux 设备后端尚未实现。
+
+## 同步字节流与 Shell
+
+aLib/aStream.h 定义 aStream_t，包含 read、write、可选 flush；不拥有底层资源。
+通过 aStreamStructInit(&stream) 初始化，显式将三个回调设为 NULL；传 NULL 不操作。
+读写返回实际长度，允许部分进度；0 表示无进展或输入结束；-1 表示失败并设置项目
+errno。每次调用共享一个超时预算，返回后不得保留缓冲区。Linux 适配需要转换
+POSIX errno。使用者按所需能力检查操作指针，不能强转不兼容的函数指针。
+
+流接口不传 context；同一套回调不区分设备实例，多实例需各自提供适配函数。
+USART 到 Stream 的转换由 app/devices 承担：appSystemConsoleInit 初始化设备，
+将绑定私有静态句柄的 read/write 回调写入 Shell 配置并调用 aShellInit，
+flush 设为 NULL。配置由 Shell 复制，任务层负责创建任务。aDev 不依赖 Stream。
+应用先停止 Shell 等所有流使用者，再关闭底层设备。流复用 USART 的互斥和超时规则。
+
+flush(timeout) 返回 aStatus_t，用于将待发送缓冲数据提交到实际输出接口。
+flush 非 NULL 时 write 可以先缓存，调用者按适配器约定显式提交；为 NULL 时
+write 已直接提交输出，无需额外刷新，调用者跳过 flush 即可。
+OK 表示提交成功，不表示线路已经发送完成、数据持久化或对端收到；不清空 RX。
+失败可能已有部分数据提交，剩余数据和重试规则由适配器明确；调用者协调并发写入。
+当前 USART 的 write 已负责启动发送，因此 flush 为 NULL；需要等待 TC 时仍使用
+设备专用的 aDevUsartWaitTransmitComplete，不将等待完成混入 flush。
+Shell 只要求 read/write，不自动调用 flush；若接入需显式提交的缓冲流，由应用
+安排提交时机并保证与 Shell 输出的并发安全。
+
+aShellConfig_t 按值保存 stream，并独立配置 read_timeout/write_timeout；默认读
+NO_WAIT、写 100 ms。当前 app 显式设为读写各 20 ms。编辑区和历史记录由
+nr_micro_shell 静态持有，容量统一配置于 func/aShell/aShell_config.h。
+应用通过 ASHELL_CMD_EXPORT 注册命令；配置只包含流和超时。
+GCC 链接器提供只读命令数组和 uint16_t 数量对象，Init 检查布局及重名。
+命令使用 int(argc, argv) 签名，在 Process 所在任务同步执行；argv 仅在回调期间有效。
+每次 Process 最多处理 64 字节：0/A_EAGAIN 返回 BUSY，A_ETIMEDOUT 返回 TIMEOUT，
+其他输入失败或非法长度返回 ERROR。输入结束返回 0 时同样按 BUSY 处理，连接生命周期
+由应用管理。成功不读取历史 errno。
+
+输出片段在 write_timeout 总预算内重试部分写入；零进展/错误停止，NO_WAIT
+只尝试一次。预算不涵盖命令执行、外层锁等待或多个输出片段。Init 提示符输出失败
+会回滚；Process 报告处理期间输出错误，已消费输入不重放；OK 不表示业务命令成功。
+ASHELL_PRINT 启用时调用 aShellPrintf，保留 void，不报告失败或截断，
+单次最多 255 字节；禁用时不求值参数。
+输入编辑与输出通过递归锁串行化，但异步日志不会自动重绘编辑行。
+Shell 为单例，由 app 创建和调度任务，不自动调用 stream.flush。
+上游补丁、输入语法及 Linux 接入约定见 func/aShell/README.md。
+
+自维护 C 代码每行不超过 80 列。长函数调用和声明使用参数换行，续行缩进清晰；
+局部变量声明放在函数开头，初始化流程逐项调用并检查结果。第三方与厂商代码保留原格式。
+
+USART 静态实例由创建层包含 aDev_usart_instance.h 并声明完整对象；
+业务层仅包含 aDev_usart.h，使用不透明指针。InitStatic 接收配置和对象指针，
+不再输出指针；对象字段由 aDev 管理，布局不保证跨平台或版本兼容。
+
+后续新增或重构自维护设备模块时，统一采用业务接口与实例定义分离的设计：
+- 普通接口头文件提供配置、API 和不透明 handle 声明，供业务代码使用。
+- 独立的 *_instance.h 提供完整对象定义，仅供实例创建层及模块实现使用。
+- 静态实例按真实结构体类型分配；初始化接收配置和对象指针，返回状态码。
+  不使用固定容量字节数组模拟对象，不额外输出指向同一对象的 handle。
+- 实例字段由模块管理；应用不得直接修改，活动对象不得复制、移动或重复初始化。
+  实例布局不承诺跨平台或版本兼容，平台差异限制在实现和实例创建层。
+- 动态创建接口如有需要可保留，由模块分配对象并通过输出参数返回 handle，
+  与对应销毁接口配对使用。
+- RingBuffer/FIFO 只管理数据缓冲，不替代设备对象的存储。
+
+此约定用于后续新增和重构，不要求修改第三方接口，也不代表已有模块已全部迁移。
+
+USART 对象分配接口通过 ADEV_USART_STATIC_REQUESTED 和
+ADEV_USART_DYNAMIC_REQUESTED 独立裁剪，可同时开启；USART 启用时至少选择一种。
+STATIC 控制 InitStatic，DYNAMIC 控制 Create/Destroy，DeInit 为共享接口。
+当前产品关闭 STATIC、开启 DYNAMIC，控制台通过 Create 分配设备对象；
+Shell 初始化失败时调用 Destroy。分配失败返回 A_STATUS_NO_MEMORY。
+动态创建不改变应用提供的收发缓冲区的所有权及生命周期。
+业务接口与实例定义分离的约定仍然适用；动态调用者无需包含实例头文件。

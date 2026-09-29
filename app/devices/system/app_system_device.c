@@ -1,52 +1,41 @@
 #include "app_system_device.h"
-#include "app_config.h"
-
-enum { INSTANCE_COLD, INSTANCE_STARTING, INSTANCE_DONE };
+#if ASHELL_ENABLED
+#include "aDev_usart.h"
+#include "aShell.h"
+#endif
 
 /* 系统状态指示灯实例。 */
 static const aDevLedConfig_t led_config = {
-    .pin = APP_STATUS_LED_PIN,
-    .active_level = APP_STATUS_LED_ACTIVE_LEVEL,
+    .pin = ADRV_PIN(ADRV_GPIO_PORT_A, 8),
+    .active_level = ADEV_LED_ACTIVE_LOW,
     .initially_on = A_FALSE,
 };
 
 static aDevLedHandle_t led_handle;
-static unsigned led_phase;
-static aStatus_t led_init_result = A_STATUS_NOT_READY;
 
-aStatus_t appSystemStatusLedInit(appLedId_t id, aDevLedHandle_t **handle_out)
+aStatus_t appSystemStatusLedInit(aDevLedHandle_t **handle_out)
 {
+    aStatus_t status;
+
     if (handle_out == NULL) {
         return A_STATUS_INVALID_PARAM;
     }
     *handle_out = NULL;
-    switch (id) {
-    case APP_LED_STATUS:
-        if (led_phase == INSTANCE_STARTING) {
-            return A_STATUS_BUSY;
-        }
-        if (led_phase == INSTANCE_COLD) {
-            led_phase = INSTANCE_STARTING;
-            led_init_result = aDevLedInit(&led_config, &led_handle);
-            led_phase = INSTANCE_DONE;
-        }
-        if (led_init_result != A_STATUS_OK) {
-            return led_init_result;
-        }
-        *handle_out = &led_handle;
-        return A_STATUS_OK;
-    default:
-        return A_STATUS_NOT_FOUND;
+    status = aDevLedInit(&led_config, &led_handle);
+    if (status != A_STATUS_OK) {
+        return status;
     }
+    *handle_out = &led_handle;
+    return A_STATUS_OK;
 }
 
 /* 系统控制台串口实例，随 Shell 功能一同裁剪。 */
 #if ASHELL_ENABLED
 
-/* 配置宏统一放在 app_config.h；缓冲区和句柄仍由本文件私有持有。
- * 业务通过 APP_USART_CONSOLE 按实例初始化获取句柄，不暴露全局句柄或独立 getter。 */
-static uint8_t rx_buffer[APP_CONSOLE_RX_BUFFER_SIZE];
-static uint8_t tx_buffer[APP_CONSOLE_TX_BUFFER_SIZE];
+/* 控制台配置、缓冲区和句柄由本文件私有持有。
+ * appSystemConsoleInit 完成控制台及 Shell 单例初始化。 */
+static uint8_t rx_buffer[256U];
+static uint8_t tx_buffer[256U];
 
 static const aDevUsartConfig_t usart_config = {
     .drv_config = {
@@ -57,48 +46,61 @@ static const aDevUsartConfig_t usart_config = {
         .tx_pin = ADRV_PIN(ADRV_GPIO_PORT_A, 9),
         .rx_pin = ADRV_PIN(ADRV_GPIO_PORT_A, 10),
     },
-    .mode = APP_CONSOLE_USART_MODE,
+    .mode = ADEV_USART_TX_INTERRUPT_BUFFERED |
+            ADEV_USART_RX_INTERRUPT_BUFFERED |
+            ADEV_USART_OPTION_RX_IDLE,
     .interrupt_priority = 6U,
     .rx_buffer = rx_buffer,
     .rx_buffer_size = sizeof(rx_buffer),
     .tx_buffer = tx_buffer,
     .tx_buffer_size = sizeof(tx_buffer),
     .rs485 = {
-        .enabled = A_FALSE,
+        .mode = ADEV_USART_RS485_NONE,
         .de_pin = ADRV_PIN_NONE,
         .de_active_level = ADRV_GPIO_HIGH,
     },
 };
 
-static aDevUsartStorage_t usart_storage;
-static aDevUsartHandle_t *usart_handle;
-static unsigned usart_phase;
-static aStatus_t usart_init_result = A_STATUS_NOT_READY;
+static aDevUsartHandle_t *console_handle;
 
-aStatus_t appSystemConsoleInit(appUsartId_t id, aDevUsartHandle_t **handle_out)
+/* Product adaptation: the generic stream does not expose the USART type. */
+static aSSize_t console_read(void *buffer, size_t size,
+                            aTimeout_t timeout)
 {
-    if (handle_out == NULL) {
-        return A_STATUS_INVALID_PARAM;
+    return aDevUsartRead(console_handle, buffer, size, timeout);
+}
+
+static aSSize_t console_write(const void *buffer, size_t size,
+                             aTimeout_t timeout)
+{
+    return aDevUsartWrite(console_handle, buffer, size, timeout);
+}
+
+aStatus_t appSystemConsoleInit(void)
+{
+    aShellConfig_t config;
+    aStatus_t status;
+
+    aShellConfigStructInit(&config);
+    status = aDevUsartCreate(
+        &usart_config,
+        &console_handle);
+    if (status != A_STATUS_OK) {
+        return status;
     }
-    *handle_out = NULL;
-    switch (id) {
-    case APP_USART_CONSOLE:
-        if (usart_phase == INSTANCE_STARTING) {
-            return A_STATUS_BUSY;
-        }
-        if (usart_phase == INSTANCE_COLD) {
-            usart_phase = INSTANCE_STARTING;
-            usart_init_result = aDevUsartInitStatic(&usart_config, &usart_storage, &usart_handle);
-            usart_phase = INSTANCE_DONE;
-        }
-        if (usart_init_result != A_STATUS_OK) {
-            return usart_init_result;
-        }
-        *handle_out = usart_handle;
-        return A_STATUS_OK;
-    default:
-        return A_STATUS_NOT_FOUND;
+    config.stream.read = console_read;
+    config.stream.write = console_write;
+    config.stream.flush = NULL; /* Write already submits output to USART. */
+    config.read_timeout = A_TIMEOUT_MS(20U);
+    config.write_timeout = A_TIMEOUT_MS(20U);
+
+    status = aShellInit(&config);
+    if (status != A_STATUS_OK) {
+        (void)aDevUsartDestroy(console_handle);
+        console_handle = NULL;
+        return status;
     }
+    return A_STATUS_OK;
 }
 
 #endif

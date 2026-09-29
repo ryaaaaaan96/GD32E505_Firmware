@@ -119,7 +119,8 @@ aStatus_t aDrvSpiInitStatic(const aDrvSpiConfig_t *config,
 
     if ((configure_pin(config->sckPin, GPIO_MODE_AF_PP) != A_STATUS_OK) ||
         (configure_pin(config->mosiPin, GPIO_MODE_AF_PP) != A_STATUS_OK) ||
-        (configure_pin(config->misoPin, GPIO_MODE_IN_FLOATING) != A_STATUS_OK)) {
+        (configure_pin(config->misoPin, GPIO_MODE_IN_FLOATING) !=
+            A_STATUS_OK)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (config->csMode == ADRV_SPI_CS_SOFT) {

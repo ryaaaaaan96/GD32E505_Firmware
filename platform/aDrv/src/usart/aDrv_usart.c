@@ -108,6 +108,7 @@ void aDrvUsartHandleStructInit(aDrvUsartHandle_t *handle)
     }
     handle->owner = ADRV_USART_OWNER_NONE;
     handle->interrupt_enabled_mask = 0U;
+    handle->software_pending = A_FALSE;
     handle->irq_priority = 5U;
     handle->initialized = A_FALSE;
 }

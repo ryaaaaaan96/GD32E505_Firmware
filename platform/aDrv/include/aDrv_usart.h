@@ -15,7 +15,7 @@
 #define ADRV_USART_H
 
 #include "aDrv.h"
-#include "aDrv_gpio.h"
+#include "aDrv_basic.h"
 
 /** @brief CMake 导出的 0/1 编译能力；使用 #if 判断，不用 #ifdef。 */
 #ifndef ADRV_USART_INTERRUPT_ENABLE
@@ -66,6 +66,7 @@ typedef enum {
     ADRV_USART_EXTI_TC, /**< 最后一个停止位发送完成。 */
     ADRV_USART_EXTI_IDLE, /**< 硬件空闲线检测，不等同于协议帧结束。 */
     ADRV_USART_EXTI_ERROR, /**< 校验、帧、噪声或溢出等硬件异常通知。 */
+    ADRV_USART_EXTI_SOFTWARE, /**< 软件挂起的 USART ISR 事件。 */
     ADRV_USART_EXTI_MAX, /**< 事件数量哨兵，不可作为注册事件。 */
 } aDrvUsartExti_t;
 
@@ -97,6 +98,7 @@ typedef struct {
     aDrvUsartParity_t parity; /**< 当前校验方式缓存。 */
     aDrvUsartStopBits_t stop_bits; /**< 当前停止位缓存。 */
     aDrvUsartId_t id; /**< 本句柄绑定的逻辑实例。 */
+    volatile aBool_t software_pending; /**< 待派发的软件事件。 */
     aDrvUsartCallback_t callbacks[ADRV_USART_EXTI_MAX]; /**< ISR 回调槽。 */
     aDrvUsartOwner_t owner; /**< 当前占用路径的位集合。 */
     uint32_t interrupt_enabled_mask; /**< 外设事件使能位，不等于 NVIC 状态。 */
@@ -183,6 +185,9 @@ aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *handle, uint8_t *data);
 aStatus_t aDrvUsartIsTransmitComplete(
     const aDrvUsartHandle_t *handle, aBool_t *complete);
 #if ADRV_USART_INTERRUPT_ENABLE
+/** @brief 挂起 SOFTWARE 事件；仅在 USART ISR 中派发，可合并重复请求。 */
+aStatus_t aDrvUsartPendInterrupt(aDrvUsartHandle_t *handle);
+
 /**
  * @brief 注册一个硬件事件回调并配置其 IRQ 使能状态。
  * @param[in,out] handle 已初始化句柄。
@@ -248,10 +253,11 @@ void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *handle);
 #if ADRV_USART_DMA_ENABLE
 /**
  * @brief 查询当前实例是否具有固定 TX DMA 路由。
- * @param[in] handle USART 句柄。
- * @return 有可用映射且已初始化为 A_TRUE，否则 A_FALSE；不保证通道当前空闲。
+ * @param[in] id USART 实例 ID；查询无需初始化，不访问硬件。
+ * @return 有固定路由为 A_TRUE，无路由或 ID 无效为 A_FALSE。
+ * @note 不保证通道当前空闲。
  */
-aBool_t aDrvUsartAsyncTxIsSupported(const aDrvUsartHandle_t *handle);
+aBool_t aDrvUsartDmaTxIsSupported(aDrvUsartId_t id);
 
 /**
  * @brief 启动一段 DMA TX，不复制源数据、不等待完成。
@@ -295,10 +301,11 @@ aStatus_t aDrvUsartAsyncTxAbort(aDrvUsartHandle_t *handle);
 
 /**
  * @brief 查询当前实例是否具有固定 RX DMA 路由。
- * @param[in] handle USART 句柄。
- * @return 已初始化且有路由为 A_TRUE，否则 A_FALSE；不保证共享通道空闲。
+ * @param[in] id USART 实例 ID；查询无需初始化，不访问硬件。
+ * @return 有固定路由为 A_TRUE，无路由或 ID 无效为 A_FALSE。
+ * @note 不保证共享通道当前空闲。
  */
-aBool_t aDrvUsartAsyncRxIsSupported(const aDrvUsartHandle_t *handle);
+aBool_t aDrvUsartDmaRxIsSupported(aDrvUsartId_t id);
 
 /**
  * @brief 启动不带完成回调的有限长度 DMA RX。

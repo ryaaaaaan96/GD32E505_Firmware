@@ -26,6 +26,7 @@ static uint32_t interrupt_value(aDrvUsartId_t id,
 static void interrupt_config(aDrvUsartHandle_t *handle,
                              aDrvUsartExti_t trigger, aBool_t enabled)
 {
+    if (trigger == ADRV_USART_EXTI_SOFTWARE) return;
     const uint32_t interrupt = interrupt_value(handle->id, trigger);
 
     if (handle->id == ADRV_USART_5) {
@@ -55,6 +56,19 @@ static aBool_t has_registered_callback(const aDrvUsartHandle_t *handle)
         }
     }
     return A_FALSE;
+}
+
+aStatus_t aDrvUsartPendInterrupt(aDrvUsartHandle_t *handle)
+{
+    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (!handle->initialized ||
+        !(handle->interrupt_enabled_mask & (1UL << ADRV_USART_EXTI_SOFTWARE)) ||
+        handle->callbacks[ADRV_USART_EXTI_SOFTWARE].function == NULL)
+        return A_STATUS_NOT_READY;
+    handle->software_pending = A_TRUE;
+    __DMB();
+    NVIC_SetPendingIRQ(aDrvPrivateUsartMappingGet(handle->id)->irq);
+    return A_STATUS_OK;
 }
 
 aBool_t aDrvUsartInterruptIsSupported(void)
@@ -118,6 +132,7 @@ aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
 
     interrupt_config(handle, trigger, A_FALSE);
     handle->interrupt_enabled_mask &= ~(1UL << trigger);
+    if (trigger == ADRV_USART_EXTI_SOFTWARE) handle->software_pending = A_FALSE;
     handle->callbacks[trigger].function = NULL;
     handle->callbacks[trigger].argument = NULL;
     if (!has_registered_callback(handle)) {
@@ -226,6 +241,14 @@ static void usart_irq_dispatch(aDrvUsartId_t id)
         (((uint32_t)handle->owner & ADRV_USART_OWNER_INTERRUPT) == 0U)) {
         nvic_irq_disable(mapping->irq);
         return;
+    }
+
+    if (handle->software_pending &&
+        (handle->interrupt_enabled_mask & (1UL << ADRV_USART_EXTI_SOFTWARE))) {
+        handle->software_pending = A_FALSE;
+        const aDrvUsartCallback_t callback =
+            handle->callbacks[ADRV_USART_EXTI_SOFTWARE];
+        if (callback.function != NULL) callback.function(callback.argument);
     }
 
     invoke_callback(handle, ADRV_USART_EXTI_RXNE);

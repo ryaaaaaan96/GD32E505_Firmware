@@ -9,7 +9,8 @@ root = Path(__file__).resolve().parents[2]
 with tempfile.TemporaryDirectory(prefix="aclass-usart-") as directory:
     executable = str(Path(directory) / "test_rs485")
     command = [
-        "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+        "cc", "-std=c11",
+        "-DADEV_USART_STATIC_ENABLE=1", "-DADEV_USART_DYNAMIC_ENABLE=1", "-Wall", "-Wextra", "-Werror",
         *(["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
           if os.environ.get("SANITIZE") else []),
         "-DADRV_USART_INTERRUPT_ENABLE=1", "-DADRV_USART_DMA_ENABLE=1",
@@ -32,3 +33,15 @@ with tempfile.TemporaryDirectory(prefix="aclass-usart-") as directory:
                     "-Iplatform/aLib/include", "tests/usart/test_fifo.c",
                     "-o", fifo], cwd=root, check=True)
     subprocess.run([fifo], check=True)
+
+    irq = str(Path(directory) / "test_irq")
+    subprocess.run([
+        "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+        *(["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+          if os.environ.get("SANITIZE") else []),
+        "-DADRV_USART_INTERRUPT_ENABLE=1",
+        "-Itests/usart/mocks", "-Iplatform/aLib/include", "-Iplatform/aDrv/include",
+        "-Iplatform/aDrv/src/usart", "tests/usart/test_irq.c",
+        "platform/aDrv/src/usart/aDrv_usart_irq.c", "-o", irq,
+    ], cwd=root, check=True)
+    subprocess.run([irq], check=True)

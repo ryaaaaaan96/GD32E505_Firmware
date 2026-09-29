@@ -40,7 +40,8 @@ typedef enum {
 /** @brief aDrvDmaConfig_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */
 typedef struct {
     aDrvDmaChannel_t channel; /**< 逻辑 DMA 通道，GD32 0..6 为 DMA0，7..13 为 DMA1。 */
-    aDrvDmaDirection_t direction; /**< 传输方向，不改变地址 setter 对 memory/peripheral 的绑定。 */
+    /**< 传输方向，不改变地址 setter 对 memory/peripheral 的绑定。 */
+    aDrvDmaDirection_t direction;
     aDrvDmaWidth_t periphWidth; /**< peripheral 侧传输宽度。 */
     aDrvDmaWidth_t memoryWidth; /**< memory 侧传输宽度。 */
     aDrvDmaPriority_t priority; /**< DMA 通道仲裁优先级，不是 NVIC 优先级。 */

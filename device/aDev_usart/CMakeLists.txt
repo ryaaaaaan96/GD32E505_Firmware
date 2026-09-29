@@ -23,7 +23,7 @@ target_link_libraries(
         aOS
 )
 
-foreach(feature INTERRUPT DIRECT ASYNC RS485)
+foreach(feature INTERRUPT DIRECT ASYNC RS485 STATIC DYNAMIC)
     target_compile_definitions(
         aDevUsart
         PUBLIC

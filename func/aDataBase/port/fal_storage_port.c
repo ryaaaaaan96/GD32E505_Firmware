@@ -48,7 +48,8 @@ static const struct fal_partition s_partitions[] = {
 aStatus_t aDataBaseBindStorage(const aDataBaseStorage_t *storage)
 {
     if (storage == NULL || storage->read == NULL || storage->write == NULL ||
-        storage->erase == NULL || storage->capacity != ADATABASE_FLASH_CAPACITY_BYTES ||
+        storage->erase == NULL || storage->capacity !=
+            ADATABASE_FLASH_CAPACITY_BYTES ||
         storage->erase_block_size != ADATABASE_FLASH_BLOCK_SIZE) {
         return A_STATUS_INVALID_PARAM;
     }

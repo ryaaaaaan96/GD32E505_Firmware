@@ -135,8 +135,9 @@ GDB 路径及生成的命令。远程主机的防火墙应仅向可信网络开�
 
 ### 设备初始化与跨文件访问
 
-设备配置和编号映射位于 app/devices，业务模块在 aDrv/aOS 就绪后按实例调用 Init(id, &handle)。
-业务通过 appSystemConsoleInit / appSystemStatusLedInit 借用私有静态句柄；无需设备注册宏或链接段。
+设备配置位于 app/devices，业务模块在 aDrv/aOS 就绪后按实例调用 Init(&handle)。
+业务通过 appSystemConsoleInit 获取控制台流（read/write/flush），通过
+appSystemStatusLedInit 获取 LED 句柄；底层静态设备由 app/devices 持有。
 详见 [应用设备映射与分层](docs/architecture.md)。
 ## 构建与任务边界
 
@@ -167,3 +168,9 @@ docs 只维护以下四份现行说明，不保留旧方案和迁移过程：
 自然返回。Shell 每轮最多读取 64 字节，成功后继续处理，仅空读或错误时退避。
 OS 分配失败记录诊断后返回，应用决定 fatal 策略。当前 FreeRTOS 时基固定为
 32 位 tick / 1000 Hz。可复用库入口为 cmake/AclassLibraries.cmake，产品 app 单独创建。
+
+VS Code 的 clangd 通过根目录 `.clangd` 读取 `build/Debug/compile_commands.json`，
+头文件路径、功能宏和 ARM 参数均跟随真实构建。首次打开或修改构建配置后运行
+`python3 scripts/build.py` 更新编译数据库；`.vscode/settings.json` 允许 clangd 查询
+ARM GCC 的系统头文件路径。修改编辑器配置后执行 `clangd: Restart language server`。
+若使用其他构建目录，同步修改 `.clangd` 中的 `CompilationDatabase`。

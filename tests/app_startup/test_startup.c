@@ -21,17 +21,16 @@ aStatus_t aOSInit(void)
     assert(stage++ == 1U);
     return A_STATUS_OK;
 }
-aStatus_t aOSCreateTask(aOSTaskFunction_t fn, const char *name,
-                        size_t stack, void *arg, uint32_t priority,
-                        aOSTaskHandle_t *handle)
+aStatus_t aOSCreateTask(const aOSTaskConfig_t *config, aOSTaskHandle_t *handle)
 {
-    assert(stage++ == 2U && strcmp(name, "appInit") == 0);
-    assert(stack == 4096U && priority == AOS_TASK_PRIO_HIGH && arg == NULL);
-    assert(handle == NULL); /* 初始化任务不需要向应用暴露句柄。 */
+    assert(stage++ == 2U && strcmp(config->name, "appInit") == 0);
+    assert(config->stack_bytes == 4096U && config->priority == AOS_TASK_PRIO_HIGH);
+    assert(config->argument == NULL && handle == NULL);
     if (scenario == 1U) return A_STATUS_NO_MEMORY;
-    entry = fn;
+    entry = config->function;
     return A_STATUS_OK;
 }
+
 void aOSRun(void)
 {
     assert(stage++ == 3U);

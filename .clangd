@@ -1,0 +1,4 @@
+# Use the same include paths, feature macros and target flags as the firmware.
+# Generate/update this database with: python3 scripts/build.py
+CompileFlags:
+  CompilationDatabase: build/Debug

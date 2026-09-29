@@ -27,3 +27,11 @@ if(ASHELL_ENABLED AND
         "and ADEV_USART_INTERRUPT_REQUESTED=ON"
     )
 endif()
+
+if(ASHELL_ENABLED)
+    target_link_libraries(${APP_TARGET} PRIVATE aShell)
+endif()
+
+if(ASHELL_ENABLED AND NOT ADEV_USART_DYNAMIC_ENABLED)
+    message(FATAL_ERROR "Console requires ADEV_USART_DYNAMIC_REQUESTED=ON")
+endif()

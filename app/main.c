@@ -1,7 +1,6 @@
 #include "aDrv.h"
 #include "aOS.h"
 #include "system.h"
-#include "app_config.h"
 
 static void appFatal(aOSFaultCode_t code, aStatus_t status,
                      const char *context)
@@ -26,6 +25,7 @@ static void appInitTask(void *argument)
 
 int main(void)
 {
+    aOSTaskConfig_t task_config;
     aStatus_t status = aDrvInit();
     if (status != A_STATUS_OK) {
         appFatal(AOS_FAULT_APP_INIT, status, "aDrvInit");
@@ -34,8 +34,12 @@ int main(void)
     if (status != A_STATUS_OK) {
         appFatal(AOS_FAULT_APP_INIT, status, "aOSInit");
     }
-    status = aOSCreateTask(appInitTask, "appInit", APP_INIT_TASK_STACK_BYTES,
-                          NULL, APP_INIT_TASK_PRIORITY, NULL);
+    aOSTaskConfigStructInit(&task_config);
+    task_config.name = "appInit";
+    task_config.function = appInitTask;
+    task_config.stack_bytes = 4096U;
+    task_config.priority = AOS_TASK_PRIO_HIGH;
+    status = aOSCreateTask(&task_config, NULL);
     if (status != A_STATUS_OK) {
         appFatal(AOS_FAULT_APP_INIT, status, "aOSCreateTask(appInit)");
     }

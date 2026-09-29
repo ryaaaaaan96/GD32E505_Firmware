@@ -93,3 +93,22 @@ TLS 槽 1，任务启动或被提前删除时释放；TLS 槽 0 仍用于 errno�
 分配失败钩子仅记录诊断并返回，应用自行决定是否停止；栈溢出仍停止运行。
 当前支持的时基为 32 位 tick、1000 Hz，构建期拒绝其他组合。
 有限锁等待即使为 UINT32_MAX 毫秒也会分段到期，不等价于 FOREVER。
+
+任务创建使用 `aOSCreateTask(const aOSTaskConfig_t *config, aOSTaskHandle_t *handle)`。
+`aOSTaskConfigStructInit(&config)` 重置全部参数；也可用
+`aOSTaskConfig_t config = AOS_TASK_CONFIG_DEFAULT` 初始化。默认名称为 `"task"`，
+优先级为 `AOS_TASK_PRIO_NORMAL`，栈字节数为 0（后端默认），argument 和 function
+为 NULL；调用前必须填写 function。全零配置不是有效的默认配置。
+
+```c
+aOSTaskConfig_t config;
+aOSTaskConfigStructInit(&config);
+config.name = "service";
+config.function = serviceTask;
+config.stack_bytes = 2048U;
+aStatus_t status = aOSCreateTask(&config, &service_handle);
+```
+
+配置结构体仅在创建期间读取；后端复制名称（可能截断），不保存配置指针。
+argument 指向的对象须在任务使用期间有效。输出句柄可为 NULL，创建失败时清空输出。
+任务可能在创建调用返回前开始运行；默认栈仅提供后端基础容量，业务按实际使用配置。

@@ -36,7 +36,11 @@ generate_firmware_images(external)
 static void task(void *argument) { (void)argument; }
 int main(void) {
     if (aDrvInit() != A_STATUS_OK || aOSInit() != A_STATUS_OK) return 1;
-    if (aOSCreateTask(task, "return", 512, 0, AOS_TASK_PRIO_NORMAL, 0) != A_STATUS_OK) return 1;
+    aOSTaskConfig_t config = AOS_TASK_CONFIG_DEFAULT;
+    config.function = task;
+    config.name = "return";
+    config.stack_bytes = 512;
+    if (aOSCreateTask(&config, 0) != A_STATUS_OK) return 1;
     aOSRun();
 }
 ''')

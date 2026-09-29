@@ -133,7 +133,8 @@ aStatus_t aDevFlash25qInit(const aDevFlash25qConfig_t *config,
         return A_STATUS_INVALID_PARAM;
     }
     aDevFlash25qHandleStructInit(handle);
-    const aStatus_t status = aDrvQspiInitStatic(&config->drv_config, &handle->qspi);
+    const aStatus_t status = aDrvQspiInitStatic(
+        &config->drv_config, &handle->qspi);
     if (status != A_STATUS_OK) return status;
     if (aOSMutexCreate(&handle->operation_mutex) != A_STATUS_OK) {
         (void)aDrvQspiDeInitStatic(&handle->qspi);
@@ -178,11 +179,14 @@ aStatus_t aDevFlash25qRead(aDevFlash25qHandle_t *handle, uint32_t address,
     status = operation_lock(handle, timeout, &end);
     if (status != A_STATUS_OK) return status;
     status = issue_command(handle,
-                           handle->fast_read ? FLASH_CMD_FAST_READ : FLASH_CMD_READ,
+                           handle->fast_read
+                               ? FLASH_CMD_FAST_READ : FLASH_CMD_READ,
                            address, size, ADRV_QSPI_FMODE_INDIRECT_READ,
                            handle->fast_read ? 8U : 0U, A_TRUE);
     if (status == A_STATUS_OK) status = wait_command_complete(handle, &end);
-    if (status == A_STATUS_OK) status = aDrvQspiReceive(&handle->qspi, data, size);
+    if (status == A_STATUS_OK) {
+        status = aDrvQspiReceive(&handle->qspi, data, size);
+    }
     (void)aOSMutexUnlock(handle->operation_mutex);
     return status;
 }
@@ -211,15 +215,19 @@ aStatus_t aDevFlash25qWrite(aDevFlash25qHandle_t *handle, uint32_t address,
 
     uint32_t written = 0U;
     while (written < size) {
-        uint32_t chunk = FLASH_PAGE_SIZE - ((address + written) % FLASH_PAGE_SIZE);
+        uint32_t chunk =
+            FLASH_PAGE_SIZE - ((address + written) % FLASH_PAGE_SIZE);
         if (chunk > (size - written)) chunk = size - written;
         status = write_enable(handle, &end);
         if (status == A_STATUS_OK) {
-            status = issue_command(handle, FLASH_CMD_PAGE_PROGRAM, address + written,
-                                   chunk, ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U,
-                                   A_TRUE);
+            status = issue_command(
+                handle, FLASH_CMD_PAGE_PROGRAM, address + written,
+                chunk, ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, A_TRUE);
         }
-        if (status == A_STATUS_OK) status = aDrvQspiTransmit(&handle->qspi, &data[written], chunk);
+        if (status == A_STATUS_OK) {
+            status = aDrvQspiTransmit(
+                &handle->qspi, &data[written], chunk);
+        }
         if (status == A_STATUS_OK) {
             status = wait_ready(handle, &end);
         }

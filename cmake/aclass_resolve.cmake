@@ -35,7 +35,7 @@ endfunction()
 # ── Inputs: validate every switch before evaluating any edge ──────────
 foreach(module AOS_WORKQUEUE ASHELL ADATABASE AMODBUS ADEV_LED ADEV_USART
         ADEV_USART_INTERRUPT ADEV_USART_DIRECT ADEV_USART_ASYNC
-        ADEV_USART_RS485 ADEV_FLASH25Q)
+        ADEV_USART_RS485 ADEV_USART_STATIC ADEV_USART_DYNAMIC ADEV_FLASH25Q)
     _aclass_option(${module}_REQUESTED ${module}_ENABLED)
 endforeach()
 
@@ -63,10 +63,14 @@ endif()
 _aclass_requires(ADEV_LED_REQUESTED ADRV_MODULE_GPIO_REQUESTED)
 
 # ── device / USART ────────────────────────────────────────────────────
-foreach(feature INTERRUPT DIRECT ASYNC RS485)
+foreach(feature INTERRUPT DIRECT ASYNC RS485 STATIC DYNAMIC)
     _aclass_requires(ADEV_USART_${feature}_REQUESTED ADEV_USART_REQUESTED)
 endforeach()
 _aclass_requires(ADEV_USART_REQUESTED ADRV_MODULE_USART_REQUESTED)
+if(ADEV_USART_ENABLED AND NOT ADEV_USART_STATIC_ENABLED
+   AND NOT ADEV_USART_DYNAMIC_ENABLED)
+    message(FATAL_ERROR "USART requires STATIC or DYNAMIC allocation enabled")
+endif()
 foreach(feature INTERRUPT RS485)
     _aclass_requires(ADEV_USART_${feature}_REQUESTED ADRV_USART_INTERRUPT_REQUESTED)
 endforeach()

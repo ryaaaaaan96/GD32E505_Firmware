@@ -27,6 +27,9 @@ read/write 钩子不依赖任何设备；app 可以提供强定义连接具体�
 startup、CMSIS Device 和 `SystemInit()` 仍由 aDrv 管理。
 
 `aShell` 是进程内唯一实例，提供 Init/Process/DeInit，由 app 创建任务并调用；
+读写通过 aLib 的 aStream_t 注入，USART 适配由 app/devices 的私有回调提供，
+appSystemConsoleInit 初始化 USART，通过 Stream 绑定并初始化 aShell 单例；flush 为 NULL。
+aShell 内部适配 nr_micro_shell 2.0.0，命令通过 ASHELL_CMD_EXPORT 分散注册、由 GCC 链接器收集，不依赖具体 USART 类型。
 关闭时保留无操作 stub。func 不创建业务任务；aOS worker 属于平台服务。`aOS` 后端和上游 FreeRTOS source set 的归属见
 [aOS 目录说明](../platform/aOS/README.md)。
 
@@ -125,21 +128,22 @@ aDrv 不依赖 aOS。func 在其上构成 aDataBase（含 FlashDB 所需 FAL 适
 不承诺所有初始化完成前业务任务绝不执行。初始化成功后自删除，不复用为 workqueue。
 初始化任务通过 aOSTaskExit() 自退出，无需保存全局任务句柄；
 aOSDeleteTask(handle) 仍用于删除指定任务，传入 NULL 保持空操作语义。
-statusInit 调用 appSystemStatusLedInit 并创建状态任务；
-system.c 的 shellInit 调用 appSystemConsoleInit、初始化 Shell，再创建调用 Process 的任务。
+system.c 内部的静态函数 statusInit 调用 appSystemStatusLedInit 并创建状态任务；
+同文件内的静态函数 shellInit 调用 appSystemConsoleInit 完成控制台及 Shell 初始化，再创建调用 Process 的任务。
 不存在集中初始化全部实例的注册表、链接段或分散加载。
 
-应用使用 Init(id, &handle) 合并初始化与句柄获取，不提供独立 Open：
+应用通过专用 Init 合并初始化与接口获取：LED 返回句柄，控制台返回 aStream_t，
+不提供独立 Open：
 
-- 仅在驱动/OS 就绪后的启动阶段单线程调用；同实例重入返回 BUSY，不表示线程安全。
+- 仅在驱动/OS 就绪后的启动阶段单线程调用，由应用保证每个实例只初始化一次。
 - 首次初始化可能分配 OS 资源，不能当作无副作用查询。
-- 后续调用返回同一句柄或保存的失败结果，不自动重试；各实例独立，不联动回滚。
-- NULL 输出参数返回 INVALID_PARAM；未知编号返回 NOT_FOUND；失败清空输出句柄。
+- 直接初始化并返回本次结果，不缓存阶段或错误，不提供重复/重入保护；各实例独立，不联动回滚。
+- NULL 输出参数返回 INVALID_PARAM；失败清空输出句柄或流字段。
 - 句柄为共享借用，调用者不得销毁、反初始化或修改配置；运行阶段传递已取得的句柄。
 - Shell 关闭时 console 声明、配置和实现一起裁剪。
 - 不做运行时跨设备资源冲突检查；构建期资源告警尚未实现，设备参数/能力检查仍保留。
 
-tests/app_devices/run.py 验证初始化、失败、重复调用和 Shell 裁剪，使用硬件替身，
+tests/app_devices/run.py 验证独立初始化、错误传递、参数检查和 Shell 裁剪，使用硬件替身，
 不代表上板验证。通用契约见[接口规范](interface_contract.md)，USART 细节见
 [USART 设计](usart_design.md)。
 
@@ -149,5 +153,6 @@ tests/app_devices/run.py 验证初始化、失败、重复调用和 Shell 裁剪
 aDrv 保持 MCU 驱动定位。Linux 设备可使用独立实现，不要求模拟 IRQ/DMA 寄存器模型。
 共同业务复用操作、错误、超时及所有权契约，不要求复用硬件资源配置。
 当前 MCU 临界区仅针对单核；未来 Linux 后端必须使用实际线程同步，不能以 volatile
-或空临界区代替。现有 Async 来源上下文及 DMA ring 借用模型本轮保持，统一 ISR
-回调与稳定缓冲区交接后置；引脚路由 Python/XML 校验也尚未实现。
+或空临界区代替。当前 MCU USART Async 回调统一在 ISR 中执行；DMA RX 使用调用者
+快照区保证回调期间稳定，IRQ RX 保留零拷贝。未来 Linux API 必须明确自己的回调
+执行上下文，不能声称用户态回调运行在硬件 ISR。引脚路由 Python/XML 校验尚未实现。
