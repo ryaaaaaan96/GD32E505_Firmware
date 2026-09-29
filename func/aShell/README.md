@@ -46,7 +46,9 @@ config.stream.write = console_write;
 status = aShellInit(&config);
 ```
 
-默认内置 `help`、`version`，同样通过宏导出，Init 拒绝重名和重复注册。
+默认内置 `help`、`clear`、`version`，同样通过宏导出，Init 拒绝重名和重复注册。
+`clear` 通过输出队列发送 ANSI 清屏和光标归位序列，随后正常显示提示符；
+保留命令历史，不清除终端滚动回溯，需要终端支持 ANSI 转义序列。
 宏的首参数为 C 标识符，同时作为命令名；描述为非空静态字符串。
 命令表由链接器放入只读存储区，生命周期覆盖整个程序。回调使用 `int argc, char **argv`，返回 0 表示成功。
 参数包含命令名，参数指针仅在本次回调中有效；不保证 `argv[argc]` 为 NULL。

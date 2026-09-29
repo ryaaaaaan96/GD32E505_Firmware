@@ -32,6 +32,14 @@ static int command_help(int argc, char **argv)
 }
 ASHELL_CMD_EXPORT(help, command_help, "List commands");
 
+static int command_clear(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    return ASHELL_PRINT("\x1b[2J\x1b[H") == A_STATUS_OK ? 0 : -1;
+}
+ASHELL_CMD_EXPORT(clear, command_clear, "Clear terminal screen");
+
 static int command_version(int argc, char **argv)
 {
     (void)argc;

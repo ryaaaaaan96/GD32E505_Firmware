@@ -26,6 +26,7 @@ typedef void (*aDrvInterruptCallback_t)(void *argument);
  * @brief 初始化驱动公共环境。
  * @return A_STATUS_OK；具体动作由芯片 port 决定。
  * @note 启动阶段在外设初始化前调用；不初始化所有外设，也不启动调度器。
+ * GD32 使用 4 位抢占优先级、0 位子优先级；运行期间不得更改分组。
  */
 aStatus_t aDrvInit(void);
 
