@@ -147,7 +147,7 @@ add_library(aOS STATIC
 )
 
 target_compile_definitions(aOS PUBLIC
-    AOS_WORKQUEUE_ENABLE=$<BOOL:${AOS_WORKQUEUE_ENABLED}>
+    AOS_WORKQUEUE_ENABLE=$<BOOL:${AOS_WORKQUEUE_ENABLE}>
 )
 
 target_include_directories(

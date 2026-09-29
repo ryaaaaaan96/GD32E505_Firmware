@@ -22,7 +22,7 @@ typedef int (*aShellCommandFn_t)(int argc, char **argv);
  * 命令对象文件必须参与最终链接，普通静态库不保证自动提取。
  * 当前构建仅支持 GCC/ELF；编译器相关实现保留在 detail 目录。
  */
-#if ASHELL_ENABLED
+#if ASHELL_ENABLE
 #if defined(__GNUC__) && !defined(__ARMCC_VERSION)
 #include "detail/aShell_export_gcc.h"
 #else

@@ -56,7 +56,7 @@ if(TOOLCHAIN_NAME STREQUAL "GCC")
     )
 endif()
 
-if(ADRV_MODULE_GPIO)
+if(ADRV_MODULE_GPIO_ENABLE)
     list(APPEND GD32_VENDOR_SOURCES
         "${GD32_SPL_DIR}/Source/gd32e50x_gpio.c"
     )
@@ -66,7 +66,7 @@ if(ADRV_MODULE_GPIO)
     set(GD32_RCU_DRIVER_REQUIRED ON)
 endif()
 
-if(ADRV_MODULE_USART)
+if(ADRV_MODULE_USART_ENABLE)
     list(APPEND GD32_VENDOR_SOURCES
         "${GD32_SPL_DIR}/Source/gd32e50x_usart.c"
     )
@@ -74,13 +74,13 @@ if(ADRV_MODULE_USART)
         src/usart/aDrv_usart.c
     )
 
-    if(ADRV_USART_INTERRUPT)
+    if(ADRV_USART_INTERRUPT_ENABLE)
         list(APPEND ADRV_SOURCES
             src/usart/aDrv_usart_irq.c
         )
     endif()
 
-    if(ADRV_USART_DMA)
+    if(ADRV_USART_DMA_ENABLE)
         list(APPEND ADRV_SOURCES
             src/usart/aDrv_usart_async.c
         )
@@ -89,7 +89,7 @@ if(ADRV_MODULE_USART)
     set(GD32_RCU_DRIVER_REQUIRED ON)
 endif()
 
-if(ADRV_MODULE_DMA)
+if(ADRV_MODULE_DMA_ENABLE)
     list(APPEND GD32_VENDOR_SOURCES
         "${GD32_SPL_DIR}/Source/gd32e50x_dma.c"
     )
@@ -99,7 +99,7 @@ if(ADRV_MODULE_DMA)
     set(GD32_RCU_DRIVER_REQUIRED ON)
 endif()
 
-if(ADRV_MODULE_SPI)
+if(ADRV_MODULE_SPI_ENABLE)
     list(APPEND GD32_VENDOR_SOURCES
         "${GD32_SPL_DIR}/Source/gd32e50x_spi.c"
     )
@@ -109,7 +109,7 @@ if(ADRV_MODULE_SPI)
     set(GD32_RCU_DRIVER_REQUIRED ON)
 endif()
 
-if(ADRV_MODULE_QSPI)
+if(ADRV_MODULE_QSPI_ENABLE)
     list(APPEND GD32_VENDOR_SOURCES
         "${GD32_SPL_DIR}/Source/gd32e50x_sqpi.c"
     )
@@ -175,8 +175,8 @@ add_library(
 target_compile_definitions(
     aDrv
     PUBLIC
-        ADRV_USART_INTERRUPT_ENABLE=$<BOOL:${ADRV_USART_INTERRUPT}>
-        ADRV_USART_DMA_ENABLE=$<BOOL:${ADRV_USART_DMA}>
+        ADRV_USART_INTERRUPT_ENABLE=$<BOOL:${ADRV_USART_INTERRUPT_ENABLE}>
+        ADRV_USART_DMA_ENABLE=$<BOOL:${ADRV_USART_DMA_ENABLE}>
 )
 
 target_include_directories(
@@ -198,14 +198,14 @@ target_link_libraries(
 
 message(
     STATUS
-    "aDrv modules: GPIO=${ADRV_MODULE_GPIO}, USART=${ADRV_MODULE_USART}, "
-    "DMA=${ADRV_MODULE_DMA}, SPI=${ADRV_MODULE_SPI}, QSPI=${ADRV_MODULE_QSPI}"
+    "aDrv modules: GPIO=${ADRV_MODULE_GPIO_ENABLE}, USART=${ADRV_MODULE_USART_ENABLE}, "
+    "DMA=${ADRV_MODULE_DMA_ENABLE}, SPI=${ADRV_MODULE_SPI_ENABLE}, QSPI=${ADRV_MODULE_QSPI_ENABLE}"
 )
 
 message(
     STATUS
-    "aDrv USART capabilities: interrupt=${ADRV_USART_INTERRUPT}, "
-    "dma=${ADRV_USART_DMA}"
+    "aDrv USART capabilities: interrupt=${ADRV_USART_INTERRUPT_ENABLE}, "
+    "dma=${ADRV_USART_DMA_ENABLE}"
 )
 
 message(

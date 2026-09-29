@@ -53,7 +53,7 @@ GD32 拥有的外设实例和通道由对应 `.c` 内的私有映射表描述，
 
 配置依赖必须显式开启：USART Async 依赖 DMA，LED 依赖 GPIO，
 Flash25Q 依赖 QSPI。缺少依赖时 configure 报错并指出需要开启的选项。
-`*_REQUESTED` 是配置输入，普通变量且不进入 CMake cache；层级
+`*_ENABLE` 是配置输入，普通变量且不进入 CMake cache；层级
 CMakeLists 只消费 resolver 生成的有效值，不在各自目录改写配置。当前 Shell 采用
 缓冲中断发送、中断接收和 IDLE 通知。
 
@@ -88,7 +88,7 @@ Shell 是可裁剪的 aClass 功能模块，由 `config/aclass_config.cmake` 统
 量产配置中将模块关闭：
 
 ```cmake
-set(ASHELL_REQUESTED OFF)
+set(ASHELL_ENABLE OFF)
 ```
 
 重新配置并构建后，`aShell` target 和公共 API 继续存在，但实现切换为不创建任务、

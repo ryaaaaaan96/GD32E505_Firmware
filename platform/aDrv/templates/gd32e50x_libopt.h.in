@@ -10,31 +10,31 @@
 #include "gd32e50x_pmu.h"
 #include "gd32e50x_dbg.h"
 
-#cmakedefine01 ADRV_MODULE_GPIO
-#cmakedefine01 ADRV_MODULE_USART
-#cmakedefine01 ADRV_USART_INTERRUPT
-#cmakedefine01 ADRV_USART_DMA
-#cmakedefine01 ADRV_MODULE_DMA
-#cmakedefine01 ADRV_MODULE_SPI
-#cmakedefine01 ADRV_MODULE_QSPI
+#cmakedefine01 ADRV_MODULE_GPIO_ENABLE
+#cmakedefine01 ADRV_MODULE_USART_ENABLE
+#cmakedefine01 ADRV_USART_INTERRUPT_ENABLE
+#cmakedefine01 ADRV_USART_DMA_ENABLE
+#cmakedefine01 ADRV_MODULE_DMA_ENABLE
+#cmakedefine01 ADRV_MODULE_SPI_ENABLE
+#cmakedefine01 ADRV_MODULE_QSPI_ENABLE
 
-#if ADRV_MODULE_GPIO
+#if ADRV_MODULE_GPIO_ENABLE
 #include "gd32e50x_gpio.h"
 #endif
 
-#if ADRV_MODULE_USART
+#if ADRV_MODULE_USART_ENABLE
 #include "gd32e50x_usart.h"
 #endif
 
-#if ADRV_MODULE_DMA
+#if ADRV_MODULE_DMA_ENABLE
 #include "gd32e50x_dma.h"
 #endif
 
-#if ADRV_MODULE_SPI
+#if ADRV_MODULE_SPI_ENABLE
 #include "gd32e50x_spi.h"
 #endif
 
-#if ADRV_MODULE_QSPI
+#if ADRV_MODULE_QSPI_ENABLE
 #include "gd32e50x_sqpi.h"
 #endif
 

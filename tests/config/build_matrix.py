@@ -45,25 +45,25 @@ with tempfile.TemporaryDirectory(prefix="aclass-matrix-") as directory:
     )
     for name, values in profiles.items():
         config = base / (name + ".cmake")
-        lines = [f'include("{root}/config/aclass_config.cmake")', "set(ASHELL_REQUESTED OFF)"]
+        lines = [f'include("{root}/config/aclass_config.cmake")', "set(ASHELL_ENABLE OFF)"]
         lines += [
-            f"set(ADEV_USART_STATIC_REQUESTED {'ON' if name in ('static_only', 'both_allocations') else 'OFF'})",
-            f"set(ADEV_USART_DYNAMIC_REQUESTED {'OFF' if name == 'static_only' else 'ON'})",
+            f"set(ADEV_USART_STATIC_ENABLE {'ON' if name in ('static_only', 'both_allocations') else 'OFF'})",
+            f"set(ADEV_USART_DYNAMIC_ENABLE {'OFF' if name == 'static_only' else 'ON'})",
         ]
-        lines.append(f"set(AOS_WORKQUEUE_REQUESTED {'ON' if name == 'full_worker' else 'OFF'})")
+        lines.append(f"set(AOS_WORKQUEUE_ENABLE {'ON' if name == 'full_worker' else 'OFF'})")
         if name.startswith("database_"):
             backend = name.removeprefix("database_").upper()
-            lines += ["set(ADATABASE_REQUESTED ON)", f"set(ADATABASE_BACKEND {backend})"]
+            lines += ["set(ADATABASE_ENABLE ON)", f"set(ADATABASE_BACKEND {backend})"]
             if backend == "FLASH25Q":
-                lines += ["set(ADEV_FLASH25Q_REQUESTED ON)", "set(ADRV_MODULE_QSPI_REQUESTED ON)"]
+                lines += ["set(ADEV_FLASH25Q_ENABLE ON)", "set(ADRV_MODULE_QSPI_ENABLE ON)"]
         for feature, enabled in zip(("INTERRUPT", "DIRECT", "ASYNC", "RS485"), values):
-            lines.append(f"set(ADEV_USART_{feature}_REQUESTED {'ON' if enabled else 'OFF'})")
+            lines.append(f"set(ADEV_USART_{feature}_ENABLE {'ON' if enabled else 'OFF'})")
         dma = values[4]
         irq = values[0] or dma or values[3]
         lines += [
-            f"set(ADRV_USART_INTERRUPT_REQUESTED {'ON' if irq else 'OFF'})",
-            f"set(ADRV_USART_DMA_REQUESTED {'ON' if dma else 'OFF'})",
-            f"set(ADRV_MODULE_DMA_REQUESTED {'ON' if dma else 'OFF'})",
+            f"set(ADRV_USART_INTERRUPT_ENABLE {'ON' if irq else 'OFF'})",
+            f"set(ADRV_USART_DMA_ENABLE {'ON' if dma else 'OFF'})",
+            f"set(ADRV_MODULE_DMA_ENABLE {'ON' if dma else 'OFF'})",
         ]
         config.write_text("\n".join(lines) + "\n")
         build = base / name

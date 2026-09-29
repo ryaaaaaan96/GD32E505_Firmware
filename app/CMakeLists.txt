@@ -7,7 +7,7 @@ add_executable(
 
 target_include_directories(${APP_TARGET} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
-if(ADEV_USART_ENABLED)
+if(ADEV_USART_ENABLE)
     target_link_libraries(${APP_TARGET} PRIVATE aDevUsart)
 endif()
 

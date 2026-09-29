@@ -1,6 +1,20 @@
 add_library(aShell STATIC src/aShell_config.c)
 
-if(ASHELL_ENABLED)
+# Reusable builds may omit the product override.
+if(NOT DEFINED ASHELL_HISTORY_COUNT)
+    set(ASHELL_HISTORY_COUNT 10)
+endif()
+if(NOT "${ASHELL_HISTORY_COUNT}" MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "ASHELL_HISTORY_COUNT must be an integer in [1, 255]")
+endif()
+if(ASHELL_HISTORY_COUNT GREATER 255)
+    message(FATAL_ERROR "ASHELL_HISTORY_COUNT must be an integer in [1, 255]")
+endif()
+target_compile_definitions(aShell PRIVATE
+    ASHELL_HISTORY_COUNT=${ASHELL_HISTORY_COUNT}
+)
+
+if(ASHELL_ENABLE)
     if(NOT CMAKE_C_COMPILER_ID STREQUAL "GNU")
         message(FATAL_ERROR "aShell section export currently requires GCC")
     endif()
@@ -21,7 +35,7 @@ else()
 endif()
 
 target_compile_definitions(aShell PUBLIC
-    ASHELL_ENABLED=$<BOOL:${ASHELL_ENABLED}>
+    ASHELL_ENABLE=$<BOOL:${ASHELL_ENABLE}>
 )
 target_include_directories(aShell
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"

@@ -1,7 +1,7 @@
 #include "system.h"
 #include "aOS.h"
 #include "app_system_device.h"
-#if ASHELL_ENABLED
+#if ASHELL_ENABLE
 #include "aDrv_basic.h"
 #include "aShell.h"
 #endif
@@ -47,7 +47,7 @@ static aStatus_t statusInit(void)
 }
 
 /* 应用任务统一驱动 Shell 输入处理和输出队列发送。 */
-#if ASHELL_ENABLED
+#if ASHELL_ENABLE
 
 static void shellTask(void *argument)
 {
@@ -102,7 +102,7 @@ aStatus_t aSystemInit(void)
         return status;
     }
 
-#if ASHELL_ENABLED
+#if ASHELL_ENABLE
     status = shellInit();
     if (status != A_STATUS_OK) {
         return status;

@@ -36,7 +36,7 @@ device 和 func 不应包含 FreeRTOS 头文件。
 当前实现系统普通队列；尚未提供 Zephyr 的自定义多队列、delayable/triggered work、
 queue drain/plug 或全部 k_work API，不宣称完整兼容 Zephyr。
 
-配置 AOS_WORKQUEUE_REQUESTED 经集中解析生成 AOS_WORKQUEUE_ENABLE。
+配置 AOS_WORKQUEUE_ENABLE 经集中解析生成 AOS_WORKQUEUE_ENABLE。
 默认 OFF；关闭时不创建线程、不分配栈/TCB，工作项操作声明与实现一同裁剪。
 通知、等待对象和定时服务独立存在；USART 不依赖 workqueue。
 开启时 AOS_WORKER_STACK_BYTES/PRIORITY 决定系统工作线程资源。

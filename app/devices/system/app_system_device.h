@@ -21,11 +21,11 @@
  * @return 底层初始化错误直接返回，由上层处理，不在本层重试。
  */
 aStatus_t appSystemStatusLedInit(aDevLedHandle_t **handle_out);
-#if ASHELL_ENABLED
+#if ASHELL_ENABLE
 /**
  * @brief 初始化控制台 USART 并绑定 Stream，初始化 aShell 单例。
  * @return 返回 USART 或 Shell 初始化错误；Shell 失败时销毁动态 USART 对象。
- * @note 仅 ASHELL_ENABLED 时声明；可能创建内部 OS 对象，不是无副作用查找。
+ * @note 仅 ASHELL_ENABLE 时声明；可能创建内部 OS 对象，不是无副作用查找。
  */
 aStatus_t appSystemConsoleInit(void);
 #endif

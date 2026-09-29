@@ -27,12 +27,12 @@ foreach(feature INTERRUPT DIRECT ASYNC RS485 STATIC DYNAMIC)
     target_compile_definitions(
         aDevUsart
         PUBLIC
-            ADEV_USART_${feature}_ENABLE=$<BOOL:${ADEV_USART_${feature}_ENABLED}>
+            ADEV_USART_${feature}_ENABLE=$<BOOL:${ADEV_USART_${feature}_ENABLE}>
     )
 endforeach()
 
 # TX/RX implementation sections are compiled by their capability macros.
-if(ADEV_USART_RS485_ENABLED)
+if(ADEV_USART_RS485_ENABLE)
     target_sources(aDevUsart PRIVATE src/aDev_usart_rs485.c)
 endif()
 target_link_libraries(aDevUsart PRIVATE aclass_project_options)

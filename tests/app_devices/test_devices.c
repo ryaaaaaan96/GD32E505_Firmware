@@ -1,6 +1,6 @@
 #include "app_system_device.h"
 #include <assert.h>
-#if ASHELL_ENABLED
+#if ASHELL_ENABLE
 #include "aDev_usart.h"
 #include "aShell.h"
 #endif
@@ -16,7 +16,7 @@ aStatus_t aDevLedInit(const aDevLedConfig_t *config, aDevLedHandle_t *handle)
     return A_STATUS_OK;
 #endif
 }
-#if ASHELL_ENABLED
+#if ASHELL_ENABLE
 static aDevUsartHandle_t *expected_handle;
 static aSSize_t io_result = 2;
 static unsigned shell_calls, deinit_calls;
@@ -84,7 +84,7 @@ int main(void)
     aDevLedHandle_t *led = NULL;
     assert(led_calls == 0 && usart_calls == 0);
     assert(appSystemStatusLedInit(NULL) == A_STATUS_INVALID_PARAM);
-#if ASHELL_ENABLED
+#if ASHELL_ENABLE
     aStreamStructInit(&stream);
     assert(led_calls == 0 && usart_calls == 0);
     /* USART can initialize independently, before LED. */

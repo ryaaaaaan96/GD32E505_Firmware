@@ -11,7 +11,7 @@ common = [
     "-Ifunc/aShell/include", "-Iplatform/aLib/include",
 ]
 enabled = [
-    "-DASHELL_ENABLED=1", "-fno-pie", "-no-pie",
+    "-DASHELL_ENABLE=1", "-fno-pie", "-no-pie",
     "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
     "-Wl,--fatal-warnings",
     "-Wl,-T,func/aShell/port/gcc/aShell_sections_host.ld",
@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-shell-") as directory:
 
     stub = str(Path(directory) / "shell_stub")
     subprocess.run(common + [
-        "-DASHELL_ENABLED=0", "-ffunction-sections", "-fdata-sections",
+        "-DASHELL_ENABLE=0", "-ffunction-sections", "-fdata-sections",
         "-Wl,--gc-sections", "tests/shell/test_stub.c",
         "func/aShell/src/aShell_stub.c", "func/aShell/src/aShell_config.c",
         "-o", stub,

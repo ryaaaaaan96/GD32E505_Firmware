@@ -1,6 +1,6 @@
 # 应用层组织
 
-- 系统 console 实例随 ASHELL_ENABLED 启用或裁剪，不再单独设置应用 USART 开关。
+- 系统 console 实例随 ASHELL_ENABLE 启用或裁剪，不再单独设置应用 USART 开关。
 - devices/system/app_system_device.h：系统设备的 LED 句柄、console 流专用初始化接口。
 - devices/system/app_system_device.c：统一管理系统设备的 LED 与 USART 配置结构、缓冲区和私有句柄；参数直接在本文件中配置。
 - task/system/system.c：统一管理 LED 状态任务和 Shell 任务，内部逐项初始化设备、服务并创建任务；对外仅提供 aSystemInit。
@@ -29,4 +29,4 @@ flush 非空时表示显式提交缓冲输出；NULL 表示 write 已直接提�
 flush 不等待线路完成、不丢弃输入；Shell 不自动调用。
 
 当前控制台使用 aDevUsartCreate 动态分配对象，Shell 初始化失败时调用
-aDevUsartDestroy 回收；产品必须开启 ADEV_USART_DYNAMIC_REQUESTED。
+aDevUsartDestroy 回收；产品必须开启 ADEV_USART_DYNAMIC_ENABLE。

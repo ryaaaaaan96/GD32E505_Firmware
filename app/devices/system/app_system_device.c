@@ -1,5 +1,5 @@
 #include "app_system_device.h"
-#if ASHELL_ENABLED
+#if ASHELL_ENABLE
 #include "aDev_usart.h"
 #include "aShell.h"
 #endif
@@ -30,7 +30,7 @@ aStatus_t appSystemStatusLedInit(aDevLedHandle_t **handle_out)
 }
 
 /* 系统控制台串口实例，随 Shell 功能一同裁剪。 */
-#if ASHELL_ENABLED
+#if ASHELL_ENABLE
 
 /* 控制台配置、缓冲区和句柄由本文件私有持有。
  * appSystemConsoleInit 完成控制台及 Shell 单例初始化。 */

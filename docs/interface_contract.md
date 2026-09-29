@@ -220,8 +220,8 @@ USART 静态实例由创建层包含 aDev_usart_instance.h 并声明完整对象
 
 此约定用于后续新增和重构，不要求修改第三方接口，也不代表已有模块已全部迁移。
 
-USART 对象分配接口通过 ADEV_USART_STATIC_REQUESTED 和
-ADEV_USART_DYNAMIC_REQUESTED 独立裁剪，可同时开启；USART 启用时至少选择一种。
+USART 对象分配接口通过 ADEV_USART_STATIC_ENABLE 和
+ADEV_USART_DYNAMIC_ENABLE 独立裁剪，可同时开启；USART 启用时至少选择一种。
 STATIC 控制 InitStatic，DYNAMIC 控制 Create/Destroy，DeInit 为共享接口。
 当前产品关闭 STATIC、开启 DYNAMIC，控制台通过 Create 分配设备对象；
 Shell 初始化失败时调用 Destroy。分配失败返回 A_STATUS_NO_MEMORY。

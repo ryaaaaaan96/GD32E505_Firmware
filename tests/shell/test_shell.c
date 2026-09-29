@@ -278,10 +278,13 @@ int main(void)
     assert(aShellInit(&config) == A_STATUS_INVALID_PARAM);
     config.read_timeout = A_TIMEOUT_MS(20U);
     assert(aShellInit(&config) == A_STATUS_OK);
-    assert(write_calls == 0U); /* Init only queues the prompt. */
+    assert(write_calls == 0U); /* Welcome and prompt are only queued. */
     assert(aShellInit(&config) == A_STATUS_BUSY);
     assert(aShellProcess() == A_STATUS_BUSY);
-    assert(strstr(output, ASHELL_PROMPT ": "));
+    assert(strncmp(output, ASHELL_WELCOME,
+                   sizeof(ASHELL_WELCOME) - 1U) == 0);
+    assert(strstr(output + sizeof(ASHELL_WELCOME) - 1U,
+                  ASHELL_PROMPT ": "));
     reset_output();
     feed("capture one\r\n");
     assert(calls == 1 && last_argc == 2 && !strcmp(last_arg, "one"));

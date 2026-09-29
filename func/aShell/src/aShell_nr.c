@@ -80,6 +80,12 @@ aBool_t aShellNrCommandsAreValid(void)
 
 aStatus_t aShellNrInit(void)
 {
+    aStatus_t status;
+
+    status = aShellOutputWrite(ASHELL_WELCOME, sizeof(ASHELL_WELCOME) - 1U);
+    if (status != A_STATUS_OK) {
+        return status;
+    }
     shell_init();
     return A_STATUS_OK;
 }

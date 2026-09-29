@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-app-devices-") as directory:
             "cc", "-std=c11",
         "-DADEV_USART_STATIC_ENABLE=1", "-DADEV_USART_DYNAMIC_ENABLE=1", "-O2", "-Wall", "-Wextra", "-Werror",
             "-Wno-unused-variable", f"-D{scenario}",
-            "-DASHELL_ENABLED=" + ("0" if scenario == "SHELL_OFF" else "1"),
+            "-DASHELL_ENABLE=" + ("0" if scenario == "SHELL_OFF" else "1"),
             "-Itests/usart/mocks", "-Idevice/aDev_LED", "-Idevice/aDev_usart/include",
             "-Iplatform/aDrv/include", "-Iplatform/aLib/include",
             "-Iapp", "-Iapp/devices", "-Iapp/devices/system",

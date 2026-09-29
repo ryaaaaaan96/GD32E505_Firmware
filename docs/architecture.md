@@ -65,7 +65,7 @@ platform/aDrv/
 CMakeLists 只消费有效配置：aDev 选择是否加入设备 target，aDrv 选择生成的
 `gd32e50x_libopt.h`、SPL 源文件和驱动实现源文件，不在本层推导或改写依赖。
 
-`ADRV_USART_INTERRUPT` 和 `ADRV_USART_DMA` 是 resolver 输出的有效能力。USART DMA 能力
+`ADRV_USART_INTERRUPT_ENABLE` 和 `ADRV_USART_DMA_ENABLE` 是 resolver 输出的有效能力。USART DMA 能力
 依赖通用 DMA 驱动，不等于 device 的异步请求 API；关闭某项能力时不编译对应实现，aDrv target 通过 public compile
 definition 隐藏该能力的头文件 API。aDev USART 的 INTERRUPT、DIRECT、ASYNC、RS485 接口按配置裁剪；
 DIRECT 表示用户缓冲区直传，后端在初始化选择；普通 DMA ring 不依赖 DIRECT 开关。

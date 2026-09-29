@@ -148,8 +148,8 @@ status = aDevUsartInitStatic(&config, &console_handle);
 无需额外的固定容量存储区；初始化后不得复制、移动或重复初始化。
 失败后不得执行收发操作。动态创建仍使用 Create/Destroy 接口。
 
-USART 对象分配接口通过 ADEV_USART_STATIC_REQUESTED 和
-ADEV_USART_DYNAMIC_REQUESTED 独立裁剪，可同时开启；USART 启用时至少选择一种。
+USART 对象分配接口通过 ADEV_USART_STATIC_ENABLE 和
+ADEV_USART_DYNAMIC_ENABLE 独立裁剪，可同时开启；USART 启用时至少选择一种。
 STATIC 控制 InitStatic，DYNAMIC 控制 Create/Destroy，DeInit 为共享接口。
 当前产品关闭 STATIC、开启 DYNAMIC，控制台通过 Create 分配设备对象；
 Shell 初始化失败时调用 Destroy。分配失败返回 A_STATUS_NO_MEMORY。

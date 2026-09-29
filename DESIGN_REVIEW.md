@@ -58,7 +58,7 @@ device 层仅保留通用设备初始化及操作。失败不回滚，重复初�
 
 | 问题 | 判断与处理 |
 |---|---|
-| func/aUsartTxQueue 专门调度 USART，device 却公开配套 owner 接口 | 属于设备发送管理，移入 device/aDev_usart；删除独立 library、目录内容及 REQUESTED 开关 |
+| func/aUsartTxQueue 专门调度 USART，device 却公开配套 owner 接口 | 属于设备发送管理，移入 device/aDev_usart；删除独立 library、目录内容及 ENABLE 开关 |
 | 移动后如何使用队列 | 编入 aDevUsart；扩展头 aDev_usart_tx_queue.h，API 改为 aDevUsartTxQueue*；旧接口不保留。FIFO 能力保留，队列对象暂仍显式初始化 |
 | 跨模块内部接口公开 | Claim/Release/Queued 提交接口移入 aDev_usart_internal.h，只供同一模块源文件使用 |
 | resolver 混入产品绑定 | LED 必选、Shell 使用串口等检查移入 app/devices；Shell 模块本身不绑定 USART |

@@ -40,8 +40,8 @@ resolver 先校验布尔输入，再按 func、device、driver 的模块顺序�
 USART 保留 INTERRUPT、DIRECT、ASYNC、RS485 四组 device 能力；
 导出的 C 宏统一使用 `ADEV_USART_<能力>_ENABLE`，值为 0 或 1，
 例如 `ADEV_USART_DIRECT_ENABLE`；代码通过 `#if` 判断，不用 `#ifdef`。
-CMake 输入仍为 `*_REQUESTED`，device/func 解析结果为 `*_ENABLED`；
-driver 解析结果沿用 `ADRV_MODULE_*`、`ADRV_USART_*`，不与公开 C 宏混用。
+CMake 配置、依赖校验、构建条件和对应公开 C 宏统一使用 `*_ENABLE`。
+resolver 原地规范化布尔值，不维护请求与结果两套开关。
 
 USART 开关按职责区分，不把硬件 DMA 与业务异步 API 合并：
 
@@ -51,8 +51,8 @@ USART 开关按职责区分，不把硬件 DMA 与业务异步 API 合并：
 | `ADEV_USART_DIRECT_ENABLE` | 同步用户缓冲区直传 API，不规定是否使用 DMA |
 | `ADEV_USART_ASYNC_ENABLE` | device 异步请求、取消、超时及统一 ISR 回调 |
 
-底层 DMA 的请求变量为 `ADRV_USART_DMA_REQUESTED`，解析结果为 `ADRV_USART_DMA`。
-通用 DMA 驱动仍通过 `ADRV_MODULE_DMA_REQUESTED` 独立选择，它不代表 USART 专用支持。
+底层 USART DMA 通过 `ADRV_USART_DMA_ENABLE` 配置。
+通用 DMA 驱动仍通过 `ADRV_MODULE_DMA_ENABLE` 独立选择，它不代表 USART 专用支持。
 DIRECT 不依赖 DMA，默认可使用轮询直传。DMA 数据路径由底层 DMA/IRQ 能力提供，
 统一在初始化 mode 的 TX/RX 字段中选择；不能用 DIRECT 开关控制 DMA ring。
 当前 ASYNC 需要底层 DMA/IRQ，但不依赖同步 DIRECT API。私有的

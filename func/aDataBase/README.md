@@ -26,7 +26,7 @@ if (aDataBaseBindFlash25q(&flash_handle) == A_STATUS_OK) {
 调用 aDataBaseUnbindStorage；生命周期操作由应用串行管理。
 
 config/aclass_config.cmake 中 ADATABASE_BACKEND=FLASH25Q 构建可选 aDataBaseFlash25q
-适配目标，需要显式启用 ADEV_FLASH25Q_REQUESTED 及 QSPI，使用它的 app 链接此目标。
+适配目标，需要显式启用 ADEV_FLASH25Q_ENABLE 及 QSPI，使用它的 app 链接此目标。
 ADATABASE_BACKEND=CUSTOM 只构建不依赖 Flash25Q 的 aDataBase 核心，应用通过
 aDataBaseBindStorage 提供 read/write/erase、context 和存储几何参数。操作表会被复制，
 context 必须保持有效到解除绑定。几何参数必须匹配当前 FAL 分区布局；绑定一个存储实例。

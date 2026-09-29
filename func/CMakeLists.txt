@@ -1,8 +1,8 @@
-if(ADATABASE_ENABLED)
+if(ADATABASE_ENABLE)
     add_subdirectory(aDataBase)
 endif()
 
-if(AMODBUS_ENABLED)
+if(AMODBUS_ENABLE)
     add_subdirectory(aModbus)
 endif()
 
