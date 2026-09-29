@@ -33,11 +33,15 @@ endfunction()
 
 
 # ── Inputs: validate every switch before evaluating any edge ──────────
-foreach(module AOS_WORKQUEUE ASHELL ADATABASE AMODBUS ADEV_LED ADEV_USART
+foreach(module AOS_WORKQUEUE ABUS ABUS_DEF_CHECK ASHELL ADATABASE AMODBUS ADEV_LED ADEV_USART
         ADEV_USART_INTERRUPT ADEV_USART_DIRECT ADEV_USART_ASYNC
         ADEV_USART_RS485 ADEV_USART_STATIC ADEV_USART_DYNAMIC ADEV_FLASH25Q)
     _aclass_option(${module}_ENABLE)
 endforeach()
+
+if(ABUS_ENABLE AND NOT ABUS_LOCK_GRANULARITY MATCHES "^(NONE|BUS|SIG)$")
+    message(FATAL_ERROR "ABUS_LOCK_GRANULARITY must be NONE, BUS or SIG")
+endif()
 
 foreach(module GPIO USART DMA SPI QSPI)
     _aclass_option(ADRV_MODULE_${module}_ENABLE)

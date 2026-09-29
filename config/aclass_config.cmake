@@ -2,6 +2,11 @@
 # 缺少依赖时 cmake/aclass_resolve.cmake 给出配置错误。
 
 # func
+set(ABUS_ENABLE ON)
+# Static definition validation; runtime value ranges are always checked.
+set(ABUS_DEF_CHECK_ENABLE ON)
+# NONE: no locks; BUS: one mutex; SIG: one mutex for every signal.
+set(ABUS_LOCK_GRANULARITY BUS)
 set(ASHELL_ENABLE ON)
 # Shell command history entries (1..255).
 set(ASHELL_HISTORY_COUNT 10)

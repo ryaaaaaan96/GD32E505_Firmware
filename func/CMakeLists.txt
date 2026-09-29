@@ -1,3 +1,7 @@
+if(ABUS_ENABLE)
+    add_subdirectory(aBus)
+endif()
+
 if(ADATABASE_ENABLE)
     add_subdirectory(aDataBase)
 endif()
