@@ -35,7 +35,8 @@ endfunction()
 # ── Inputs: validate every switch before evaluating any edge ──────────
 foreach(module AOS_WORKQUEUE ABUS ABUS_STATIC ABUS_DYNAMIC ABUS_DEF_CHECK ASHELL ADATABASE AMODBUS ADEV_LED ADEV_USART
         ADEV_USART_INTERRUPT ADEV_USART_DIRECT ADEV_USART_ASYNC
-        ADEV_USART_RS485 ADEV_USART_STATIC ADEV_USART_DYNAMIC ADEV_FLASH25Q)
+        ADEV_USART_RS485 ADEV_USART_STATIC ADEV_USART_DYNAMIC ADEV_FLASH25Q
+        ADEV_FLASH25Q_STATIC ADEV_FLASH25Q_DYNAMIC)
     _aclass_option(${module}_ENABLE)
 endforeach()
 
@@ -90,7 +91,11 @@ _aclass_requires(ADEV_USART_ASYNC_ENABLE
 _aclass_requires(ADEV_USART_RS485_ENABLE ADRV_MODULE_GPIO_ENABLE)
 
 # ── device / Flash25Q ─────────────────────────────────────────────────
-_aclass_requires(ADEV_FLASH25Q_ENABLE ADRV_MODULE_QSPI_ENABLE)
+_aclass_requires(ADEV_FLASH25Q_ENABLE ADRV_MODULE_SPI_ENABLE)
+if(ADEV_FLASH25Q_ENABLE AND NOT ADEV_FLASH25Q_STATIC_ENABLE
+   AND NOT ADEV_FLASH25Q_DYNAMIC_ENABLE)
+    message(FATAL_ERROR "Flash25Q requires STATIC or DYNAMIC allocation")
+endif()
 
 # ── driver / GPIO ─────────────────────────────────────────────────────
 

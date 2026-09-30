@@ -52,7 +52,8 @@ GD32 拥有的外设实例和通道由对应 `.c` 内的私有映射表描述，
 `COUNT` 宏。具体使用哪个实例、哪些引脚以及波特率等参数均由 app 配置。
 
 配置依赖必须显式开启：USART Async 依赖 DMA，LED 依赖 GPIO，
-Flash25Q 依赖 QSPI。缺少依赖时 configure 报错并指出需要开启的选项。
+Flash25Q 已封装 SFUD，当前依赖 SPI 并接入板上 SPI1；QSPI 后端尚未实现。
+详见 [Flash25Q 链路设计](docs/spi_flash_design.md)。缺少依赖时 configure 报错并指出需要开启的选项。
 `*_ENABLE` 是配置输入，普通变量且不进入 CMake cache；层级
 CMakeLists 只消费 resolver 生成的有效值，不在各自目录改写配置。当前 Shell 采用
 缓冲中断发送、中断接收和 IDLE 通知。

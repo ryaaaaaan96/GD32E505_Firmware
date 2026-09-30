@@ -1,331 +1,331 @@
-#include "aDev_flash25q.h"
+#include "aDev_flash25q_internal.h"
 
-#include "aOS.h"
+#include <string.h>
 
-#define FLASH_CMD_READ 0x03U
-#define FLASH_CMD_FAST_READ 0x0BU
-#define FLASH_CMD_PAGE_PROGRAM 0x02U
-#define FLASH_CMD_WRITE_ENABLE 0x06U
-#define FLASH_CMD_READ_STATUS 0x05U
-#define FLASH_CMD_SECTOR_ERASE 0x20U
-#define FLASH_CMD_CHIP_ERASE 0xC7U
-#define FLASH_SECTOR_SIZE 4096U
-#define FLASH_PAGE_SIZE 256U
-#define FLASH_BUSY_MASK 0x01U
-#define FLASH_MAX_ADDRESS_BYTES 0x01000000U
+/* SFUD 的页编程静态缓冲区由所有实例共享。生命周期由应用串行编排。 */
+static aOSMutex_t sfud_mutex;
+static size_t bus_count;
 
-static aStatus_t operation_lock(aDevFlash25qHandle_t *handle,
-                                aTimeout_t timeout, aTimepoint_t *end)
+static aStatus_t timeout_check(aTimeout_t timeout)
 {
+    if (!aTimeoutIsValid(timeout)) return A_STATUS_INVALID_PARAM;
+    if ((timeout.type == A_TIMEOUT_TYPE_RELATIVE) &&
+        (timeout.milliseconds == 0U)) return A_STATUS_UNSUPPORTED;
+    return A_STATUS_OK;
+}
+
+static aStatus_t result_get(aDevFlash25qHandle_t *handle, sfud_err result)
+{
+    if (handle->port_error != A_STATUS_OK) return handle->port_error;
+    switch (result) {
+    case SFUD_SUCCESS: return A_STATUS_OK;
+    case SFUD_ERR_NOT_FOUND: return A_STATUS_NOT_FOUND;
+    case SFUD_ERR_TIMEOUT: return A_STATUS_TIMEOUT;
+    case SFUD_ERR_ADDR_OUT_OF_BOUND: return A_STATUS_INVALID_PARAM;
+    default: return A_STATUS_ERROR;
+    }
+}
+
+static aStatus_t operation_begin(aDevFlash25qHandle_t *handle,
+                                 aTimeout_t timeout)
+{
+    aTimepoint_t deadline;
     aStatus_t status;
 
-    if (!aTimeoutIsValid(timeout)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    *end = aTimepointCalc(timeout, aOSGetUptimeMs());
-    status = aOSMutexLock(handle->operation_mutex,
-                          aTimepointRemaining(end, aOSGetUptimeMs()));
-    if ((status == A_STATUS_BUSY) &&
-        !((timeout.type == A_TIMEOUT_TYPE_RELATIVE) &&
-          (timeout.milliseconds == 0U))) {
-        return A_STATUS_TIMEOUT;
-    }
-    return status;
+    status = timeout_check(timeout);
+    if (status != A_STATUS_OK) return status;
+    deadline = aTimepointCalc(timeout, aOSGetUptimeMs());
+    status = aOSMutexLock(sfud_mutex,
+        aTimepointRemaining(&deadline, aOSGetUptimeMs()));
+    if (status != A_STATUS_OK) return status;
+    /* 取得锁之后再写实例的本次操作状态，避免并发调用覆盖 deadline。 */
+    handle->deadline = deadline;
+    handle->port_error = A_STATUS_OK;
+    return A_STATUS_OK;
 }
 
-static aStatus_t issue_command(aDevFlash25qHandle_t *handle,
-                               uint32_t instruction, uint32_t address,
-                               uint32_t length, uint32_t functional_mode,
-                               uint32_t dummy_cycles, aBool_t has_address)
+static aStatus_t operation_end(aDevFlash25qHandle_t *handle, sfud_err result)
 {
-    aDrvQspiCmd_t command = {0};
-    command.Instruction = instruction;
-    command.InstructionMode = ADRV_QSPI_INST_1_LINE;
-    command.Address = address;
-    command.AddressSize = 24U;
-    command.AddressMode =
-        has_address ? ADRV_QSPI_ADDR_1_LINE : ADRV_QSPI_ADDR_NONE;
-    command.DataMode =
-        length == 0U ? ADRV_QSPI_DATA_NONE : ADRV_QSPI_DATA_1_LINE;
-    command.NbData = length;
-    command.DummyCycles = dummy_cycles;
-    command.FunctionalMode = functional_mode;
-    return aDrvQspiCommand(&handle->qspi, &command);
+    aStatus_t status = result_get(handle, result);
+    aStatus_t unlock_status = aOSMutexUnlock(sfud_mutex);
+
+    return status == A_STATUS_OK ? unlock_status : status;
 }
 
-static aStatus_t wait_command_complete(aDevFlash25qHandle_t *handle,
-                                       const aTimepoint_t *end)
+void aDevFlash25qBusConfigStructInit(aDevFlash25qBusConfig_t *config)
 {
-    for (;;) {
-        aBool_t complete;
-        const aStatus_t status = aDrvQspiIsCommandComplete(
-            &handle->qspi, &complete);
-
-        if (status != A_STATUS_OK) {
-            return status;
-        }
-        if (complete) {
-            return A_STATUS_OK;
-        }
-        if (aOSPollWaitExpired(end)) {
-            return A_STATUS_TIMEOUT;
-        }
-    }
-}
-
-static aStatus_t write_enable(aDevFlash25qHandle_t *handle,
-                              const aTimepoint_t *end)
-{
-    const aStatus_t status = issue_command(
-        handle, FLASH_CMD_WRITE_ENABLE, 0U, 0U,
-        ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, A_FALSE);
-
-    return status == A_STATUS_OK ? wait_command_complete(handle, end)
-                                 : status;
-}
-
-static aStatus_t wait_ready(aDevFlash25qHandle_t *handle,
-                            const aTimepoint_t *end)
-{
-    for (;;) {
-        uint8_t status_register = 0U;
-        aStatus_t status = issue_command(
-            handle, FLASH_CMD_READ_STATUS, 0U, 1U,
-            ADRV_QSPI_FMODE_INDIRECT_READ, 0U, A_FALSE);
-        if (status == A_STATUS_OK) {
-            status = aDrvQspiReceive(&handle->qspi, &status_register, 1U);
-        }
-        if (status != A_STATUS_OK) {
-            return status;
-        }
-        if ((status_register & FLASH_BUSY_MASK) == 0U) {
-            return A_STATUS_OK;
-        }
-        if (aTimepointExpired(end, aOSGetUptimeMs())) {
-            return A_STATUS_TIMEOUT;
-        }
-        aOSDelayMs(1U);
-    }
+    if (config == NULL) return;
+    aDrvSpiConfigStructInit(&config->spi);
+    config->spi.prescaler = 64U;
 }
 
 void aDevFlash25qConfigStructInit(aDevFlash25qConfig_t *config)
 {
     if (config == NULL) return;
-    aDrvQspiConfigStructInit(&config->drv_config);
-    config->capacity = 16U * 1024U * 1024U;
+    config->bus = NULL;
+    config->cs_pin = ADRV_PIN_NONE;
+    config->expected_capacity = 0U;
+    config->timeout = A_TIMEOUT_MS(1000U);
 }
 
-void aDevFlash25qHandleStructInit(aDevFlash25qHandle_t *handle)
+void aDevFlash25qReadRequestStructInit(aDevFlash25qReadRequest_t *request)
 {
-    if (handle == NULL) return;
-    aDrvQspiHandleStructInit(&handle->qspi);
-    handle->size = 0U;
-    handle->operation_mutex = NULL;
-    handle->initialized = A_FALSE;
-    handle->fast_read = A_FALSE;
+    if (request == NULL) return;
+    request->address = 0U;
+    request->data = NULL;
+    request->size = 0U;
+    request->timeout = A_TIMEOUT_MS(1000U);
 }
 
-aStatus_t aDevFlash25qInit(const aDevFlash25qConfig_t *config,
-                              aDevFlash25qHandle_t *handle)
+void aDevFlash25qWriteRequestStructInit(aDevFlash25qWriteRequest_t *request)
 {
-    if ((config == NULL) || (handle == NULL) || (config->capacity == 0U) ||
-        (config->capacity > FLASH_MAX_ADDRESS_BYTES)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    aDevFlash25qHandleStructInit(handle);
-    const aStatus_t status = aDrvQspiInitStatic(
-        &config->drv_config, &handle->qspi);
+    if (request == NULL) return;
+    request->address = 0U;
+    request->data = NULL;
+    request->size = 0U;
+    request->timeout = A_TIMEOUT_MS(1000U);
+}
+
+void aDevFlash25qEraseRequestStructInit(aDevFlash25qEraseRequest_t *request)
+{
+    if (request == NULL) return;
+    request->address = 0U;
+    request->size = 0U;
+    request->timeout = A_TIMEOUT_MS(5000U);
+}
+
+aStatus_t aDevFlash25qBusInitStatic(
+    const aDevFlash25qBusConfig_t *config,
+    aDevFlash25qBus_t *bus)
+{
+    aStatus_t status;
+
+    if ((config == NULL) || (bus == NULL)) return A_STATUS_INVALID_PARAM;
+    if ((config->spi.mode != ADRV_SPI_MODE_MASTER) ||
+        (config->spi.dataBits != 8U) ||
+        (config->spi.bitOrder != ADRV_SPI_BITORDER_MSB) ||
+        (config->spi.csMode != ADRV_SPI_CS_SOFT) ||
+        (config->spi.csPin != ADRV_PIN_NONE)) return A_STATUS_UNSUPPORTED;
+    memset(bus, 0, sizeof(*bus));
+    aDrvSpiHandleStructInit(&bus->spi);
+    status = aOSMutexCreate(&bus->mutex);
     if (status != A_STATUS_OK) return status;
-    if (aOSMutexCreate(&handle->operation_mutex) != A_STATUS_OK) {
-        (void)aDrvQspiDeInitStatic(&handle->qspi);
-        aDevFlash25qHandleStructInit(handle);
-        return A_STATUS_NO_MEMORY;
+    if (bus_count == 0U) {
+        status = aOSMutexCreate(&sfud_mutex);
+        if (status != A_STATUS_OK) goto fail;
     }
-    handle->size = config->capacity;
-    handle->initialized = A_TRUE;
+    status = aDrvSpiInitStatic(&config->spi, &bus->spi);
+    if (status != A_STATUS_OK) {
+        if (bus_count == 0U) aOSMutexDestroy(&sfud_mutex);
+        goto fail;
+    }
+    ++bus_count;
+    return A_STATUS_OK;
+fail:
+    aOSMutexDestroy(&bus->mutex);
+    return status;
+}
+
+aStatus_t aDevFlash25qBusDeInitStatic(aDevFlash25qBus_t *bus)
+{
+    aStatus_t status;
+
+    if (bus == NULL) return A_STATUS_INVALID_PARAM;
+    if (!bus->spi.initialized) return A_STATUS_NOT_READY;
+    if (bus->references != 0U) return A_STATUS_BUSY;
+    status = aDrvSpiDeInitStatic(&bus->spi);
+    if (status != A_STATUS_OK) return status;
+    aOSMutexDestroy(&bus->mutex);
+    --bus_count;
+    if (bus_count == 0U) aOSMutexDestroy(&sfud_mutex);
     return A_STATUS_OK;
 }
 
-aStatus_t aDevFlash25qDeInit(aDevFlash25qHandle_t *handle)
+static aStatus_t initialize(const aDevFlash25qConfig_t *config,
+                            aDevFlash25qHandle_t *handle)
 {
+    aDrvGpioConfig_t gpio;
     aStatus_t status;
-    if (handle == NULL) return A_STATUS_INVALID_PARAM;
-    if (!handle->initialized) return A_STATUS_NOT_READY;
-    status = aOSMutexLock(handle->operation_mutex, A_TIMEOUT_NO_WAIT);
-    if (status != A_STATUS_OK) return status;
-    status = aDrvQspiDeInitStatic(&handle->qspi);
-    (void)aOSMutexUnlock(handle->operation_mutex);
-    if (status != A_STATUS_OK) return status;
-    aOSMutexDestroy(&handle->operation_mutex);
-    aDevFlash25qHandleStructInit(handle);
-    return status;
-}
+    sfud_err result;
 
-aStatus_t aDevFlash25qRead(aDevFlash25qHandle_t *handle, uint32_t address,
-                           uint8_t *data, uint32_t size,
-                           aTimeout_t timeout)
-{
-    aTimepoint_t end;
-    aStatus_t status;
-    if ((handle == NULL) || (data == NULL) || (size == 0U)) {
+    if ((config == NULL) || (handle == NULL) ||
+        (config->bus == NULL) || (config->cs_pin == ADRV_PIN_NONE))
         return A_STATUS_INVALID_PARAM;
-    }
-    if (!handle->initialized) return A_STATUS_NOT_READY;
-    if ((address > handle->size) || (size > (handle->size - address)) ||
-        (address >= FLASH_MAX_ADDRESS_BYTES) ||
-        (size > (FLASH_MAX_ADDRESS_BYTES - address))) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    status = operation_lock(handle, timeout, &end);
-    if (status != A_STATUS_OK) return status;
-    status = issue_command(handle,
-                           handle->fast_read
-                               ? FLASH_CMD_FAST_READ : FLASH_CMD_READ,
-                           address, size, ADRV_QSPI_FMODE_INDIRECT_READ,
-                           handle->fast_read ? 8U : 0U, A_TRUE);
-    if (status == A_STATUS_OK) status = wait_command_complete(handle, &end);
-    if (status == A_STATUS_OK) {
-        status = aDrvQspiReceive(&handle->qspi, data, size);
-    }
-    (void)aOSMutexUnlock(handle->operation_mutex);
-    return status;
-}
-
-aStatus_t aDevFlash25qWrite(aDevFlash25qHandle_t *handle, uint32_t address,
-                            const uint8_t *data, uint32_t size,
-                            aTimeout_t timeout)
-{
-    aTimepoint_t end;
-    aStatus_t status;
-
-    if ((handle == NULL) || (data == NULL) || (size == 0U)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    if (!aTimeoutIsValid(timeout)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    if (!handle->initialized) return A_STATUS_NOT_READY;
-    if ((address > handle->size) || (size > (handle->size - address)) ||
-        (address >= FLASH_MAX_ADDRESS_BYTES) ||
-        (size > (FLASH_MAX_ADDRESS_BYTES - address))) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    status = operation_lock(handle, timeout, &end);
-    if (status != A_STATUS_OK) return status;
-
-    uint32_t written = 0U;
-    while (written < size) {
-        uint32_t chunk =
-            FLASH_PAGE_SIZE - ((address + written) % FLASH_PAGE_SIZE);
-        if (chunk > (size - written)) chunk = size - written;
-        status = write_enable(handle, &end);
-        if (status == A_STATUS_OK) {
-            status = issue_command(
-                handle, FLASH_CMD_PAGE_PROGRAM, address + written,
-                chunk, ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, A_TRUE);
-        }
-        if (status == A_STATUS_OK) {
-            status = aDrvQspiTransmit(
-                &handle->qspi, &data[written], chunk);
-        }
-        if (status == A_STATUS_OK) {
-            status = wait_ready(handle, &end);
-        }
-        if (status != A_STATUS_OK) break;
-        written += chunk;
-    }
-    (void)aOSMutexUnlock(handle->operation_mutex);
-    return written == size ? A_STATUS_OK : status;
-}
-
-aStatus_t aDevFlash25qErase(aDevFlash25qHandle_t *handle, uint32_t address,
-                            uint32_t size, aTimeout_t timeout)
-{
-    aTimepoint_t end;
-
-    if ((handle == NULL) || (size == 0U) ||
-        ((address % FLASH_SECTOR_SIZE) != 0U) ||
-        ((size % FLASH_SECTOR_SIZE) != 0U)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    if (!aTimeoutIsValid(timeout)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    if (!handle->initialized) return A_STATUS_NOT_READY;
-    if ((address > handle->size) || (size > (handle->size - address)) ||
-        (address >= FLASH_MAX_ADDRESS_BYTES) ||
-        (size > (FLASH_MAX_ADDRESS_BYTES - address))) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    aStatus_t status = operation_lock(handle, timeout, &end);
-    if (status != A_STATUS_OK) return status;
-
-    for (uint32_t offset = 0U; offset < size; offset += FLASH_SECTOR_SIZE) {
-        status = write_enable(handle, &end);
-        if (status == A_STATUS_OK) {
-            status = issue_command(handle, FLASH_CMD_SECTOR_ERASE,
-                                   address + offset, 0U,
-                                   ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, A_TRUE);
-        }
-        if (status == A_STATUS_OK) {
-            status = wait_ready(handle, &end);
-        }
-        if (status != A_STATUS_OK) break;
-    }
-    (void)aOSMutexUnlock(handle->operation_mutex);
-    return status;
-}
-
-aStatus_t aDevFlash25qChipErase(aDevFlash25qHandle_t *handle,
-                                aTimeout_t timeout)
-{
-    aTimepoint_t end;
-
-    if ((handle == NULL) || !aTimeoutIsValid(timeout)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    if (!handle->initialized) {
+    if (!config->bus->spi.initialized || config->bus->fault)
         return A_STATUS_NOT_READY;
-    }
-
-    aStatus_t status = operation_lock(handle, timeout, &end);
+    status = timeout_check(config->timeout);
     if (status != A_STATUS_OK) return status;
-    status = write_enable(handle, &end);
+    memset(handle, 0, sizeof(*handle));
+    handle->bus = config->bus;
+    handle->flash.name = "Flash25Q";
+    handle->flash.spi.name = "SPI";
+    handle->flash.user_data = handle;
+    aDrvGpioConfigStructInit(&gpio);
+    gpio.pin = config->cs_pin;
+    gpio.mode = ADRV_GPIO_OUTPUT_PUSH_PULL;
+    gpio.initial_level = ADRV_GPIO_HIGH;
+    status = aDrvGpioInit(&gpio, &handle->cs);
+    if (status != A_STATUS_OK) return status;
+    status = operation_begin(handle, config->timeout);
     if (status == A_STATUS_OK) {
-        status = issue_command(handle, FLASH_CMD_CHIP_ERASE, 0U, 0U,
-                               ADRV_QSPI_FMODE_INDIRECT_WRITE, 0U, A_FALSE);
+        result = sfud_device_init(&handle->flash);
+        status = operation_end(handle, result);
     }
-    if (status == A_STATUS_OK) {
-        status = wait_command_complete(handle, &end);
+    if ((status == A_STATUS_OK) &&
+        ((handle->flash.chip.erase_gran == 0U) ||
+         ((config->expected_capacity != 0U) &&
+          (config->expected_capacity != handle->flash.chip.capacity))))
+        status = A_STATUS_UNSUPPORTED;
+    if (status != A_STATUS_OK) {
+        (void)aDrvGpioDeInit(&handle->cs);
+        handle->flash.init_ok = false;
+        return status;
     }
-    if (status == A_STATUS_OK) status = wait_ready(handle, &end);
-    (void)aOSMutexUnlock(handle->operation_mutex);
-    return status;
+    ++handle->bus->references;
+    return A_STATUS_OK;
 }
 
-uint32_t aDevFlash25qGetSize(const aDevFlash25qHandle_t *handle)
+static aStatus_t deinitialize(aDevFlash25qHandle_t *handle)
 {
-    return handle == NULL ? 0U : handle->size;
+    aStatus_t status;
+
+    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (!handle->flash.init_ok) return A_STATUS_NOT_READY;
+    status = aDrvGpioWrite(&handle->cs, ADRV_GPIO_HIGH);
+    if (status != A_STATUS_OK) return status;
+    status = aDrvGpioDeInit(&handle->cs);
+    if (status != A_STATUS_OK) return status;
+    --handle->bus->references;
+    handle->flash.init_ok = false;
+    return A_STATUS_OK;
 }
 
-aStatus_t aDevFlash25qHandleIsValid(const aDevFlash25qHandle_t *handle)
+#if ADEV_FLASH25Q_STATIC_ENABLE
+aStatus_t aDevFlash25qInitStatic(
+    const aDevFlash25qConfig_t *config, aDevFlash25qHandle_t *handle)
+{
+    return initialize(config, handle);
+}
+
+aStatus_t aDevFlash25qDeInitStatic(aDevFlash25qHandle_t *handle)
 {
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
-    return handle->initialized ? A_STATUS_OK : A_STATUS_NOT_READY;
+    if (handle->dynamic) return A_STATUS_INVALID_PARAM;
+    return deinitialize(handle);
+}
+#endif
+
+#if ADEV_FLASH25Q_DYNAMIC_ENABLE
+aStatus_t aDevFlash25qCreate(
+    const aDevFlash25qConfig_t *config, aDevFlash25qHandle_t **handle_out)
+{
+    aDevFlash25qHandle_t *handle;
+    aStatus_t status;
+
+    if (handle_out == NULL) return A_STATUS_INVALID_PARAM;
+    *handle_out = NULL;
+    if (config == NULL) return A_STATUS_INVALID_PARAM;
+    handle = aOSAlloc(sizeof(*handle));
+    if (handle == NULL) return A_STATUS_NO_MEMORY;
+    status = initialize(config, handle);
+    if (status != A_STATUS_OK) {
+        aOSFree(handle);
+        return status;
+    }
+    handle->dynamic = A_TRUE;
+    *handle_out = handle;
+    return A_STATUS_OK;
 }
 
-aStatus_t aDevFlash25qIoCtl(aDevFlash25qHandle_t *handle, uint32_t command,
-                               void *argument)
+aStatus_t aDevFlash25qDestroy(aDevFlash25qHandle_t *handle)
 {
-    if ((handle == NULL) ||
-        (command != ADEV_FLASH_IOCTL_QSPI_FAST_READ)) {
+    aStatus_t status;
+
+    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (!handle->dynamic) return A_STATUS_INVALID_PARAM;
+    status = deinitialize(handle);
+    if (status == A_STATUS_OK) aOSFree(handle);
+    return status;
+}
+#endif
+
+static aStatus_t range_check(aDevFlash25qHandle_t *handle,
+                             uint32_t address, size_t size)
+{
+    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (!handle->flash.init_ok)
+        return A_STATUS_NOT_READY;
+    if ((size == 0U) || (address > handle->flash.chip.capacity) ||
+        (size > handle->flash.chip.capacity - address))
         return A_STATUS_INVALID_PARAM;
-    }
-    if (!handle->initialized) return A_STATUS_NOT_READY;
-    const aStatus_t status = aOSMutexLock(handle->operation_mutex,
-                                          A_TIMEOUT_NO_WAIT);
+    return A_STATUS_OK;
+}
+
+aStatus_t aDevFlash25qRead(
+    aDevFlash25qHandle_t *handle,
+    const aDevFlash25qReadRequest_t *request)
+{
+    aStatus_t status;
+    sfud_err result;
+
+    if ((request == NULL) || (request->data == NULL))
+        return A_STATUS_INVALID_PARAM;
+    status = range_check(handle, request->address, request->size);
     if (status != A_STATUS_OK) return status;
-    handle->fast_read = (uintptr_t)argument != 0U;
-    (void)aOSMutexUnlock(handle->operation_mutex);
+    status = operation_begin(handle, request->timeout);
+    if (status != A_STATUS_OK) return status;
+    result = sfud_read(&handle->flash, request->address,
+                       request->size, request->data);
+    return operation_end(handle, result);
+}
+
+aStatus_t aDevFlash25qWrite(
+    aDevFlash25qHandle_t *handle,
+    const aDevFlash25qWriteRequest_t *request)
+{
+    aStatus_t status;
+    sfud_err result;
+
+    if ((request == NULL) || (request->data == NULL))
+        return A_STATUS_INVALID_PARAM;
+    status = range_check(handle, request->address, request->size);
+    if (status != A_STATUS_OK) return status;
+    status = operation_begin(handle, request->timeout);
+    if (status != A_STATUS_OK) return status;
+    result = sfud_write(&handle->flash, request->address,
+                        request->size, request->data);
+    return operation_end(handle, result);
+}
+
+aStatus_t aDevFlash25qErase(
+    aDevFlash25qHandle_t *handle,
+    const aDevFlash25qEraseRequest_t *request)
+{
+    aStatus_t status;
+    sfud_err result;
+    uint32_t unit;
+
+    if (request == NULL) return A_STATUS_INVALID_PARAM;
+    status = range_check(handle, request->address, request->size);
+    if (status != A_STATUS_OK) return status;
+    unit = handle->flash.chip.erase_gran;
+    if ((request->address % unit != 0U) || (request->size % unit != 0U))
+        return A_STATUS_INVALID_PARAM;
+    status = operation_begin(handle, request->timeout);
+    if (status != A_STATUS_OK) return status;
+    result = sfud_erase(&handle->flash, request->address, request->size);
+    return operation_end(handle, result);
+}
+
+aStatus_t aDevFlash25qGetInfo(
+    const aDevFlash25qHandle_t *handle, aDevFlash25qInfo_t *info)
+{
+    if ((handle == NULL) || (info == NULL)) return A_STATUS_INVALID_PARAM;
+    if (!handle->flash.init_ok) return A_STATUS_NOT_READY;
+    info->capacity = handle->flash.chip.capacity;
+    info->erase_size = handle->flash.chip.erase_gran;
+    info->manufacturer_id = handle->flash.chip.mf_id;
+    info->memory_type = handle->flash.chip.type_id;
+    info->capacity_id = handle->flash.chip.capacity_id;
     return A_STATUS_OK;
 }

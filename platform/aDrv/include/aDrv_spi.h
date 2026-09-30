@@ -13,11 +13,11 @@
 
 #include "aDrv_gpio.h"
 
-/** @brief 逻辑实例；当前 GD32 的 1/2/3 分别映射 SPI0/1/2。 */
+/** @brief 逻辑实例；编号与 GD32 SPI0/1/2 一致。 */
 typedef enum {
-    ADRV_SPI_1,
-    ADRV_SPI_2,
-    ADRV_SPI_3,
+    ADRV_SPI_0 = 0,
+    ADRV_SPI_1 = 1,
+    ADRV_SPI_2 = 2,
 } aDrvSpiId_t;
 
 /** @brief SPI 从机/主机角色；引脚适配能力以芯片 port 为准。 */
@@ -53,7 +53,7 @@ typedef enum {
 
 /** @brief aDrvSpiConfig_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */
 typedef struct {
-    aDrvSpiId_t spiId; /**< 逻辑实例：1/2/3 对应当前 port 的 SPI0/1/2。 */
+    aDrvSpiId_t spiId; /**< 实例编号与 SPI0/1/2 一致。 */
     aDrvSpiMode_t mode; /**< 主机或从机角色。 */
     aDrvSpiClockPolarity_t polarity; /**< 时钟空闲极性。 */
     aDrvSpiClockPhase_t phase; /**< 第一或第二边沿采样。 */
@@ -64,7 +64,7 @@ typedef struct {
     aDrvGpioPin_t sckPin; /**< 串行时钟引脚，必须配置。 */
     aDrvGpioPin_t mosiPin; /**< 主发从收引脚，必须配置。 */
     aDrvGpioPin_t misoPin; /**< 主收从发引脚，必须配置。 */
-    aDrvGpioPin_t csPin; /**< 软件片选 GPIO；硬件片选模式的引脚配置需另行核对 port。 */
+    aDrvGpioPin_t csPin; /**< 软件片选 GPIO；NONE 表示由上层自行管理 CS。 */
 } aDrvSpiConfig_t;
 
 /** @brief aDrvSpiHandle_t 驱动/设备状态；调用方提供存储，字段仅由所属模块维护。 */
@@ -144,5 +144,11 @@ aStatus_t aDrvSpiTryRead(aDrvSpiHandle_t *handle, void *data);
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
  */
 aStatus_t aDrvSpiCsControl(aDrvSpiHandle_t *handle, uint8_t state);
+
+/** 查询线路完成，同时检查配置错误和接收溢出。 */
+aStatus_t aDrvSpiIsComplete(aDrvSpiHandle_t *handle, aBool_t *complete);
+
+/** 停止控制器；失败事务后必须 DeInit/Init 才能继续使用。 */
+aStatus_t aDrvSpiAbort(aDrvSpiHandle_t *handle);
 
 #endif

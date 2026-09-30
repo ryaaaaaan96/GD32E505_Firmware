@@ -3,33 +3,55 @@
 static aStatus_t read_storage(void *context, uint32_t address, uint8_t *buffer,
                               uint32_t size, aTimeout_t timeout)
 {
-    return aDevFlash25qRead(context, address, buffer, size, timeout);
+    aDevFlash25qReadRequest_t request;
+
+    aDevFlash25qReadRequestStructInit(&request);
+    request.address = address;
+    request.data = buffer;
+    request.size = size;
+    request.timeout = timeout;
+    return aDevFlash25qRead(context, &request);
 }
 
 static aStatus_t write_storage(void *context, uint32_t address,
                                const uint8_t *buffer, uint32_t size,
                                aTimeout_t timeout)
 {
-    return aDevFlash25qWrite(context, address, buffer, size, timeout);
+    aDevFlash25qWriteRequest_t request;
+
+    aDevFlash25qWriteRequestStructInit(&request);
+    request.address = address;
+    request.data = buffer;
+    request.size = size;
+    request.timeout = timeout;
+    return aDevFlash25qWrite(context, &request);
 }
 
 static aStatus_t erase_storage(void *context, uint32_t address, uint32_t size,
                                aTimeout_t timeout)
 {
-    return aDevFlash25qErase(context, address, size, timeout);
+    aDevFlash25qEraseRequest_t request;
+
+    aDevFlash25qEraseRequestStructInit(&request);
+    request.address = address;
+    request.size = size;
+    request.timeout = timeout;
+    return aDevFlash25qErase(context, &request);
 }
 
 aStatus_t aDataBaseBindFlash25q(aDevFlash25qHandle_t *handle)
 {
-    if (aDevFlash25qHandleIsValid(handle) != A_STATUS_OK)
-        return A_STATUS_INVALID_PARAM;
-    const aDataBaseStorage_t storage = {
-        .context = handle,
-        .capacity = aDevFlash25qGetSize(handle),
-        .erase_block_size = 4096U,
-        .read = read_storage,
-        .write = write_storage,
-        .erase = erase_storage,
-    };
+    aDevFlash25qInfo_t info;
+    aDataBaseStorage_t storage;
+    aStatus_t status;
+
+    status = aDevFlash25qGetInfo(handle, &info);
+    if (status != A_STATUS_OK) return status;
+    storage.context = handle;
+    storage.capacity = info.capacity;
+    storage.erase_block_size = info.erase_size;
+    storage.read = read_storage;
+    storage.write = write_storage;
+    storage.erase = erase_storage;
     return aDataBaseBindStorage(&storage);
 }

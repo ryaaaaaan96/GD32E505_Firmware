@@ -13,6 +13,7 @@ endif()
 
 add_subdirectory(sig)
 add_subdirectory(devices)
+add_subdirectory(flash_test)
 add_subdirectory(task)
 
 target_link_libraries(

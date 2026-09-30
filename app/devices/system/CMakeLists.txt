@@ -35,3 +35,11 @@ endif()
 if(ASHELL_ENABLE AND NOT ADEV_USART_DYNAMIC_ENABLE)
     message(FATAL_ERROR "Console requires ADEV_USART_DYNAMIC_ENABLE=ON")
 endif()
+
+target_compile_definitions(${APP_TARGET} PRIVATE
+    ADEV_FLASH25Q_ENABLE=$<BOOL:${ADEV_FLASH25Q_ENABLE}>
+)
+if(ADEV_FLASH25Q_ENABLE)
+    target_sources(${APP_TARGET} PRIVATE app_system_flash.c)
+    target_link_libraries(${APP_TARGET} PRIVATE aFlash25q)
+endif()

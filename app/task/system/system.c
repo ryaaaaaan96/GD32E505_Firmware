@@ -1,6 +1,9 @@
 #include "system.h"
 #include "aOS.h"
 #include "app_system_device.h"
+#if ADEV_FLASH25Q_ENABLE
+#include "app_system_flash.h"
+#endif
 #if ABUS_ENABLE
 #include "app_sig.h"
 #include "app_sig_task.h"
@@ -108,6 +111,13 @@ aStatus_t aSystemInit(void)
 
 #if ASHELL_ENABLE
     status = shellInit();
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+#endif
+
+#if ADEV_FLASH25Q_ENABLE
+    status = appSystemFlashInit();
     if (status != A_STATUS_OK) {
         return status;
     }

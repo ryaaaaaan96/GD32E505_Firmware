@@ -102,7 +102,10 @@ GCC startup 的中断向量顺序来自官方 V1.7.0 的 CL 启动文件，GNU �
 
 device 提供硬件无关的设备组合，例如 `RS485 = USART + DE GPIO`（作为
 aDevUsart 可选配置，统一收发接口，详见 [RS485 设计](usart_design.md)）、
-`Flash25Q = QSPI + Flash 操作语义`。device 依赖 aOS 的单调时基实现软件超时，但
+`Flash25Q` 已在原模块内封装 SFUD，通过 SPI port 对接 aDrvSpi，
+详见 [Flash25Q 链路设计](spi_flash_design.md)。QSPI port 尚未实现。
+不新增 a25q，未来 aMemory 属于 func 层。
+device 依赖 aOS 的单调时基实现软件超时，但
 aDrv 不依赖 aOS。func 在其上构成 aDataBase（含 FlashDB 所需 FAL 适配）、aModbus
 和 aShell 等功能。
 

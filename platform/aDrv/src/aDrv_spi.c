@@ -8,9 +8,9 @@ typedef struct {
 } spiMapping_t;
 
 static const spiMapping_t spi_mappings[] = {
-    {SPI0, RCU_SPI0},
-    {SPI1, RCU_SPI1},
-    {SPI2, RCU_SPI2},
+    [ADRV_SPI_0] = {SPI0, RCU_SPI0},
+    [ADRV_SPI_1] = {SPI1, RCU_SPI1},
+    [ADRV_SPI_2] = {SPI2, RCU_SPI2},
 };
 
 static aStatus_t configure_pin(aDrvGpioPin_t pin, uint32_t mode)
@@ -71,7 +71,7 @@ void aDrvSpiConfigStructInit(aDrvSpiConfig_t *config)
         return;
     }
 
-    config->spiId = ADRV_SPI_1;
+    config->spiId = ADRV_SPI_0;
     config->mode = ADRV_SPI_MODE_MASTER;
     config->polarity = ADRV_SPI_POLARITY_LOW;
     config->phase = ADRV_SPI_PHASE_1EDGE;
@@ -92,7 +92,7 @@ void aDrvSpiHandleStructInit(aDrvSpiHandle_t *handle)
     }
 
     handle->instance = 0U;
-    handle->spiId = ADRV_SPI_1;
+    handle->spiId = ADRV_SPI_0;
     aDrvGpioHandleStructInit(&handle->csGpio);
     handle->dataBytes = 1U;
     handle->softwareCs = A_FALSE;
@@ -123,7 +123,8 @@ aStatus_t aDrvSpiInitStatic(const aDrvSpiConfig_t *config,
             A_STATUS_OK)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (config->csMode == ADRV_SPI_CS_SOFT) {
+    if ((config->csMode == ADRV_SPI_CS_SOFT) &&
+        (config->csPin != ADRV_PIN_NONE)) {
         aDrvGpioConfig_t gpio_config;
 
         aDrvGpioConfigStructInit(&gpio_config);
@@ -157,12 +158,16 @@ aStatus_t aDrvSpiInitStatic(const aDrvSpiConfig_t *config,
     parameters.prescale = map_prescaler(config->prescaler);
 
     spi_init(mapping->instance, &parameters);
+    if (config->csMode == ADRV_SPI_CS_SOFT) {
+        spi_nss_internal_high(mapping->instance);
+    }
     spi_enable(mapping->instance);
 
     handle->instance = mapping->instance;
     handle->spiId = config->spiId;
     handle->dataBytes = (uint8_t)(config->dataBits / 8U);
-    handle->softwareCs = config->csMode == ADRV_SPI_CS_SOFT;
+    handle->softwareCs = (config->csMode == ADRV_SPI_CS_SOFT) &&
+                         (config->csPin != ADRV_PIN_NONE);
     handle->initialized = A_TRUE;
 
     if (handle->softwareCs != 0U) {
@@ -247,4 +252,29 @@ aStatus_t aDrvSpiCsControl(aDrvSpiHandle_t *handle, uint8_t state)
 
     return aDrvGpioWrite(&handle->csGpio,
                          state != 0U ? ADRV_GPIO_HIGH : ADRV_GPIO_LOW);
+}
+
+aStatus_t aDrvSpiIsComplete(aDrvSpiHandle_t *handle, aBool_t *complete)
+{
+    uint32_t instance;
+
+    if ((handle == NULL) || (complete == NULL))
+        return A_STATUS_INVALID_PARAM;
+    if (!handle->initialized) return A_STATUS_NOT_READY;
+    instance = (uint32_t)handle->instance;
+    if ((spi_i2s_flag_get(instance, SPI_FLAG_CONFERR) != RESET) ||
+        (spi_i2s_flag_get(instance, SPI_FLAG_RXORERR) != RESET))
+        return A_STATUS_ERROR;
+    *complete = (spi_i2s_flag_get(instance, SPI_FLAG_TBE) != RESET) &&
+                (spi_i2s_flag_get(instance, SPI_FLAG_TRANS) == RESET);
+    return A_STATUS_OK;
+}
+
+aStatus_t aDrvSpiAbort(aDrvSpiHandle_t *handle)
+{
+    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (!handle->initialized) return A_STATUS_NOT_READY;
+    spi_disable((uint32_t)handle->instance);
+    spi_i2s_deinit((uint32_t)handle->instance);
+    return A_STATUS_OK;
 }

@@ -69,7 +69,7 @@ TX/RX 模式和 IDLE 在初始化时选择。主要依赖如下：
 | device ASYNC | driver USART DMA、interrupt，不依赖 device DIRECT |
 | device RS485 | driver GPIO、USART interrupt |
 | driver USART DMA | driver USART、通用 DMA 驱动 |
-| 数据库 FLASH25Q 后端 | device Flash25Q，继而依赖 QSPI/GPIO |
+| 数据库 FLASH25Q 后端 | device Flash25Q，继而依赖 SPI/GPIO |
 | 数据库 CUSTOM 后端 | 调用者注入存储操作，不依赖 Flash25Q |
 
 完整依赖以 resolver 为准。当前 app 的 LED、Shell 中断串口要求由
@@ -125,3 +125,12 @@ aclass_add_libraries(CONFIG_FILE <绝对路径>)，最后自行创建应用目�
 
 启用数据库必须提供 ADATABASE_LAYOUT_FILE，模块复制产品头到构建目录。
 本示例布局为 config/aDatabase_flash_layout.h；不同产品可提供自己的布局。
+
+### Flash25Q / SFUD 构建
+
+ADEV_FLASH25Q_ENABLE 当前依赖 ADRV_MODULE_SPI_ENABLE。
+STATIC_ENABLE / DYNAMIC_ENABLE 控制两种对象创建方式，至少启用一种。
+官方 SFUD 使用独立 OBJECT target aFlash25qSfud 并合入 aFlash25q，
+项目 config 优先于官方示例配置，官方 port 不参与编译。
+QSPI 后端尚未实现，不是当前 Flash25Q 的构建依赖。
+详见 [Flash25Q 设计](spi_flash_design.md)。
