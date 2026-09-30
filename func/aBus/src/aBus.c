@@ -1,8 +1,7 @@
-#include "aBus.h"
-#if ABUS_LOCK_MODE == ABUS_LOCK_BUS
+#include "aBus_instance.h"
+#if ABUS_DYNAMIC_ENABLE
 #include "aOS.h"
 #endif
-
 #include <assert.h>
 #include <string.h>
 
@@ -13,188 +12,43 @@
 #error "ABUS_DEF_CHECK_ENABLE must be 0 or 1"
 #endif
 
-/* 单例借用应用定义和数据，只拥有内部锁资源；生命周期由应用串行化。 */
-static const aBus_SigDef *definitions;
-static size_t definition_count;
-#if ABUS_LOCK_MODE == ABUS_LOCK_BUS
-static aOSMutex_t bus_mutex;
-#endif
-
-static aBool_t value_in_range(const aBus_ItemDef *item, aScalar_t value)
+static aBool_t value_in_range(const aBusParam_t *item, aDataValue_t value)
 {
     switch (item->type) {
-    case ALIB_SCALAR_U8:
+    case ALIB_DATA_U8:
         return value.u8 >= item->min.u8 && value.u8 <= item->max.u8;
-    case ALIB_SCALAR_U16:
+    case ALIB_DATA_U16:
         return value.u16 >= item->min.u16 && value.u16 <= item->max.u16;
-    case ALIB_SCALAR_U32:
+    case ALIB_DATA_U32:
         return value.u32 >= item->min.u32 && value.u32 <= item->max.u32;
-    case ALIB_SCALAR_I32:
-        return value.i32 >= item->min.i32 && value.i32 <= item->max.i32;
+    case ALIB_DATA_S32:
+        return value.s32 >= item->min.s32 && value.s32 <= item->max.s32;
     default: return A_FALSE;
     }
 }
 
-#if ABUS_DEF_CHECK_ENABLE
-/* 初始化时检查静态规则及存储重叠，运行时不重复扫描这些定义。 */
-static aStatus_t definitions_check(const aBusConfig_t *config)
-{
-    /* 逐组检查：数据大小、状态指针、组标志及字段规则表是否合法。 */
-    for (size_t i = 0U; i < config->signal_count; ++i) {
-        const aBus_SigDef *sig = &config->signals[i];
-        uintptr_t start;
-
-        if (sig->size == 0U || sig->state == NULL ||
-            sig->state->data == NULL ||
-            (sig->flags & ~ABUS_SIG_FLAG_LOCK) != 0U ||
-            (sig->itemCount != 0U && sig->items == NULL)) {
-            return A_STATUS_INVALID_PARAM;
-        }
-        /* 检查数据区末尾地址是否会溢出，供后续区间重叠判断使用。 */
-        start = (uintptr_t)sig->state->data;
-        if (start > UINTPTR_MAX - sig->size) {
-            return A_STATUS_INVALID_PARAM;
-        }
-        /* 与之前已检查的组逐一比较数据区重叠，不检查 sigID 唯一性。 */
-        for (size_t j = 0U; j < i; ++j) {
-            const aBus_SigDef *other = &config->signals[j];
-            uintptr_t other_start = (uintptr_t)other->state->data;
-
-            if (start < other_start + other->size &&
-                other_start < start + sig->size) {
-                return A_STATUS_INVALID_PARAM;
-            }
-        }
-        /* 逐项检查当前组：类型和标志合法，字段不越界，默认值在范围内。
-         * 默认值满足上下限也同时保证 min <= max。 */
-        for (size_t j = 0U; j < sig->itemCount; ++j) {
-            const aBus_ItemDef *item = &sig->items[j];
-            size_t size = aScalarSize(item->type);
-
-            if (size == 0U || item->flags != 0U ||
-                item->offset > sig->size ||
-                size > (size_t)sig->size - item->offset ||
-                !value_in_range(item, item->default_value)) {
-                return A_STATUS_INVALID_PARAM;
-            }
-            /* 与本组之前的字段逐一比较：禁止重复或部分重叠，
-             * 避免初始化默认值时相互覆盖。 */
-            for (size_t k = 0U; k < j; ++k) {
-                const aBus_ItemDef *other = &sig->items[k];
-                size_t other_size = aScalarSize(other->type);
-
-                if (item->offset < other->offset + other_size &&
-                    other->offset < item->offset + size) {
-                    return A_STATUS_INVALID_PARAM;
-                }
-            }
-        }
-    }
-    return A_STATUS_OK;
-}
-
-#endif
-
-/* 调用前须停止所有读写者；这里只释放锁，不释放应用的数据区。 */
-void aBusDeInit(void)
-{
-#if ABUS_LOCK_MODE == ABUS_LOCK_BUS
-    aOSMutexDestroy(&bus_mutex);
-#elif ABUS_LOCK_MODE == ABUS_LOCK_SIG
-    for (size_t i = 0U; i < definition_count; ++i) {
-        aOSMutexDestroy(&definitions[i].state->mutex);
-    }
-#endif
-    definitions = NULL;
-    definition_count = 0U;
-}
-
-aStatus_t aBusInit(const aBusConfig_t *config)
-{
-#if ABUS_DEF_CHECK_ENABLE || ABUS_LOCK_MODE != ABUS_LOCK_NONE
-    aStatus_t status;
-#endif
-
-    if (definitions != NULL) return A_STATUS_BUSY;
-    assert(config != NULL);
-    assert(config->signals != NULL);
-    assert(config->signal_count != 0U);
-    assert(config->signal_count <= (size_t)UINT16_MAX + 1U);
-#if ABUS_DEF_CHECK_ENABLE
-    status = definitions_check(config);
-    if (status != A_STATUS_OK) return status;
-#endif
-    /* 编译时选择锁存储及创建路径，不按组标志跳过创建。 */
-#if ABUS_LOCK_MODE == ABUS_LOCK_BUS
-    status = aOSMutexCreate(&bus_mutex);
-    if (status != A_STATUS_OK) return status;
-#elif ABUS_LOCK_MODE == ABUS_LOCK_SIG
-    for (size_t i = 0U; i < config->signal_count; ++i) {
-        status = aOSMutexCreate(&config->signals[i].state->mutex);
-        if (status != A_STATUS_OK) {
-            /* 仅回收本次已创建的锁，不改动失败条目的已有资源。 */
-            for (size_t j = 0U; j < i; ++j) {
-                aOSMutexDestroy(&config->signals[j].state->mutex);
-            }
-            return status;
-        }
-    }
-#endif
-    /* 检查和锁创建全部成功后才写默认值，确保前面的失败不改动数据。 */
-    for (size_t i = 0U; i < config->signal_count; ++i) {
-        const aBus_SigDef *sig = &config->signals[i];
-
-        for (size_t j = 0U; j < sig->itemCount; ++j) {
-            const aBus_ItemDef *item = &sig->items[j];
-            unsigned char *field = sig->state->data;
-
-            /* 只复制 type 对应成员的字节，未登记字段保持应用初始内容。 */
-            const aScalar_t *value = &item->default_value;
-
-            switch (item->type) {
-            case ALIB_SCALAR_U8:
-                memcpy(field + item->offset, &value->u8, sizeof(value->u8));
-                break;
-            case ALIB_SCALAR_U16:
-                memcpy(field + item->offset, &value->u16, sizeof(value->u16));
-                break;
-            case ALIB_SCALAR_U32:
-                memcpy(field + item->offset, &value->u32, sizeof(value->u32));
-                break;
-            case ALIB_SCALAR_I32:
-                memcpy(field + item->offset, &value->i32, sizeof(value->i32));
-                break;
-            default:
-                /* 关闭定义检查时，类型合法性由应用保证。 */
-                break;
-            }
-        }
-    }
-    definitions = config->signals;
-    definition_count = config->signal_count;
-    return A_STATUS_OK;
-}
-
 /* 用 memcpy 读取字段，避免 offset 未对齐时直接解引用类型指针。 */
-static aStatus_t values_check(const aBus_SigDef *sig, const void *src)
+static aStatus_t values_check(const aBusSig_t *sig, const void *src)
 {
-    for (size_t i = 0U; i < sig->itemCount; ++i) {
-        const aBus_ItemDef *item = &sig->items[i];
+    for (size_t i = 0U; i < sig->param_count; ++i) {
+        const aBusParam_t *item = &sig->params[i];
         const unsigned char *field = (const unsigned char *)src + item->offset;
-        aScalar_t value = {.u32 = 0U};
+        aDataValue_t value = {.u32 = 0U};
 
         switch (item->type) {
-        case ALIB_SCALAR_U8:
+        case ALIB_DATA_RAW:
+            return A_STATUS_INVALID_PARAM;
+        case ALIB_DATA_U8:
             memcpy(&value.u8, field, sizeof(value.u8));
             break;
-        case ALIB_SCALAR_U16:
+        case ALIB_DATA_U16:
             memcpy(&value.u16, field, sizeof(value.u16));
             break;
-        case ALIB_SCALAR_U32:
+        case ALIB_DATA_U32:
             memcpy(&value.u32, field, sizeof(value.u32));
             break;
-        case ALIB_SCALAR_I32:
-            memcpy(&value.i32, field, sizeof(value.i32));
+        case ALIB_DATA_S32:
+            memcpy(&value.s32, field, sizeof(value.s32));
             break;
         default: return A_STATUS_INVALID_PARAM;
         }
@@ -205,111 +59,395 @@ static aStatus_t values_check(const aBus_SigDef *sig, const void *src)
     return A_STATUS_OK;
 }
 
-/* sigID 不要求连续；未找到时返回 definition_count。 */
-static size_t signal_find(uint16_t sigID)
+
+#if ABUS_DEF_CHECK_ENABLE
+/* 只检查静态规则；sigKey 唯一性由生成工具或应用保证。 */
+static aStatus_t definitions_check(const aBusTable_t *table)
 {
-    for (size_t i = 0U; i < definition_count; ++i) {
-        if (definitions[i].sigID == sigID) return i;
+    for (size_t i = 0; i < table->sig_count; i++) {
+        const aBusSig_t *def = &table->sigs[i];
+
+        if (def->size == 0U ||
+            (def->flags & ~ABUS_SIG_FLAG_LOCK) != 0U ||
+            (def->param_count != 0U && def->params == NULL)) {
+            return A_STATUS_INVALID_PARAM;
+        }
+        /* 每项只检查类型、边界与上下限；允许描述重叠范围。 */
+        for (size_t j = 0; j < def->param_count; j++) {
+            const aBusParam_t *field = &def->params[j];
+            size_t size = aDataTypeSize(field->type);
+            aDataValue_t zero = {.u32 = 0U};
+
+            if (size == 0U || field->offset > def->size ||
+                size > def->size - field->offset ||
+                !value_in_range(field, field->min) ||
+                (def->default_data == NULL &&
+                 !value_in_range(field, zero))) {
+                return A_STATUS_INVALID_PARAM;
+            }
+        }
+        if (def->default_data != NULL &&
+            values_check(def, def->default_data) != A_STATUS_OK) {
+            return A_STATUS_INVALID_PARAM;
+        }
     }
-    return definition_count;
+    return A_STATUS_OK;
+}
+#endif
+
+/* 链接脚本始终提供边界，即使没有任何绑定。段内只保存对齐的指针。 */
+extern const aBusStorageBinding_t *const __abus_bindings_start[];
+extern const aBusStorageBinding_t *const __abus_bindings_end[];
+
+static void resources_release(aBusHandle_t *handle,
+                              const aBusTable_t *table)
+{
+    if (table == NULL) return;
+#if ABUS_LOCK_MODE == ABUS_LOCK_BUS
+    aOSMutexDestroy(&handle->mutex);
+#endif
+    for (size_t i = 0; i < table->sig_count; i++) {
+        const aBusSigState_t empty = {.data = NULL};
+#if ABUS_LOCK_MODE == ABUS_LOCK_SIG
+        aOSMutexDestroy(&handle->sigs[i].mutex);
+#endif
+        handle->sigs[i] = empty;
+    }
+#if ABUS_DYNAMIC_ENABLE
+    aOSFree(handle->allocation);
+    handle->allocation = NULL;
+#endif
+    handle->table = NULL;
+}
+
+/* 绑定按表身份过滤，按下标 O(1) 匹配；重复绑定始终拒绝。 */
+static aStatus_t bindings_collect(aBusHandle_t *handle,
+                                 const aBusTable_t *table)
+{
+    const aBusStorageBinding_t *const *cursor;
+
+    for (cursor = __abus_bindings_start;
+         cursor != __abus_bindings_end; cursor++) {
+        const aBusStorageBinding_t *binding = *cursor;
+
+        if (binding->table != table) continue;
+        if (binding->sigIndex >= table->sig_count || binding->data == NULL ||
+            binding->size < table->sigs[binding->sigIndex].size ||
+            handle->sigs[binding->sigIndex].data != NULL) {
+            return A_STATUS_INVALID_PARAM;
+        }
+        handle->sigs[binding->sigIndex].data = binding->data;
+    }
+    return A_STATUS_OK;
+}
+
+static aStatus_t table_check(const aBusTable_t *table)
+{
+    assert(table != NULL);
+    assert(table->sigs != NULL);
+    assert(table->sig_count != 0);
+    assert(table->sig_count <= (size_t)UINT16_MAX + 1U);
+
+#if ABUS_DEF_CHECK_ENABLE
+    return definitions_check(table);
+#else
+    (void)table;
+    return A_STATUS_OK;
+#endif
+}
+
+/* 收集静态地址后统计缺口；只有动态实例允许用一次分配补齐。 */
+static aStatus_t resources_prepare(aBusHandle_t *handle,
+                                   const aBusTable_t *table)
+{
+    aStatus_t status;
+    size_t missing = 0U;
+#if ABUS_DYNAMIC_ENABLE
+    unsigned char *next;
+#endif
+
+    for (size_t i = 0; i < table->sig_count; i++) {
+        const aBusSigState_t empty = {.data = NULL};
+        handle->sigs[i] = empty;
+    }
+    status = bindings_collect(handle, table);
+    if (status != A_STATUS_OK) goto fail;
+    for (size_t i = 0; i < table->sig_count; i++) {
+        if (handle->sigs[i].data != NULL) continue;
+#if ABUS_STATIC_ENABLE
+#if ABUS_DYNAMIC_ENABLE
+        if (!handle->dynamic_storage)
+#endif
+        {
+            status = A_STATUS_NOT_FOUND;
+            goto fail;
+        }
+#endif
+        if (table->sigs[i].size > SIZE_MAX - missing) {
+            status = A_STATUS_INVALID_PARAM;
+            goto fail;
+        }
+        missing += table->sigs[i].size;
+    }
+#if ABUS_DYNAMIC_ENABLE
+    if (missing != 0U) {
+        handle->allocation = aOSAlloc(missing);
+        if (handle->allocation == NULL) {
+            status = A_STATUS_NO_MEMORY;
+            goto fail;
+        }
+    }
+    next = handle->allocation;
+    for (size_t i = 0; i < table->sig_count; i++) {
+        if (handle->sigs[i].data != NULL) continue;
+        handle->sigs[i].data = next;
+        next += table->sigs[i].size;
+    }
+#endif
+#if ABUS_LOCK_MODE == ABUS_LOCK_SIG
+    for (size_t i = 0; i < table->sig_count; i++) {
+        status = aOSMutexCreate(&handle->sigs[i].mutex);
+        if (status != A_STATUS_OK) goto fail;
+    }
+#endif
+#if ABUS_LOCK_MODE == ABUS_LOCK_BUS
+    status = aOSMutexCreate(&handle->mutex);
+    if (status != A_STATUS_OK) goto fail;
+#endif
+    /* 所有可能失败的步骤完成后，才修改绑定的业务数据。 */
+    for (size_t i = 0; i < table->sig_count; i++) {
+        const aBusSig_t *sig = &table->sigs[i];
+        void *data = handle->sigs[i].data;
+
+        if (sig->default_data != NULL) {
+            memcpy(data, sig->default_data, sig->size);
+        } else {
+            memset(data, 0, sig->size);
+        }
+    }
+    handle->table = table;
+    return A_STATUS_OK;
+fail:
+    resources_release(handle, table);
+    return status;
+}
+
+#if ABUS_STATIC_ENABLE
+aStatus_t aBusInitStatic(const aBusTable_t *table, aBusHandle_t *handle)
+{
+    aStatus_t status;
+
+    assert(handle != NULL);
+    if (handle->table != NULL) return A_STATUS_BUSY;
+#if ABUS_DYNAMIC_ENABLE
+    if (handle->dynamic_storage) return A_STATUS_INVALID_PARAM;
+#endif
+    status = table_check(table);
+    if (status != A_STATUS_OK) return status;
+    if (handle->sigs == NULL || handle->capacity < table->sig_count) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    return resources_prepare(handle, table);
+}
+
+aStatus_t aBusDeInitStatic(aBusHandle_t *handle)
+{
+    if (handle == NULL) return A_STATUS_OK;
+#if ABUS_DYNAMIC_ENABLE
+    if (handle->dynamic_storage) return A_STATUS_INVALID_PARAM;
+#endif
+    resources_release(handle, handle->table);
+    return A_STATUS_OK;
+}
+#endif
+
+#if ABUS_DYNAMIC_ENABLE
+aStatus_t aBusCreate(const aBusTable_t *table, aBusHandle_t **handle_out)
+{
+    aBusHandle_t *handle;
+    aStatus_t status;
+    size_t offset = sizeof(aBusHandle_t);
+    size_t alignment = _Alignof(aBusSigState_t);
+    size_t padding = (alignment - offset % alignment) % alignment;
+
+    assert(handle_out != NULL);
+    *handle_out = NULL;
+    status = table_check(table);
+    if (status != A_STATUS_OK) return status;
+    offset += padding;
+    if (table->sig_count > (SIZE_MAX - offset) / sizeof(aBusSigState_t)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    /* 元数据先整体分配，用状态数组收集绑定，无需大型临时索引。 */
+    handle = aOSAlloc(offset + table->sig_count * sizeof(aBusSigState_t));
+    if (handle == NULL) return A_STATUS_NO_MEMORY;
+    {
+        const aBusHandle_t initial = {
+            .sigs = (aBusSigState_t *)((unsigned char *)handle + offset),
+#if ABUS_STATIC_ENABLE
+            .dynamic_storage = A_TRUE,
+#endif
+        };
+        *handle = initial;
+    }
+    status = resources_prepare(handle, table);
+    if (status != A_STATUS_OK) {
+        aOSFree(handle);
+        return status;
+    }
+    *handle_out = handle;
+    return A_STATUS_OK;
+}
+
+aStatus_t aBusDestroy(aBusHandle_t *handle)
+{
+    if (handle == NULL) return A_STATUS_OK;
+#if ABUS_STATIC_ENABLE
+    if (!handle->dynamic_storage) return A_STATUS_INVALID_PARAM;
+#endif
+    resources_release(handle, handle->table);
+    aOSFree(handle);
+    return A_STATUS_OK;
+}
+#endif
+
+/* 定义与当前值共用下标，RAM 条目无需重复保存定义指针。 */
+static size_t sig_find(const aBusTable_t *table, uint16_t sigKey)
+{
+    for (size_t i = 0; i < table->sig_count; i++) {
+        if (table->sigs[i].sigKey == sigKey) return i;
+    }
+    return SIZE_MAX;
 }
 
 #ifndef NDEBUG
-/* 仅供断言检查；NDEBUG 构建不保留此函数及调用。 */
-static aBool_t buffer_is_valid(const aBus_SigDef *sig, const void *buffer,
-                               uint16_t size)
+static aBool_t buffer_is_valid(aBusSigState_t *entry, const aBusSig_t *sig,
+                               const void *buffer,
+                               size_t size)
 {
-    uintptr_t buffer_start = (uintptr_t)buffer;
-    uintptr_t data_start = (uintptr_t)sig->state->data;
+    uintptr_t start = (uintptr_t)buffer;
+    uintptr_t data = (uintptr_t)entry->data;
 
-    return size == sig->size && buffer_start <= UINTPTR_MAX - size &&
-           data_start <= UINTPTR_MAX - size &&
-           !(buffer_start < data_start + size &&
-             data_start < buffer_start + size);
+    return size == sig->size && start <= UINTPTR_MAX - size &&
+           data <= UINTPTR_MAX - size &&
+           !(start < data + size && data < start + size);
 }
 #endif
 
-aStatus_t aBusSetSig(uint16_t sigID, const void *src, uint16_t size,
-                    aTimeout_t timeout)
+aStatus_t aBusSetByIndex(aBusHandle_t *handle,
+                    const aBusSetIndexRequest_t *request)
 {
-    const aBus_SigDef *sig;
+    aBusSigState_t *entry;
+    const aBusSig_t *sig;
+    size_t index;
+    aStatus_t status;
 #if ABUS_LOCK_MODE != ABUS_LOCK_NONE
     aOSMutex_t mutex = NULL;
 #endif
-    aStatus_t status;
-    size_t index;
 
-#if ABUS_LOCK_MODE == ABUS_LOCK_NONE
-    (void)timeout;
-#endif
-    if (definitions == NULL) return A_STATUS_NOT_READY;
-    assert(src != NULL);
-    assert(aTimeoutIsValid(timeout));
-    index = signal_find(sigID);
-    if (index == definition_count) return A_STATUS_NOT_FOUND;
-    sig = &definitions[index];
-    assert(buffer_is_valid(sig, src, size));
-    /* 输入由调用方保持稳定，范围校验在锁外完成以缩短持锁时间。 */
-    status = values_check(sig, src);
+    assert(handle != NULL);
+    if (handle->table == NULL) return A_STATUS_NOT_READY;
+    assert(request != NULL);
+    assert(request->src != NULL && aTimeoutIsValid(request->timeout));
+    index = request->sigIndex;
+    if (index >= handle->table->sig_count) return A_STATUS_NOT_FOUND;
+    entry = &handle->sigs[index];
+    sig = &handle->table->sigs[index];
+    assert(buffer_is_valid(entry, sig, request->src, request->size));
+    /* 范围校验始终执行，且不延长共享数据的持锁时间。 */
+    status = values_check(sig, request->src);
     if (status != A_STATUS_OK) return status;
-
 #if ABUS_LOCK_MODE != ABUS_LOCK_NONE
-    if ((sig->flags & ABUS_SIG_FLAG_LOCK) != 0U) {
+    if ((sig->flags & ABUS_SIG_FLAG_LOCK) != 0) {
 #if ABUS_LOCK_MODE == ABUS_LOCK_BUS
-        mutex = bus_mutex;
+        mutex = handle->mutex;
 #else
-        mutex = sig->state->mutex;
+        mutex = entry->mutex;
 #endif
-        status = aOSMutexLock(mutex, timeout);
+        status = aOSMutexLock(mutex, request->timeout);
         if (status != A_STATUS_OK) return status;
     }
 #endif
-    /* 完整替换；无锁组须由应用保证串行访问，不自动合并字段。 */
-    memcpy(sig->state->data, src, size);
+    memcpy(entry->data, request->src, request->size);
 #if ABUS_LOCK_MODE != ABUS_LOCK_NONE
     if (mutex != NULL) return aOSMutexUnlock(mutex);
 #endif
     return A_STATUS_OK;
 }
 
-aStatus_t aBusGetSig(uint16_t sigID, void *dst, uint16_t size,
-                    aTimeout_t timeout)
+aStatus_t aBusGetByIndex(aBusHandle_t *handle,
+                    const aBusGetIndexRequest_t *request)
 {
-    const aBus_SigDef *sig;
+    aBusSigState_t *entry;
+    const aBusSig_t *sig;
+    size_t index;
 #if ABUS_LOCK_MODE != ABUS_LOCK_NONE
     aOSMutex_t mutex = NULL;
-#endif
-#if ABUS_LOCK_MODE != ABUS_LOCK_NONE
     aStatus_t status;
 #endif
-    size_t index;
 
-#if ABUS_LOCK_MODE == ABUS_LOCK_NONE
-    (void)timeout;
-#endif
-    if (definitions == NULL) return A_STATUS_NOT_READY;
-    assert(dst != NULL);
-    assert(aTimeoutIsValid(timeout));
-    index = signal_find(sigID);
-    if (index == definition_count) return A_STATUS_NOT_FOUND;
-    sig = &definitions[index];
-    assert(buffer_is_valid(sig, dst, size));
-
+    assert(handle != NULL);
+    if (handle->table == NULL) return A_STATUS_NOT_READY;
+    assert(request != NULL);
+    assert(request->dst != NULL && aTimeoutIsValid(request->timeout));
+    index = request->sigIndex;
+    if (index >= handle->table->sig_count) return A_STATUS_NOT_FOUND;
+    entry = &handle->sigs[index];
+    sig = &handle->table->sigs[index];
+    assert(buffer_is_valid(entry, sig, request->dst, request->size));
+    (void)sig;
 #if ABUS_LOCK_MODE != ABUS_LOCK_NONE
-    if ((sig->flags & ABUS_SIG_FLAG_LOCK) != 0U) {
+    if ((sig->flags & ABUS_SIG_FLAG_LOCK) != 0) {
 #if ABUS_LOCK_MODE == ABUS_LOCK_BUS
-        mutex = bus_mutex;
+        mutex = handle->mutex;
 #else
-        mutex = sig->state->mutex;
+        mutex = entry->mutex;
 #endif
-        status = aOSMutexLock(mutex, timeout);
+        status = aOSMutexLock(mutex, request->timeout);
         if (status != A_STATUS_OK) return status;
     }
 #endif
-    /* 读写使用同一把锁，保证整组快照；不向调用方暴露内部指针。 */
-    memcpy(dst, sig->state->data, size);
+    memcpy(request->dst, entry->data, request->size);
 #if ABUS_LOCK_MODE != ABUS_LOCK_NONE
     if (mutex != NULL) return aOSMutexUnlock(mutex);
 #endif
     return A_STATUS_OK;
+}
+
+/* 稳定键仅用于定位，校验、锁和复制统一走下标入口。 */
+aStatus_t aBusSetByKey(aBusHandle_t *handle,
+    const aBusSetKeyRequest_t *request)
+{
+    aBusSetIndexRequest_t indexed;
+
+    assert(handle != NULL);
+    if (handle->table == NULL) return A_STATUS_NOT_READY;
+    assert(request != NULL);
+    assert(request->src != NULL && aTimeoutIsValid(request->timeout));
+    aBusSetIndexRequestStructInit(&indexed);
+    indexed.sigIndex = sig_find(handle->table, request->sigKey);
+    if (indexed.sigIndex == SIZE_MAX) return A_STATUS_NOT_FOUND;
+    indexed.src = request->src;
+    indexed.size = request->size;
+    indexed.timeout = request->timeout;
+    return aBusSetByIndex(handle, &indexed);
+}
+
+/* 稳定键仅用于定位，校验、锁和复制统一走下标入口。 */
+aStatus_t aBusGetByKey(aBusHandle_t *handle,
+    const aBusGetKeyRequest_t *request)
+{
+    aBusGetIndexRequest_t indexed;
+
+    assert(handle != NULL);
+    if (handle->table == NULL) return A_STATUS_NOT_READY;
+    assert(request != NULL);
+    assert(request->dst != NULL && aTimeoutIsValid(request->timeout));
+    aBusGetIndexRequestStructInit(&indexed);
+    indexed.sigIndex = sig_find(handle->table, request->sigKey);
+    if (indexed.sigIndex == SIZE_MAX) return A_STATUS_NOT_FOUND;
+    indexed.dst = request->dst;
+    indexed.size = request->size;
+    indexed.timeout = request->timeout;
+    return aBusGetByIndex(handle, &indexed);
 }

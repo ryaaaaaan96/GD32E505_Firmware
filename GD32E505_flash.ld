@@ -21,6 +21,13 @@ SECTIONS
         . = ALIGN(4); _etext = .;
     } > FLASH :text
     /* aShell GCC exports; keep before RAM data load images. */
+    .abus_bindings (READONLY) : ALIGN(8)
+    {
+        __abus_bindings_start = .;
+        KEEP(*(.abus_bindings))
+        __abus_bindings_end = .;
+    } > FLASH :text
+
     .ashell_commands (READONLY) : ALIGN(8)
     {
         cmd_table = .;

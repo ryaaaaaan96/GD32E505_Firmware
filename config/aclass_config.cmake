@@ -3,6 +3,8 @@
 
 # func
 set(ABUS_ENABLE ON)
+set(ABUS_STATIC_ENABLE ON)
+set(ABUS_DYNAMIC_ENABLE ON)
 # Static definition validation; runtime value ranges are always checked.
 set(ABUS_DEF_CHECK_ENABLE ON)
 # NONE: no locks; BUS: one mutex; SIG: one mutex for every signal.

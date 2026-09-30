@@ -1,109 +1,209 @@
-/** @file aBus.h
- * @brief 板内整组数据交换；仅启动/任务上下文，不支持 ISR。
- * 定义、状态引用及数据由应用持有，须保持有效且定义不变至 DeInit。
- * Init 写入已登记字段的默认值，其余内容由应用初始化。
- * 运行时禁止绕过接口并发访问内部数据。
+/**
+ * @file aBus.h
+ * @brief 多设备 RAM 数据表。业务仅使用不透明 handle；仅任务/启动上下文。
+ * 定义对象保持有效且不变，所有生命周期操作由应用串行化。
  */
 #ifndef ABUS_H
 #define ABUS_H
 
 #include "aLib.h"
-#include "aScalar.h"
+#include "aDataType.h"
 
-/* 模式影响公共状态结构布局，库与调用方必须使用相同配置。 */
 #define ABUS_LOCK_NONE 0
 #define ABUS_LOCK_BUS 1
 #define ABUS_LOCK_SIG 2
-
 #ifndef ABUS_LOCK_MODE
 #define ABUS_LOCK_MODE ABUS_LOCK_BUS
 #endif
-#if ABUS_LOCK_MODE != ABUS_LOCK_NONE && \
-    ABUS_LOCK_MODE != ABUS_LOCK_BUS && ABUS_LOCK_MODE != ABUS_LOCK_SIG
-#error "ABUS_LOCK_MODE must be NONE(0), BUS(1) or SIG(2)"
+#ifndef ABUS_STATIC_ENABLE
+#define ABUS_STATIC_ENABLE 1
+#endif
+#ifndef ABUS_DYNAMIC_ENABLE
+#define ABUS_DYNAMIC_ENABLE 1
+#endif
+#if ABUS_LOCK_MODE < ABUS_LOCK_NONE || ABUS_LOCK_MODE > ABUS_LOCK_SIG
+#error "Invalid ABUS_LOCK_MODE"
+#endif
+#if (ABUS_STATIC_ENABLE != 0 && ABUS_STATIC_ENABLE != 1) || \
+    (ABUS_DYNAMIC_ENABLE != 0 && ABUS_DYNAMIC_ENABLE != 1)
+#error "Allocation switches must be 0 or 1"
+#endif
+#if !ABUS_STATIC_ENABLE && !ABUS_DYNAMIC_ENABLE
+#error "Enable at least one aBus allocation API"
 #endif
 
-#if ABUS_LOCK_MODE == ABUS_LOCK_SIG
-#include "aOS.h"
-#endif
-
-/** @brief 控制读写时使用锁，不控制锁创建；顶层 NONE 模式忽略此位。 */
+/** @brief 只控制读写时使用锁；不影响创建，NONE 模式忽略。 */
 #define ABUS_SIG_FLAG_LOCK (1U << 0)
 
-/** @brief 只读字段规则；未列出的成员仅复制，不校验或设置默认值。 */
+/** @brief 可选整数范围描述；仅登记需要校验的字段。 */
 typedef struct {
-    uint16_t offset; /**< 相对整组起点的字节偏移。 */
-    uint16_t flags; /**< 保留且必须为零；与 offset 相邻以减少填充。 */
-    aScalarType_t type; /**< 决定三个值联合体使用哪个成员。 */
-    aScalar_t min; /**< 最小允许值，包含边界。 */
-    aScalar_t max; /**< 最大允许值，包含边界。 */
-    aScalar_t default_value; /**< Init 成功时写入，必须在范围内。 */
-} aBus_ItemDef;
+    size_t offset; /**< 相对 SIG 起点，建议使用 offsetof。 */
+    aDataType_t type; /**< U8/U16/U32/S32，不支持 RAW 范围。 */
+    aDataValue_t min;
+    aDataValue_t max;
+} aBusParam_t;
 
-/** @brief 应用持有的数据引用；运行时不可替换 data。 */
+/** @brief 只读 SIG 定义，当前值统一存放在连续数据区。 */
 typedef struct {
-    void *data; /**< 至少具有组定义 size 字节，不与其他组重叠。 */
-#if ABUS_LOCK_MODE == ABUS_LOCK_SIG
-    aOSMutex_t mutex; /**< 内部锁槽，应用初始置 NULL，运行中不得修改。 */
+    uint16_t sigKey; /**< 同表唯一且跨版本稳定，不要求连续。 */
+    uint16_t flags;
+    size_t size; /**< 完整快照字节数，必须大于零。 */
+    const void *default_data; /**< size 字节默认值；NULL 表示清零。 */
+    const aBusParam_t *params; /**< 无范围约束时为 NULL。 */
+    size_t param_count;
+} aBusSig_t;
+
+typedef struct aBusHandle aBusHandle_t;
+
+/** @brief 只读表定义；表及引用的定义在实例使用期保持有效且不变。 */
+typedef struct {
+    const aBusSig_t *sigs; /**< 连续的 Flash 定义表。 */
+    size_t sig_count;
+    uint16_t deviceID; /**< 应用维护 deviceID 到 handle 的路由。 */
+} aBusTable_t;
+
+/** @brief 分散绑定描述；table 对象标识绑定所属实例，须长期有效。
+ * 相同定义数组可供不同 table 使用；含绑定的同一 table 仅允许一个活动实例。
+ * 存储不得重叠；初始化统一写默认值，失败不修改绑定数据。
+ */
+typedef struct {
+    const aBusTable_t *table;
+    size_t sigIndex;
+    void *data;
+    size_t size;
+} aBusStorageBinding_t;
+
+#if defined(__GNUC__)
+/** object 必须为具有静态生命周期的可写对象，不是指向缓冲区的指针。 */
+#define ABUS_STORAGE_EXPORT(name, table_object, index, object)           \
+    static const aBusStorageBinding_t name = {                          \
+        &(table_object), (index), &(object), sizeof(object)             \
+    };                                                                 \
+    static const aBusStorageBinding_t *const name##_registration        \
+        __attribute__((used, section(".abus_bindings"),                 \
+                       aligned(sizeof(void *)))) = &(name)
+#else
+/* 其他工具链需实现独立的收集适配。 */
+#error "aBus storage collection currently requires GCC-compatible sections"
 #endif
-} aBus_SigState;
 
-typedef struct {
-    uint16_t sigID; /**< 应用须保证全表唯一，运行时不检查重复。 */
-    uint16_t size; /**< 非零；调用时必须与此大小完全一致。 */
-    uint16_t flags; /**< 有锁模式下 LOCK 启用同步；其余情况应用串行化。 */
-    uint16_t itemCount;
-    const aBus_ItemDef *items;
-    aBus_SigState *state;
-} aBus_SigDef;
+#define ABUS_TABLE_DEFAULT { NULL, 0U, 0U }
 
-/** @brief 配置结构本身仅在 Init 期间读取；定义表为借用。 */
-typedef struct {
-    const aBus_SigDef *signals;
-    size_t signal_count;
-} aBusConfig_t;
-
-#define ABUS_CONFIG_DEFAULT { NULL, 0U }
-
-static inline void aBusConfigStructInit(aBusConfig_t *config)
+static inline void aBusTableStructInit(aBusTable_t *table)
 {
-    if (config != NULL) {
-        const aBusConfig_t defaults = ABUS_CONFIG_DEFAULT;
-        *config = defaults;
+    if (table != NULL) {
+        const aBusTable_t defaults = ABUS_TABLE_DEFAULT;
+        *table = defaults;
     }
 }
 
-/** @brief 初始化单例，检查定义、创建锁，最后写入字段默认值。
- * 重复初始化返回 BUSY；无效配置返回 INVALID_PARAM，分配失败返回
- * NO_MEMORY。失败不保留内部资源或修改数据；重复字段/重叠字段无效。
- * sigID 唯一性由应用/构建工具保证；当前尚未接入 Python 校验。
- * ABUS_DEF_CHECK_ENABLE 控制定义检查，关闭时由应用保证定义合法。
- * config、signals、数量等调用参数使用 assert 检查，由 NDEBUG 控制。
- * 数据区不得与配置、定义表、规则或状态引用等元数据重叠。
- * 所有生命周期调用由应用串行化，初始化完成后才可发布给其他任务。
+/** 定义及默认数据在实例使用期间保持有效且不变。
+ * 所有存储互不重叠；初始化失败不修改静态绑定数据。
+ * 生命周期操作由应用串行化，静态入口要求全部绑定；动态入口为未绑定 SIG 分配数据。
  */
-aStatus_t aBusInit(const aBusConfig_t *config);
+#if ABUS_STATIC_ENABLE
+aStatus_t aBusInitStatic(const aBusTable_t *table, aBusHandle_t *handle);
+/** 仅释放锁；停止使用后调用。拒绝动态实例。 */
+aStatus_t aBusDeInitStatic(aBusHandle_t *handle);
+#endif
+#if ABUS_DYNAMIC_ENABLE
+/** 失败时清空输出并回收已创建资源。 */
+aStatus_t aBusCreate(const aBusTable_t *table, aBusHandle_t **handle_out);
+/** 释放全部动态资源；拒绝静态实例。NULL 返回 OK。 */
+aStatus_t aBusDestroy(aBusHandle_t *handle);
+#endif
 
-/** @brief 停止全部使用者后销毁；不释放应用数据，允许重复调用。 */
-void aBusDeInit(void);
+/** @brief 按下标整组写入；缓冲区不得别名总线存储。 */
+typedef struct {
+    size_t sigIndex;
+    const void *src;
+    size_t size;
+    aTimeout_t timeout;
+} aBusSetIndexRequest_t;
 
-/** @brief 整组替换；输入须稳定且不得与任何总线数据区重叠。
- * timeout 仅为锁等待预算。校验失败不修改当前值。
- * 未初始化返回 NOT_READY，ID 缺失返回 NOT_FOUND。
- * 范围错误返回 INVALID_PARAM；获取锁失败返回 aOS 状态，不执行复制。
- * 解锁异常时数据已经复制，仍返回解锁错误；不能视为事务回滚。
- * 空指针、长度不符、非法超时及当前组重叠通过 assert 检查。
- * NDEBUG 关闭断言后，违反调用契约不保证返回错误或安全执行。
- * 与其他组的别名始终由调用者避免。
+static inline void aBusSetIndexRequestStructInit(
+    aBusSetIndexRequest_t *request)
+{
+    if (request != NULL) {
+        const aBusSetIndexRequest_t initial = {
+            .timeout = A_TIMEOUT_NO_WAIT
+        };
+        *request = initial;
+    }
+}
+
+/** @brief 按下标整组读取；缓冲区不得别名总线存储。 */
+typedef struct {
+    size_t sigIndex;
+    void *dst;
+    size_t size;
+    aTimeout_t timeout;
+} aBusGetIndexRequest_t;
+
+static inline void aBusGetIndexRequestStructInit(
+    aBusGetIndexRequest_t *request)
+{
+    if (request != NULL) {
+        const aBusGetIndexRequest_t initial = {
+            .timeout = A_TIMEOUT_NO_WAIT
+        };
+        *request = initial;
+    }
+}
+
+/** @brief 按稳定键整组写入；缓冲区不得别名总线存储。 */
+typedef struct {
+    uint16_t sigKey;
+    const void *src;
+    size_t size;
+    aTimeout_t timeout;
+} aBusSetKeyRequest_t;
+
+static inline void aBusSetKeyRequestStructInit(
+    aBusSetKeyRequest_t *request)
+{
+    if (request != NULL) {
+        const aBusSetKeyRequest_t initial = {
+            .timeout = A_TIMEOUT_NO_WAIT
+        };
+        *request = initial;
+    }
+}
+
+/** @brief 按稳定键整组读取；缓冲区不得别名总线存储。 */
+typedef struct {
+    uint16_t sigKey;
+    void *dst;
+    size_t size;
+    aTimeout_t timeout;
+} aBusGetKeyRequest_t;
+
+static inline void aBusGetKeyRequestStructInit(
+    aBusGetKeyRequest_t *request)
+{
+    if (request != NULL) {
+        const aBusGetKeyRequest_t initial = {
+            .timeout = A_TIMEOUT_NO_WAIT
+        };
+        *request = initial;
+    }
+}
+
+/** 请求默认不等待锁；调用前填写定位字段、缓冲区和完整长度。
+ * 长度必须与 SIG 一致；请求和写入源在调用期间保持稳定，调用后不持有。
+ * 参数契约由 assert 检查。范围/加锁失败不修改数据；解锁失败不回滚。
+ * timeout 仅控制锁等待；无锁访问由应用串行化或外部同步。
+ * 未就绪返回 NOT_READY，越界下标或未知键返回 NOT_FOUND。
+ * Index 直接定位 O(1)，Key 线性查找 O(N)，然后共用 Index 读写路径。
+ * sigIndex 是当前表内位置，业务应使用枚举；跨版本标识使用 sigKey。
  */
-aStatus_t aBusSetSig(uint16_t sigID, const void *src, uint16_t size,
-                     aTimeout_t timeout);
-
-/** @brief 复制完整快照；输出不得与任何总线数据区重叠。
- * 错误及锁等待语义同 SetSig；获取锁失败时输出不变。
- * 无内部锁的组由调用者保证全部读写串行化，不隐式启用原子操作。
- */
-aStatus_t aBusGetSig(uint16_t sigID, void *dst, uint16_t size,
-                     aTimeout_t timeout);
+aStatus_t aBusSetByIndex(aBusHandle_t *handle,
+    const aBusSetIndexRequest_t *request);
+aStatus_t aBusGetByIndex(aBusHandle_t *handle,
+    const aBusGetIndexRequest_t *request);
+aStatus_t aBusSetByKey(aBusHandle_t *handle,
+    const aBusSetKeyRequest_t *request);
+aStatus_t aBusGetByKey(aBusHandle_t *handle,
+    const aBusGetKeyRequest_t *request);
 
 #endif

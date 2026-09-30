@@ -9,7 +9,14 @@ set(ADRV_USART_DMA_ENABLE ON)
 set(ADRV_MODULE_DMA_ENABLE ON)
 
 if(DEFINED CASE)
-    if(CASE STREQUAL "bus_check_off")
+    if(CASE STREQUAL "bus_static")
+        set(ABUS_DYNAMIC_ENABLE OFF)
+    elseif(CASE STREQUAL "bus_dynamic")
+        set(ABUS_STATIC_ENABLE OFF)
+    elseif(CASE STREQUAL "bus_no_allocation")
+        set(ABUS_STATIC_ENABLE OFF)
+        set(ABUS_DYNAMIC_ENABLE OFF)
+    elseif(CASE STREQUAL "bus_check_off")
         set(ABUS_DEF_CHECK_ENABLE OFF)
     elseif(CASE STREQUAL "bus_check_invalid")
         set(ABUS_DEF_CHECK_ENABLE typo)
@@ -95,7 +102,7 @@ if(DEFINED CASE)
     return()
 endif()
 
-foreach(case default bus_check_off bus_check_invalid bus_none bus_sig bus_off bus_invalid_lock
+foreach(case default bus_static bus_dynamic bus_no_allocation bus_check_off bus_check_invalid bus_none bus_sig bus_off bus_invalid_lock
         minimal polling independent_app missing_input missing_dma
         missing_usart_dma dma_without_async
         async_without_direct direct_without_dma missing_device missing_gpio invalid_bool
@@ -104,7 +111,7 @@ foreach(case default bus_check_off bus_check_invalid bus_none bus_sig bus_off bu
         COMMAND "${CMAKE_COMMAND}" "-DCASE=${case}" -P "${CMAKE_CURRENT_LIST_FILE}"
         RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
     )
-    if(case MATCHES "^(default|bus_check_off|bus_none|bus_sig|bus_off|minimal|polling|independent_app|database_custom|dma_without_async|async_without_direct|direct_without_dma)$")
+    if(case MATCHES "^(default|bus_static|bus_dynamic|bus_check_off|bus_none|bus_sig|bus_off|minimal|polling|independent_app|database_custom|dma_without_async|async_without_direct|direct_without_dma)$")
         if(NOT result EQUAL 0)
             message(FATAL_ERROR "${case} should succeed: ${error}")
         endif()
@@ -112,7 +119,9 @@ foreach(case default bus_check_off bus_check_invalid bus_none bus_sig bus_off bu
         if(result EQUAL 0)
             message(FATAL_ERROR "${case} should fail")
         endif()
-        if(case STREQUAL "bus_invalid_lock")
+        if(case STREQUAL "bus_no_allocation")
+            set(expected "aBus requires STATIC or DYNAMIC")
+        elseif(case STREQUAL "bus_invalid_lock")
             set(expected "ABUS_LOCK_GRANULARITY")
         elseif(case STREQUAL "missing_input")
             set(expected "Missing configuration input: ADRV_MODULE_DMA_ENABLE")

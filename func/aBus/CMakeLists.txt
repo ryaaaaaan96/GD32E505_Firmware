@@ -7,16 +7,29 @@ if(NOT DEFINED ABUS_DEF_CHECK_ENABLE OR
     message(FATAL_ERROR "ABUS_DEF_CHECK_ENABLE must be boolean")
 endif()
 
+foreach(option ABUS_STATIC_ENABLE ABUS_DYNAMIC_ENABLE)
+    if(NOT DEFINED ${option} OR
+       NOT "${${option}}" MATCHES "^(ON|OFF|TRUE|FALSE|0|1)$")
+        message(FATAL_ERROR "${option} must be boolean")
+    endif()
+endforeach()
+if(NOT ABUS_STATIC_ENABLE AND NOT ABUS_DYNAMIC_ENABLE)
+    message(FATAL_ERROR "aBus requires STATIC or DYNAMIC allocation enabled")
+endif()
 add_library(aBus STATIC src/aBus.c)
+target_compile_definitions(aBus PUBLIC
+    ABUS_STATIC_ENABLE=$<BOOL:${ABUS_STATIC_ENABLE}>
+    ABUS_DYNAMIC_ENABLE=$<BOOL:${ABUS_DYNAMIC_ENABLE}>
+)
 target_compile_definitions(aBus PRIVATE
     ABUS_DEF_CHECK_ENABLE=$<BOOL:${ABUS_DEF_CHECK_ENABLE}>
 )
 target_include_directories(aBus PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(aBus PUBLIC aLib PRIVATE aclass_project_options)
-if(ABUS_LOCK_GRANULARITY STREQUAL "SIG")
-    # The public state contains aOSMutex_t only in this configuration.
+if(NOT ABUS_LOCK_GRANULARITY STREQUAL "NONE")
+    # Public instance/state storage uses the opaque aOS mutex type.
     target_link_libraries(aBus PUBLIC aOS)
-elseif(ABUS_LOCK_GRANULARITY STREQUAL "BUS")
+elseif(ABUS_DYNAMIC_ENABLE)
     target_link_libraries(aBus PRIVATE aOS)
 endif()
 if(ABUS_LOCK_GRANULARITY STREQUAL "NONE")
