@@ -59,15 +59,15 @@ typedef struct aBusHandle aBusHandle_t;
 typedef struct {
     const aBusSig_t *sigs; /**< 连续的 Flash 定义表。 */
     size_t sig_count;
-    uint16_t deviceID; /**< 应用维护 deviceID 到 handle 的路由。 */
+    uint16_t deviceID; /**< 绑定所属逻辑表标识；应用保证唯一性。 */
 } aBusTable_t;
 
-/** @brief 分散绑定描述；table 对象标识绑定所属实例，须长期有效。
- * 相同定义数组可供不同 table 使用；含绑定的同一 table 仅允许一个活动实例。
+/** @brief 按 deviceID + sigIndex 匹配的只读分散绑定描述。
+ * 含绑定的同一 deviceID 只允许一个活动实例，由应用保证。
  * 存储不得重叠；初始化统一写默认值，失败不修改绑定数据。
  */
 typedef struct {
-    const aBusTable_t *table;
+    uint16_t deviceID;
     size_t sigIndex;
     void *data;
     size_t size;
@@ -75,9 +75,9 @@ typedef struct {
 
 #if defined(__GNUC__)
 /** object 必须为具有静态生命周期的可写对象，不是指向缓冲区的指针。 */
-#define ABUS_STORAGE_EXPORT(name, table_object, index, object)           \
+#define ABUS_STORAGE_EXPORT(name, device_id, index, object)           \
     static const aBusStorageBinding_t name = {                          \
-        &(table_object), (index), &(object), sizeof(object)             \
+        (device_id), (index), &(object), sizeof(object)             \
     };                                                                 \
     static const aBusStorageBinding_t *const name##_registration        \
         __attribute__((used, section(".abus_bindings"),                 \

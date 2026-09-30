@@ -120,7 +120,7 @@ static void resources_release(aBusHandle_t *handle,
     handle->table = NULL;
 }
 
-/* 绑定按表身份过滤，按下标 O(1) 匹配；重复绑定始终拒绝。 */
+/* 绑定按逻辑设备号过滤，按下标 O(1) 匹配；重复绑定始终拒绝。 */
 static aStatus_t bindings_collect(aBusHandle_t *handle,
                                  const aBusTable_t *table)
 {
@@ -130,7 +130,7 @@ static aStatus_t bindings_collect(aBusHandle_t *handle,
          cursor != __abus_bindings_end; cursor++) {
         const aBusStorageBinding_t *binding = *cursor;
 
-        if (binding->table != table) continue;
+        if (binding->deviceID != table->deviceID) continue;
         if (binding->sigIndex >= table->sig_count || binding->data == NULL ||
             binding->size < table->sigs[binding->sigIndex].size ||
             handle->sigs[binding->sigIndex].data != NULL) {

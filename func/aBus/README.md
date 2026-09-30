@@ -103,22 +103,22 @@ status = aBusInitStatic(&table, &instance);
 
 ## 分散注册静态存储（GCC）
 
-表对象在公共业务头文件声明，绑定变量保持在自己的 .c 文件内：
+设备号在应用中统一定义，表和绑定变量分别保留在自己的 .c 文件内：
 
 ```c
-/* motor.c，motor_table 在业务头文件中声明为 extern const。 */
+/* motor.c，MOTOR_DEVICE_ID 与私有表的 deviceID 一致。 */
 static MotorData_t motor_data;
 
-ABUS_STORAGE_EXPORT(motor_binding, motor_table,
+ABUS_STORAGE_EXPORT(motor_binding, MOTOR_DEVICE_ID,
                     MOTOR_SIG_CONFIG, motor_data);
 ```
 
-宏自动记录表地址、sigIndex、变量地址和 sizeof(variable)，并向链接段导出
+宏自动记录 deviceID、sigIndex、变量地址和 sizeof(variable)，并向链接段导出
 一条描述指针。object 必须是实际静态可写对象或数组，不能传缓冲区指针。
-表对象本身标识实例归属；不同设备可各定义一个表对象并共用 sigs 定义数组。
-含绑定的同一表对象只允许一个活动 handle，应用负责生命周期串行化；不设置
+deviceID 标识绑定归属；不同设备使用不同 deviceID，可共用 sigs 定义数组。
+含绑定的同一 deviceID 只允许一个活动 handle，应用负责生命周期串行化；不设置
 全局活动实例注册表。绑定数据和所有元数据、默认数据、其他绑定必须互不重叠。
-业务直接访问绑定变量时，必须遵守与总线相同的同步规则。
+绑定不保护直接访问，业务自行决定同步策略。
 
 初始化依次执行：检查定义 → 清空状态数组 → 收集匹配表的绑定 → 统计缺口
 → 动态补齐或静态报错 → 创建全部锁 → 写整组默认值/清零 → 发布就绪状态。

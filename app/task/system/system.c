@@ -1,6 +1,10 @@
 #include "system.h"
 #include "aOS.h"
 #include "app_system_device.h"
+#if ABUS_ENABLE
+#include "app_sig.h"
+#include "app_sig_task.h"
+#endif
 #if ASHELL_ENABLE
 #include "aDrv_basic.h"
 #include "aShell.h"
@@ -104,6 +108,18 @@ aStatus_t aSystemInit(void)
 
 #if ASHELL_ENABLE
     status = shellInit();
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+#endif
+
+#if ABUS_ENABLE
+    /* Shell 就绪后初始化数据服务，供后续业务协议借用。 */
+    status = appSigInit();
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+    status = appSigTaskInit();
     if (status != A_STATUS_OK) {
         return status;
     }

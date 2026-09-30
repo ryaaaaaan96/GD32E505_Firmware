@@ -30,3 +30,47 @@ flush 不等待线路完成、不丢弃输入；Shell 不自动调用。
 
 当前控制台使用 aDevUsartCreate 动态分配对象，Shell 初始化失败时调用
 aDevUsartDestroy 回收；产品必须开启 ADEV_USART_DYNAMIC_ENABLE。
+
+## SIG 数据与测试任务
+
+`app/sig` 持有私有 aBus handle，由 aSystemInit 在 Shell 初始化后
+调用 appSigInit，再启动 app/task/sig 的测试任务。关闭 Shell 时
+数据与测试任务仍初始化；关闭 aBus 时一并裁剪。
+
+业务统一通过 `appSigSet(request)`、`appSigGet(request)` 整组读写。
+请求使用 aBusSetIndexRequest_t / aBusGetIndexRequest_t，通过对应
+StructInit 初始化后填写 sigIndex、缓冲区、长度和锁等待时间。
+sigIndex 是 app_sig_ids.h 的枚举下标，不是稳定 sigKey。
+未初始化返回 NOT_READY，未知下标返回 NOT_FOUND，长度错误返回
+INVALID_PARAM。请求与缓冲区只在调用期间借用。
+
+motor 初始值为转速 100、温度 25，转速允许 0..6000。
+Counter 初值为 0，在 app/task/sig/app_sig_task.c 中定义为静态变量，
+通过旁边的 APP_SIG_BIND 分散注册绑定。任务每次延时
+1000 ms 后直接 counter++，UINT32_MAX 后回绕到零。
+实际周期包含调度时间，不作为精确计时器。
+
+表和 handle 均由 app_sig.c 私有持有。
+APP_SIG_BIND 使用统一的 APP_SIG_DEVICE_ID 与参数下标，直接交给
+ABUS_STORAGE_EXPORT 注册。aBus 按 deviceID + sigIndex 匹配，
+只使用 .abus_bindings 收集；描述和收集指针均为 const，存放 Flash。
+同一绑定设备号只允许一个活动实例，由应用保证。
+绑定只关联存储，不额外提供并发保护。直接访问绑定变量的同步策略
+由应用自行决定；当前自增测试不做同步，Shell 设置值可能被自增覆盖。
+通用读写仍遵循 aBus 锁配置，timeout 仅用于 aBus 锁等待，不能保护
+任务绕过接口直接访问绑定变量。
+动态创建启用时分配实例元数据，否则使用静态实例；两个测点的数据
+均静态绑定。aBus 自身保持多实例能力。
+
+### Shell 命令
+
+命令在 app/sig/app_sig_command.c 注册，按 sigIndex 数值访问：
+
+- `sig get 1`：读取 Counter（APP_BUS_COUNTER）。
+- `sig set 1 100`：设置 Counter 为 100，任务随后继续自增。
+
+当前 Shell 支持登记的 U8/U16/U32/S32 标量；Motor 下标为 0，
+属于结构体，暂不提供文本读写，仍可使用通用 C 接口整组访问。
+标量类型登记在 command_types 中。ID 与值采用十进制，非法输入
+不修改数据。命令默认不等待锁，忙时返回错误，用户可重试。
+已删除 app/protocol 和 bus_demo，业务命令归 sig 模块管理。

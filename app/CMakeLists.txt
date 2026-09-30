@@ -11,6 +11,7 @@ if(ADEV_USART_ENABLE)
     target_link_libraries(${APP_TARGET} PRIVATE aDevUsart)
 endif()
 
+add_subdirectory(sig)
 add_subdirectory(devices)
 add_subdirectory(task)
 
@@ -31,3 +32,7 @@ set_target_properties(
 
 generate_firmware_images(${APP_TARGET})
 target_link_libraries(${APP_TARGET} PRIVATE aclass_project_options)
+
+target_compile_definitions(${APP_TARGET} PRIVATE
+    ABUS_ENABLE=$<BOOL:${ABUS_ENABLE}>
+)

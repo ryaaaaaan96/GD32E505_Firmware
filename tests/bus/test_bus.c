@@ -288,7 +288,7 @@ static void dynamic_tests(void)
     Pair output;
     aBusHandle_t *first = NULL;
     aBusHandle_t *second = NULL;
-    aBusTable_t table = {.sigs = defs, .sig_count = 2, .deviceID = 1};
+    aBusTable_t table = {.sigs = defs, .sig_count = 2, .deviceID = 10};
     aBusTable_t second_table;
 
     /* handle、条目数组、动态数据每一处分配失败都须完整回收。 */
@@ -313,9 +313,9 @@ static void dynamic_tests(void)
 #endif
     io_tests(first);
     second_table = table;
-    second_table.deviceID = 2;
+    second_table.deviceID = 11;
     assert(aBusCreate(&second_table, &second) == A_STATUS_OK);
-    assert(first->table->deviceID == 1 && second->table->deviceID == 2);
+    assert(first->table->deviceID == 10 && second->table->deviceID == 11);
     assert(get_sig(second, 10, &output, sizeof(output),
                       A_TIMEOUT_NO_WAIT) == A_STATUS_OK);
     assert(output.a == 1 && output.tag == 0);
@@ -347,11 +347,13 @@ static void model_tests(void)
         {.sigKey = 2, .size = sizeof(defaults), .default_data = defaults,
          .params = params, .param_count = 3}
     };
-    static aBusTable_t table = {.sigs = sigs, .sig_count = 2};
+    static aBusTable_t table = {
+        .sigs = sigs, .sig_count = 2, .deviceID = 3
+    };
     static unsigned char byte_storage;
     static unsigned char group_storage[16];
-    ABUS_STORAGE_EXPORT(model_byte, table, 0, byte_storage);
-    ABUS_STORAGE_EXPORT(model_group, table, 1, group_storage);
+    ABUS_STORAGE_EXPORT(model_byte, 3U, 0, byte_storage);
+    ABUS_STORAGE_EXPORT(model_group, 3U, 1, group_storage);
     aBusHandle_t *handle = NULL;
     aBusSetKeyRequest_t set_request;
     aBusGetKeyRequest_t get_request;
@@ -472,19 +474,21 @@ static void binding_tests(void)
         {.sigKey = 9, .size = sizeof(uint32_t)},
         {.sigKey = 3, .size = sizeof(uint32_t)}
     };
-    static const aBusTable_t duplicate = {.sigs = definition, .sig_count = 2};
+    static const aBusTable_t duplicate = {
+        .sigs = definition, .sig_count = 2, .deviceID = 4
+    };
     static const aBusTable_t short_table = {
-        .sigs = definition, .sig_count = 2
+        .sigs = definition, .sig_count = 2, .deviceID = 5
     };
     static const aBusTable_t bad_index = {
-        .sigs = definition, .sig_count = 2
+        .sigs = definition, .sig_count = 2, .deviceID = 6
     };
     static uint32_t one, two;
     static uint8_t small;
-    ABUS_STORAGE_EXPORT(dup1, duplicate, 0, one);
-    ABUS_STORAGE_EXPORT(dup2, duplicate, 0, two);
-    ABUS_STORAGE_EXPORT(short1, short_table, 0, small);
-    ABUS_STORAGE_EXPORT(bad1, bad_index, 2, one);
+    ABUS_STORAGE_EXPORT(dup1, 4U, 0, one);
+    ABUS_STORAGE_EXPORT(dup2, 4U, 0, two);
+    ABUS_STORAGE_EXPORT(short1, 5U, 0, small);
+    ABUS_STORAGE_EXPORT(bad1, 6U, 2, one);
     aBusHandle_t *handle = NULL;
 #if ABUS_STATIC_ENABLE
     aBusHandle_t instance;
