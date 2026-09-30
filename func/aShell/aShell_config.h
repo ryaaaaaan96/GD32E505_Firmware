@@ -22,6 +22,6 @@
     "\r\n" \
     "Type 'help' to list commands.\r\n\r\n"
 /* nr_micro_shell appends ": " to this name. */
-#define ASHELL_PROMPT "Aclass"
+#define ASHELL_PROMPT "AIDC"
 
 #endif

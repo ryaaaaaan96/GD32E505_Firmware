@@ -60,11 +60,13 @@ aStatus_t appSigInit(void)
 {
     aStatus_t status;
 #if ABUS_DYNAMIC_ENABLE
-    status = aBusCreate(&app_sig_table, 1U, &sig_handle);
+    status = aBusCreate(APP_SIG_INSTANCE_ID, &app_sig_table, 1U,
+                        &sig_handle);
 #else
     aBusInstanceStructInit(&static_handle, static_states,
                           APP_BUS_SIG_COUNT);
-    status = aBusInitStatic(&app_sig_table, 1U, &static_handle);
+    status = aBusInitStatic(APP_SIG_INSTANCE_ID, &app_sig_table, 1U,
+                            &static_handle);
     if (status == A_STATUS_OK) sig_handle = &static_handle;
 #endif
     return status;

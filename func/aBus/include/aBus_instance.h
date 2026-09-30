@@ -18,6 +18,7 @@ typedef struct {
 } aBusSigState_t;
 
 struct aBusHandle {
+    uint16_t instanceID; /**< 静态绑定命名空间；不参与读写定位。 */
     const aBusTable_t *tables; /**< 非 NULL 表示整个实例已就绪。 */
     size_t table_count;
     size_t sig_count; /**< 全部表的 SIG 总数。 */

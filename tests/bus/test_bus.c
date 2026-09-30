@@ -240,7 +240,7 @@ static void static_tests(void)
     bindings_fill();
 
     aBusInstanceStructInit(&instance, storage, 1);
-    assert(aBusInitStatic(table, 1U, &instance) ==
+    assert(aBusInitStatic(0U, table, 1U, &instance) ==
            A_STATUS_INVALID_PARAM);
     assert(instance.tables == NULL && bindings_unchanged());
     aBusInstanceStructInit(&instance, storage, 2);
@@ -250,21 +250,21 @@ static void static_tests(void)
 #if ABUS_LOCK_MODE != ABUS_LOCK_NONE
     for (int budget = 0; budget < (ABUS_LOCK_MODE == 2 ? 2 : 1); budget++) {
         create_budget = budget;
-        assert(aBusInitStatic(table, 1U, &instance) ==
+        assert(aBusInitStatic(0U, table, 1U, &instance) ==
                A_STATUS_NO_MEMORY);
         assert(instance.tables == NULL);
         assert(live_locks == 0 && bindings_unchanged());
     }
     create_budget = -1;
 #endif
-    assert(aBusInitStatic(table, 1U, &instance) == A_STATUS_OK);
+    assert(aBusInitStatic(0U, table, 1U, &instance) == A_STATUS_OK);
     initializing_handle = NULL;
     handle = &instance;
     assert(handle->tables == table && live_allocations == 0);
     assert(get_sig(handle, 10, &output, sizeof(output),
                       A_TIMEOUT_NO_WAIT) == A_STATUS_OK);
     assert(output.a == 1 && output.tag == 0);
-    assert(aBusInitStatic(table, 1U, &instance) == A_STATUS_BUSY);
+    assert(aBusInitStatic(0U, table, 1U, &instance) == A_STATUS_BUSY);
     assert(instance.tables == table);
 #if ABUS_DYNAMIC_ENABLE
     assert(aBusDestroy(handle) == A_STATUS_INVALID_PARAM);
@@ -281,11 +281,12 @@ static void static_tests(void)
                       A_TIMEOUT_NO_WAIT) == A_STATUS_NOT_READY);
     /* 反初始化保留静态存储信息，可直接重试而无需重建实例。 */
     initializing_handle = &instance;
-    assert(aBusInitStatic(table, 1U, &instance) == A_STATUS_OK);
+    assert(aBusInitStatic(0U, table, 1U, &instance) == A_STATUS_OK);
     initializing_handle = NULL;
     assert(aBusDeInitStatic(handle) == A_STATUS_OK);
 
-    assert(aBusInitStatic(&mixed_table, 1U, &instance) == A_STATUS_NOT_FOUND);
+    assert(aBusInitStatic(0U, &mixed_table, 1U, &instance) ==
+           A_STATUS_NOT_FOUND);
     assert(live_allocations == 0 && live_locks == 0);
 }
 #endif
@@ -302,19 +303,19 @@ static void dynamic_tests(void)
     /* handle、条目数组、动态数据每一处分配失败都须完整回收。 */
     for (int budget = 0; budget < 2; budget++) {
         alloc_budget = budget;
-        assert(aBusCreate(&table, 1U, &first) == A_STATUS_NO_MEMORY);
+        assert(aBusCreate(0U, &table, 1U, &first) == A_STATUS_NO_MEMORY);
         assert(first == NULL && live_allocations == 0 && live_locks == 0);
     }
     alloc_budget = -1;
 #if ABUS_LOCK_MODE != ABUS_LOCK_NONE
     for (int budget = 0; budget < (ABUS_LOCK_MODE == 2 ? 2 : 1); budget++) {
         create_budget = budget;
-        assert(aBusCreate(&table, 1U, &first) == A_STATUS_NO_MEMORY);
+        assert(aBusCreate(0U, &table, 1U, &first) == A_STATUS_NO_MEMORY);
         assert(first == NULL && live_allocations == 0 && live_locks == 0);
     }
     create_budget = -1;
 #endif
-    assert(aBusCreate(&table, 1U, &first) == A_STATUS_OK);
+    assert(aBusCreate(0U, &table, 1U, &first) == A_STATUS_OK);
     assert(live_allocations == 2);
 #if ABUS_STATIC_ENABLE
     assert(aBusDeInitStatic(first) == A_STATUS_INVALID_PARAM);
@@ -322,7 +323,7 @@ static void dynamic_tests(void)
     io_tests(first);
     second_table = table;
     second_table.deviceID = 11;
-    assert(aBusCreate(&second_table, 1U, &second) == A_STATUS_OK);
+    assert(aBusCreate(0U, &second_table, 1U, &second) == A_STATUS_OK);
     assert(first->tables->deviceID == 10 && second->tables->deviceID == 11);
     assert(get_sig(second, 10, &output, sizeof(output),
                       A_TIMEOUT_NO_WAIT) == A_STATUS_OK);
@@ -368,8 +369,8 @@ static void model_tests(void)
     };
     static unsigned char byte_storage;
     static unsigned char group_storage[16];
-    ABUS_STORAGE_EXPORT(model_byte, 3U, 0, byte_storage);
-    ABUS_STORAGE_EXPORT(model_group, 3U, 1, group_storage);
+    ABUS_STORAGE_EXPORT(model_byte, 0U, 3U, 0, byte_storage);
+    ABUS_STORAGE_EXPORT(model_group, 0U, 3U, 1, group_storage);
     aBusHandle_t *handle = NULL;
     aBusSetKeyRequest_t set_request;
     aBusGetKeyRequest_t get_request;
@@ -379,10 +380,10 @@ static void model_tests(void)
 
     aBusInstanceStructInit(&instance, states, 2);
     handle = &instance;
-#define CREATE() aBusInitStatic(&table, 1U, &instance)
+#define CREATE() aBusInitStatic(0U, &table, 1U, &instance)
 #define DESTROY() aBusDeInitStatic(handle)
 #else
-#define CREATE() aBusCreate(&table, 1U, &handle)
+#define CREATE() aBusCreate(0U, &table, 1U, &handle)
 #define DESTROY() aBusDestroy(handle)
 #endif
 
@@ -543,10 +544,10 @@ static void binding_tests(void)
     };
     static uint32_t one, two;
     static uint8_t small;
-    ABUS_STORAGE_EXPORT(dup1, 4U, 0, one);
-    ABUS_STORAGE_EXPORT(dup2, 4U, 0, two);
-    ABUS_STORAGE_EXPORT(short1, 5U, 0, small);
-    ABUS_STORAGE_EXPORT(bad1, 6U, 2, one);
+    ABUS_STORAGE_EXPORT(dup1, 0U, 4U, 0, one);
+    ABUS_STORAGE_EXPORT(dup2, 0U, 4U, 0, two);
+    ABUS_STORAGE_EXPORT(short1, 0U, 5U, 0, small);
+    ABUS_STORAGE_EXPORT(bad1, 0U, 6U, 2, one);
     aBusHandle_t *handle = NULL;
 #if ABUS_STATIC_ENABLE
     aBusHandle_t instance;
@@ -554,15 +555,18 @@ static void binding_tests(void)
 
     aBusInstanceStructInit(&instance, states, 2);
     handle = &instance;
-    assert(aBusInitStatic(&duplicate, 1U, handle) == A_STATUS_INVALID_PARAM);
-    assert(aBusInitStatic(&short_table, 1U, handle) == A_STATUS_INVALID_PARAM);
-    assert(aBusInitStatic(&bad_index, 1U, handle) == A_STATUS_INVALID_PARAM);
+    assert(aBusInitStatic(0U, &duplicate, 1U, handle) ==
+           A_STATUS_INVALID_PARAM);
+    assert(aBusInitStatic(0U, &short_table, 1U, handle) ==
+           A_STATUS_INVALID_PARAM);
+    assert(aBusInitStatic(0U, &bad_index, 1U, handle) ==
+           A_STATUS_INVALID_PARAM);
 #endif
 #if ABUS_DYNAMIC_ENABLE
-    assert(aBusCreate(&duplicate, 1U, &handle) == A_STATUS_INVALID_PARAM);
+    assert(aBusCreate(0U, &duplicate, 1U, &handle) == A_STATUS_INVALID_PARAM);
     assert(handle == NULL);
-    assert(aBusCreate(&short_table, 1U, &handle) == A_STATUS_INVALID_PARAM);
-    assert(aBusCreate(&bad_index, 1U, &handle) == A_STATUS_INVALID_PARAM);
+    assert(aBusCreate(0U, &short_table, 1U, &handle) == A_STATUS_INVALID_PARAM);
+    assert(aBusCreate(0U, &bad_index, 1U, &handle) == A_STATUS_INVALID_PARAM);
     {
         const aBusSig_t huge_sigs[] = {
             {.sigKey = 1, .type = ALIB_DATA_RAW, .size = SIZE_MAX},
@@ -570,21 +574,21 @@ static void binding_tests(void)
         };
         const aBusTable_t huge = {.sigs = huge_sigs, .sig_count = 2};
 
-        assert(aBusCreate(&huge, 1U, &handle) == A_STATUS_INVALID_PARAM);
+        assert(aBusCreate(0U, &huge, 1U, &handle) == A_STATUS_INVALID_PARAM);
         assert(handle == NULL && live_allocations == 0);
     }
     bindings_fill();
     alloc_budget = 1;
-    assert(aBusCreate(&mixed_table, 1U, &handle) == A_STATUS_NO_MEMORY);
+    assert(aBusCreate(0U, &mixed_table, 1U, &handle) == A_STATUS_NO_MEMORY);
     assert(bindings_unchanged());
     alloc_budget = -1;
-    assert(aBusCreate(&mixed_table, 1U, &handle) == A_STATUS_OK);
+    assert(aBusCreate(0U, &mixed_table, 1U, &handle) == A_STATUS_OK);
     assert(live_allocations == 2);
     assert(handle->sigs[0].data == bindings_first());
     assert(handle->sigs[1].data != NULL);
     io_tests(handle);
     assert(aBusDestroy(handle) == A_STATUS_OK);
-    assert(aBusCreate(&bound_table, 1U, &handle) == A_STATUS_OK);
+    assert(aBusCreate(0U, &bound_table, 1U, &handle) == A_STATUS_OK);
     assert(live_allocations == 1); /* 全绑定：不申请数据块。 */
     assert(aBusDestroy(handle) == A_STATUS_OK);
 #endif
@@ -592,7 +596,7 @@ static void binding_tests(void)
 }
 
 static uint32_t multi_counter;
-ABUS_STORAGE_EXPORT(multi_binding, 20U, 0U, multi_counter);
+ABUS_STORAGE_EXPORT(multi_binding, 0U, 20U, 0U, multi_counter);
 
 static void multi_table_tests(void)
 {
@@ -620,13 +624,13 @@ static void multi_table_tests(void)
     bindings_fill();
     multi_counter = 123U;
     /* 最后一张表缺少绑定，前面的绑定不能被默认值覆盖。 */
-    assert(aBusInitStatic(tables, 3U, &instance) == A_STATUS_NOT_FOUND);
+    assert(aBusInitStatic(0U, tables, 3U, &instance) == A_STATUS_NOT_FOUND);
     assert(multi_counter == 123U && bindings_unchanged());
     assert(instance.tables == NULL && live_locks == 0);
-    assert(aBusInitStatic(tables, 2U, &instance) == A_STATUS_OK);
+    assert(aBusInitStatic(0U, tables, 2U, &instance) == A_STATUS_OK);
     handle = &instance;
 #else
-    assert(aBusCreate(tables, 3U, &handle) == A_STATUS_OK);
+    assert(aBusCreate(0U, tables, 3U, &handle) == A_STATUS_OK);
 #endif
     assert(handle->sig_count >= 3U && multi_counter == 0U);
     assert(aBusGetSigInfo(handle, &query, &info) == A_STATUS_OK);
@@ -667,7 +671,7 @@ static void multi_table_tests(void)
 #if ABUS_STATIC_ENABLE
     assert(aBusDeInitStatic(handle) == A_STATUS_OK);
     tables[1].deviceID = 1U;
-    assert(aBusInitStatic(tables, 2U, handle) == A_STATUS_INVALID_PARAM);
+    assert(aBusInitStatic(0U, tables, 2U, handle) == A_STATUS_INVALID_PARAM);
     tables[1].deviceID = 20U;
 #else
     assert(aBusDestroy(handle) == A_STATUS_OK);
@@ -676,11 +680,11 @@ static void multi_table_tests(void)
     bindings_fill();
     multi_counter = 123U;
     alloc_budget = 1;
-    assert(aBusCreate(tables, 3U, &handle) == A_STATUS_NO_MEMORY);
+    assert(aBusCreate(0U, tables, 3U, &handle) == A_STATUS_NO_MEMORY);
     assert(handle == NULL && multi_counter == 123U);
     assert(bindings_unchanged());
     alloc_budget = -1;
-    assert(aBusCreate(tables, 3U, &handle) == A_STATUS_OK);
+    assert(aBusCreate(0U, tables, 3U, &handle) == A_STATUS_OK);
     read.deviceID = 21U;
     assert(aBusGetByKey(handle, &read) == A_STATUS_OK && output == 0U);
     assert(aBusDestroy(handle) == A_STATUS_OK);
@@ -692,13 +696,13 @@ static void multi_table_tests(void)
 #else
     create_budget = 0;
 #endif
-    assert(aBusCreate(tables, 3U, &handle) == A_STATUS_NO_MEMORY);
+    assert(aBusCreate(0U, tables, 3U, &handle) == A_STATUS_NO_MEMORY);
     assert(handle == NULL && multi_counter == 123U);
     assert(bindings_unchanged() && live_locks == 0);
     create_budget = -1;
 #endif
     tables[1].deviceID = 1U;
-    assert(aBusCreate(tables, 3U, &handle) == A_STATUS_INVALID_PARAM);
+    assert(aBusCreate(0U, tables, 3U, &handle) == A_STATUS_INVALID_PARAM);
     assert(handle == NULL);
 #endif
     assert(live_allocations == 0 && live_locks == 0);
@@ -706,8 +710,8 @@ static void multi_table_tests(void)
 
 static uint32_t ranged_scalar;
 static unsigned char ranged_bytes[8];
-ABUS_STORAGE_EXPORT(range_scalar, 30U, 0U, ranged_scalar);
-ABUS_STORAGE_EXPORT(range_bytes, 30U, 1U, ranged_bytes);
+ABUS_STORAGE_EXPORT(range_scalar, 0U, 30U, 0U, ranged_scalar);
+ABUS_STORAGE_EXPORT(range_bytes, 0U, 30U, 1U, ranged_bytes);
 
 static void range_param_tests(void)
 {
@@ -738,10 +742,10 @@ static void range_param_tests(void)
     aBusSigState_t states[2];
 
     aBusInstanceStructInit(&instance, states, 2U);
-    assert(aBusInitStatic(&table, 1U, &instance) == A_STATUS_OK);
+    assert(aBusInitStatic(0U, &table, 1U, &instance) == A_STATUS_OK);
     handle = &instance;
 #else
-    assert(aBusCreate(&table, 1U, &handle) == A_STATUS_OK);
+    assert(aBusCreate(0U, &table, 1U, &handle) == A_STATUS_OK);
 #endif
     aBusSetIndexRequestStructInit(&whole);
     whole.deviceID = 30U;
@@ -785,8 +789,77 @@ static void range_param_tests(void)
 #endif
 }
 
+static uint32_t instance_a_data;
+static uint32_t instance_b_data;
+ABUS_STORAGE_EXPORT(instance_a_binding, 100U, 7U, 0U, instance_a_data);
+ABUS_STORAGE_EXPORT(instance_b_binding, 101U, 7U, 0U, instance_b_data);
+/* 不属于目标实例的无效绑定必须忽略。 */
+ABUS_STORAGE_EXPORT(instance_other, 102U, 7U, 99U, instance_b_data);
+
+static void instance_namespace_tests(void)
+{
+    const aBusSig_t sig = {.type = ALIB_DATA_U32, .size = sizeof(uint32_t)};
+    const aBusTable_t table = {.deviceID = 7U, .sigs = &sig, .sig_count = 1U};
+    aBusHandle_t *first;
+    aBusHandle_t *second;
+    aBusSetIndexRequest_t write;
+    aBusGetIndexRequest_t read;
+    uint32_t value = 123U;
+    uint32_t output = 99U;
+#if ABUS_STATIC_ENABLE
+    aBusHandle_t a;
+    aBusHandle_t b;
+    aBusSigState_t a_states[1];
+    aBusSigState_t b_states[1];
+
+    aBusInstanceStructInit(&a, a_states, 1U);
+    aBusInstanceStructInit(&b, b_states, 1U);
+    assert(aBusInitStatic(100U, &table, 1U, &a) == A_STATUS_OK);
+    first = &a;
+#else
+    assert(aBusCreate(100U, &table, 1U, &first) == A_STATUS_OK);
+#endif
+    aBusSetIndexRequestStructInit(&write);
+    write.deviceID = 7U;
+    write.src = &value;
+    write.size = sizeof(value);
+    assert(aBusSetByIndex(first, &write) == A_STATUS_OK);
+#if ABUS_STATIC_ENABLE
+    assert(aBusInitStatic(101U, &table, 1U, &b) == A_STATUS_OK);
+    second = &b;
+#else
+    assert(aBusCreate(101U, &table, 1U, &second) == A_STATUS_OK);
+#endif
+    assert(instance_a_data == 123U && instance_b_data == 0U);
+    assert(first->instanceID == 100U && second->instanceID == 101U);
+    aBusGetIndexRequestStructInit(&read);
+    read.deviceID = 7U;
+    read.dst = &output;
+    read.size = sizeof(output);
+    assert(aBusGetByIndex(first, &read) == A_STATUS_OK && output == 123U);
+    value = 456U;
+    assert(aBusSetByIndex(second, &write) == A_STATUS_OK);
+    assert(instance_a_data == 123U && instance_b_data == 456U);
+#if ABUS_STATIC_ENABLE
+    assert(aBusDeInitStatic(first) == A_STATUS_OK);
+    assert(aBusDeInitStatic(second) == A_STATUS_OK);
+    assert(aBusInitStatic(103U, &table, 1U, &a) == A_STATUS_NOT_FOUND);
+#endif
+#if ABUS_DYNAMIC_ENABLE
+#if !ABUS_STATIC_ENABLE
+    assert(aBusDestroy(first) == A_STATUS_OK);
+    assert(aBusDestroy(second) == A_STATUS_OK);
+#endif
+    assert(aBusCreate(103U, &table, 1U, &first) == A_STATUS_OK);
+    assert(aBusGetByIndex(first, &read) == A_STATUS_OK && output == 0U);
+    assert(instance_a_data == 123U && instance_b_data == 456U);
+    assert(aBusDestroy(first) == A_STATUS_OK);
+#endif
+}
+
 int main(void)
 {
+    instance_namespace_tests();
     range_param_tests();
     multi_table_tests();
     binding_tests();

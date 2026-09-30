@@ -2,7 +2,10 @@
 #define APP_SIG_IDS_H
 
 /* 本应用表的逻辑设备号，分散绑定与表定义共用。 */
-enum { APP_SIG_DEVICE_ID = 1U };
+enum {
+    APP_SIG_INSTANCE_ID = 1U,
+    APP_SIG_DEVICE_ID = 1U
+};
 
 /* 测点下标与表内顺序一致，用于快速访问；不作为持久化标识。 */
 typedef enum {

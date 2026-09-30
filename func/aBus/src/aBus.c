@@ -157,6 +157,7 @@ static void resources_release(aBusHandle_t *handle)
     aOSFree(handle->allocation);
     handle->allocation = NULL;
 #endif
+    handle->instanceID = 0U;
     handle->tables = NULL;
     handle->table_count = 0U;
     handle->sig_count = 0U;
@@ -174,6 +175,7 @@ static aStatus_t bindings_collect(aBusHandle_t *handle,
         const aBusTable_t *table;
         size_t offset;
 
+        if (binding->instanceID != handle->instanceID) continue;
         table = table_find(tables, count, binding->deviceID, &offset);
         if (table == NULL) continue;
         if (binding->sigIndex >= table->sig_count || binding->data == NULL ||
@@ -301,7 +303,8 @@ fail:
 }
 
 #if ABUS_STATIC_ENABLE
-aStatus_t aBusInitStatic(const aBusTable_t *tables, size_t table_count,
+aStatus_t aBusInitStatic(uint16_t instanceID,
+    const aBusTable_t *tables, size_t table_count,
     aBusHandle_t *handle)
 {
     aStatus_t status;
@@ -317,6 +320,7 @@ aStatus_t aBusInitStatic(const aBusTable_t *tables, size_t table_count,
     if (handle->sigs == NULL || handle->capacity < total) {
         return A_STATUS_INVALID_PARAM;
     }
+    handle->instanceID = instanceID;
     return resources_prepare(handle, tables, table_count, total);
 }
 
@@ -332,7 +336,8 @@ aStatus_t aBusDeInitStatic(aBusHandle_t *handle)
 #endif
 
 #if ABUS_DYNAMIC_ENABLE
-aStatus_t aBusCreate(const aBusTable_t *tables, size_t table_count,
+aStatus_t aBusCreate(uint16_t instanceID,
+    const aBusTable_t *tables, size_t table_count,
     aBusHandle_t **handle_out)
 {
     aBusHandle_t *handle;
@@ -354,6 +359,7 @@ aStatus_t aBusCreate(const aBusTable_t *tables, size_t table_count,
     if (handle == NULL) return A_STATUS_NO_MEMORY;
     {
         const aBusHandle_t initial = {
+            .instanceID = instanceID,
             .sigs = (aBusSigState_t *)((unsigned char *)handle + offset),
 #if ABUS_STATIC_ENABLE
             .dynamic_storage = A_TRUE,

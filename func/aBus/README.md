@@ -96,7 +96,7 @@ default_data 非 NULL 时提供 size 字节整组默认数据，否则整组清�
 aBusHandle_t *handle = NULL;
 aStatus_t status;
 
-status = aBusCreate(&table, 1U, &handle);
+status = aBusCreate(1U, &table, 1U, &handle);
 /* 检查 status，成功后才能向使用者发布 handle。 */
 ```
 
@@ -108,7 +108,7 @@ static const aBusTable_t tables[] = {
     {.deviceID = 2U, .sigs = sigs, .sig_count = 2U}
 };
 
-status = aBusCreate(tables, sizeof(tables) / sizeof(tables[0]),
+status = aBusCreate(1U, tables, sizeof(tables) / sizeof(tables[0]),
                     &handle);
 ```
 
@@ -130,7 +130,7 @@ static aBusSigState_t states[2];
 aStatus_t status;
 
 aBusInstanceStructInit(&instance, states, 2);
-status = aBusInitStatic(&table, 1U, &instance);
+status = aBusInitStatic(1U, &table, 1U, &instance);
 ```
 
 多表静态实例的 states 容量为各表 sig_count 之和。
@@ -148,14 +148,14 @@ status = aBusInitStatic(&table, 1U, &instance);
 /* motor.c，MOTOR_DEVICE_ID 与私有表的 deviceID 一致。 */
 static MotorData_t motor_data;
 
-ABUS_STORAGE_EXPORT(motor_binding, MOTOR_DEVICE_ID,
+ABUS_STORAGE_EXPORT(motor_binding, MOTOR_INSTANCE_ID, MOTOR_DEVICE_ID,
                     MOTOR_SIG_CONFIG, motor_data);
 ```
 
-宏自动记录 deviceID、sigIndex、变量地址和 sizeof(variable)，并向链接段导出
+宏自动记录 instanceID、deviceID、sigIndex、变量地址和 sizeof(variable)，并向链接段导出
 一条描述指针。object 必须是实际静态可写对象或数组，不能传缓冲区指针。
 deviceID 标识绑定归属；不同设备使用不同 deviceID，可共用 sigs 定义数组。
-含绑定的同一 deviceID 只允许一个活动 handle，应用负责生命周期串行化；不设置
+含绑定的同一 instanceID 只允许一个活动 handle，应用负责生命周期串行化；不设置
 全局活动实例注册表。绑定数据和所有元数据、默认数据、其他绑定必须互不重叠。
 绑定不保护直接访问，业务自行决定同步策略。
 
@@ -330,3 +330,23 @@ sig get 1
 RAW 显示十六进制。保留 `sig get 1 0`（整个 Motor）和
 `sig get 1 0 0`（Motor.speed）的用法。
 每个 SIG 单独读取快照，整张表不保证来自同一时刻；读取失败时停止并报告错误。
+
+## 实例归属与链接段
+
+创建接口第一个参数为 instanceID，匹配静态绑定的实例归属：
+
+```c
+ABUS_STORAGE_EXPORT(counter_binding, 1U, 7U, COUNTER_INDEX, counter);
+/* 实例 1 中设备 7 的 Counter 绑定到 counter。 */
+status = aBusCreate(1U, tables, table_count, &handle);
+```
+
+不同 handle 使用不同 instanceID 后，即使 deviceID、sigIndex 完全一致，也
+不会收集到彼此的绑定。instanceID 属于 handle，不放进 aBusTable_t，允许
+多实例共用同一份 Flash 定义。读写已经传入 handle，无需再传 instanceID。
+实例号 0 也有效；含绑定实例的标识唯一性由应用保证，不维护全局活动句柄表。
+
+链接段继续统一使用 `.abus_bindings`。初始化时先过滤 instanceID，再按
+设备号和下标收集；无关实例的绑定不参与校验。不需要按实例划分链接段，
+读写期间不扫描注册段。未匹配的存储在静态模式返回 NOT_FOUND，在动态模式
+按原规则分配内存补齐。链接脚本无需随 handle 数量变化。

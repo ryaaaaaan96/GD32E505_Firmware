@@ -120,7 +120,7 @@ RAW 和 STRUCT 自身的 range 必须为 NULL；STRUCT 的整数参数可各自�
 | [app_sig_command.c](app_sig_command.c) | 通用 Shell 文本解析与显示 |
 | [app_sig_task.c](../task/sig/app_sig_task.c) | 持有静态 Counter，通过分散注册绑定，每秒递增 |
 
-`APP_SIG_BIND` 使用 aBus 的 `.abus_bindings` 收集机制，按 deviceID + sigIndex
+`APP_SIG_BIND` 使用 aBus 的 `.abus_bindings` 收集机制，按 instanceID + deviceID + sigIndex
 关联静态变量。初始化成功会写入点表默认值；变量不需要对命令层暴露。
 
 任务直接访问绑定变量时不经过 aBus 锁，同步由应用自行决定。当前 Counter
@@ -166,3 +166,13 @@ sig[1:1]=123
 
 单独读取字段时也会显示父 SIG 信息及该字段信息。`sig set` 继续简洁地回显
 本次写入值。未知数据类型或标志的名称返回 UNKNOWN，标志原始数值仍保留。
+
+## 当前实例号
+
+应用定义 `APP_SIG_INSTANCE_ID = 1`、`APP_SIG_DEVICE_ID = 1`。
+`appSigInit` 使用实例号 1，`APP_SIG_BIND` 自动填入相同实例号和设备号，
+因此 Motor 和任务持有的 Counter 都归属当前私有 handle。
+
+实例号与设备号是两个独立层级，当前数值恰好相同。Shell 仍只输入设备号，
+实例由 app 的私有 handle 确定：`sig get 1` 中的 1 依然是 deviceID。
+所有实例的绑定统一保存在 `.abus_bindings`，无需为当前 app 新增链接段。

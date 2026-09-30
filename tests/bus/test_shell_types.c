@@ -49,12 +49,12 @@ static uint32_t u32;
 static int32_t s32;
 static unsigned char raw[3];
 static unsigned char group[4];
-ABUS_STORAGE_EXPORT(t_u8, 90U, 0U, u8);
-ABUS_STORAGE_EXPORT(t_u16, 90U, 1U, u16);
-ABUS_STORAGE_EXPORT(t_u32, 90U, 2U, u32);
-ABUS_STORAGE_EXPORT(t_s32, 90U, 3U, s32);
-ABUS_STORAGE_EXPORT(t_raw, 90U, 4U, raw);
-ABUS_STORAGE_EXPORT(t_group, 90U, 5U, group);
+ABUS_STORAGE_EXPORT(t_u8, 0U, 90U, 0U, u8);
+ABUS_STORAGE_EXPORT(t_u16, 0U, 90U, 1U, u16);
+ABUS_STORAGE_EXPORT(t_u32, 0U, 90U, 2U, u32);
+ABUS_STORAGE_EXPORT(t_s32, 0U, 90U, 3U, s32);
+ABUS_STORAGE_EXPORT(t_raw, 0U, 90U, 4U, raw);
+ABUS_STORAGE_EXPORT(t_group, 0U, 90U, 5U, group);
 static const aBusRange_t range = {.max.u8 = 10U};
 static const aBusParam_t params[] = {
     {.type = ALIB_DATA_U8, .size = 1U, .range = &range},
@@ -126,7 +126,7 @@ int main(void)
     assert(strcmp(aBusSigFlagName(ABUS_SIG_FLAG_LOCK), "LOCK") == 0);
     assert(strcmp(aBusSigFlagName(0x8000U), "UNKNOWN") == 0);
     aBusInstanceStructInit(&handle, states, 6U);
-    assert(aBusInitStatic(&table, 1U, &handle) == A_STATUS_OK);
+    assert(aBusInitStatic(0U, &table, 1U, &handle) == A_STATUS_OK);
     assert(run(5, set) == 0 && u8 == 10U);
     set[4] = "11";
     assert(run(5, set) == -1 && u8 == 10U);
