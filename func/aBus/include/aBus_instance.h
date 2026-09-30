@@ -18,10 +18,12 @@ typedef struct {
 } aBusSigState_t;
 
 struct aBusHandle {
-    const aBusTable_t *table; /**< 非 NULL 表示已就绪，与 sigs 同下标。 */
+    const aBusTable_t *tables; /**< 非 NULL 表示整个实例已就绪。 */
+    size_t table_count;
+    size_t sig_count; /**< 全部表的 SIG 总数。 */
     aBusSigState_t *sigs;
 #if ABUS_STATIC_ENABLE
-    size_t capacity; /**< 静态条目数组容量，仅初始化时使用。 */
+    size_t capacity; /**< 全部表的静态条目数组容量，仅初始化时使用。 */
 #endif
 #if ABUS_DYNAMIC_ENABLE
     void *allocation; /**< 未绑定 SIG 共用的数据块；静态实例为 NULL。 */

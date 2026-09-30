@@ -23,7 +23,13 @@ aStatus_t appSigInit(void);
  * 请求和缓冲区仅在调用期间借用，长度必须与 SIG 完全一致。
  * timeout 仅用于 aBus 锁等待；不保护应用对绑定变量的直接访问。
  */
+/* 按已挂载表查询类型和长度；不暴露表和 handle。 */
+aStatus_t appSigGetInfo(const aBusSigQuery_t *query, aBusSigInfo_t *info);
 aStatus_t appSigSet(const aBusSetIndexRequest_t *request);
 aStatus_t appSigGet(const aBusGetIndexRequest_t *request);
+
+/* STRUCT 字段访问，共用 aBus 的整组锁及范围规则。 */
+aStatus_t appSigSetParam(const aBusSetParamRequest_t *request);
+aStatus_t appSigGetParam(const aBusGetParamRequest_t *request);
 
 #endif

@@ -5,18 +5,27 @@
 #include <stddef.h>
 
 static const appBusMotor_t motor_default = {100U, 25};
+static const aBusRange_t speed_range = {
+    .min.u32 = 0U, .max.u32 = 6000U
+};
 static const aBusParam_t motor_params[] = {
     {
         .offset = offsetof(appBusMotor_t, speed),
         .type = ALIB_DATA_U32,
-        .min.u32 = 0U,
-        .max.u32 = 6000U
+        .size = sizeof(uint32_t),
+        .range = &speed_range
+    },
+    {
+        .offset = offsetof(appBusMotor_t, temperature),
+        .type = ALIB_DATA_S32,
+        .size = sizeof(int32_t)
     }
 };
 
 static const aBusSig_t data_sigs[APP_BUS_SIG_COUNT] = {
     [APP_BUS_MOTOR] = {
         .sigKey = APP_BUS_MOTOR_KEY,
+        .type = ALIB_DATA_STRUCT,
         .flags = ABUS_SIG_FLAG_LOCK,
         .size = sizeof(appBusMotor_t),
         .default_data = &motor_default,
@@ -25,6 +34,7 @@ static const aBusSig_t data_sigs[APP_BUS_SIG_COUNT] = {
     },
     [APP_BUS_COUNTER] = {
         .sigKey = APP_BUS_COUNTER_KEY,
+        .type = ALIB_DATA_U32,
         .flags = ABUS_SIG_FLAG_LOCK,
         .size = sizeof(uint32_t)
     }
@@ -50,27 +60,38 @@ aStatus_t appSigInit(void)
 {
     aStatus_t status;
 #if ABUS_DYNAMIC_ENABLE
-    status = aBusCreate(&app_sig_table, &sig_handle);
+    status = aBusCreate(&app_sig_table, 1U, &sig_handle);
 #else
     aBusInstanceStructInit(&static_handle, static_states,
                           APP_BUS_SIG_COUNT);
-    status = aBusInitStatic(&app_sig_table, &static_handle);
+    status = aBusInitStatic(&app_sig_table, 1U, &static_handle);
     if (status == A_STATUS_OK) sig_handle = &static_handle;
 #endif
     return status;
 }
 
+aStatus_t appSigGetInfo(const aBusSigQuery_t *query, aBusSigInfo_t *info)
+{
+    if (query == NULL || info == NULL) return A_STATUS_INVALID_PARAM;
+    if (sig_handle == NULL) return A_STATUS_NOT_READY;
+    return aBusGetSigInfo(sig_handle, query, info);
+}
+
 aStatus_t appSigSet(const aBusSetIndexRequest_t *request)
 {
+    aBusSigQuery_t query;
+    aBusSigInfo_t info;
+    aStatus_t status;
+
     if (request == NULL || request->src == NULL ||
         !aTimeoutIsValid(request->timeout)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (sig_handle == NULL) return A_STATUS_NOT_READY;
-    if (request->sigIndex >= app_sig_table.sig_count) {
-        return A_STATUS_NOT_FOUND;
-    }
-    if (request->size != data_sigs[request->sigIndex].size) {
+    query.deviceID = request->deviceID;
+    query.sigIndex = request->sigIndex;
+    status = appSigGetInfo(&query, &info);
+    if (status != A_STATUS_OK) return status;
+    if (request->size != info.size) {
         return A_STATUS_INVALID_PARAM;
     }
     return aBusSetByIndex(sig_handle, request);
@@ -78,16 +99,32 @@ aStatus_t appSigSet(const aBusSetIndexRequest_t *request)
 
 aStatus_t appSigGet(const aBusGetIndexRequest_t *request)
 {
+    aBusSigQuery_t query;
+    aBusSigInfo_t info;
+    aStatus_t status;
+
     if (request == NULL || request->dst == NULL ||
         !aTimeoutIsValid(request->timeout)) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (sig_handle == NULL) return A_STATUS_NOT_READY;
-    if (request->sigIndex >= app_sig_table.sig_count) {
-        return A_STATUS_NOT_FOUND;
-    }
-    if (request->size != data_sigs[request->sigIndex].size) {
+    query.deviceID = request->deviceID;
+    query.sigIndex = request->sigIndex;
+    status = appSigGetInfo(&query, &info);
+    if (status != A_STATUS_OK) return status;
+    if (request->size != info.size) {
         return A_STATUS_INVALID_PARAM;
     }
     return aBusGetByIndex(sig_handle, request);
+}
+
+aStatus_t appSigSetParam(const aBusSetParamRequest_t *request)
+{
+    if (sig_handle == NULL) return A_STATUS_NOT_READY;
+    return aBusSetParam(sig_handle, request);
+}
+
+aStatus_t appSigGetParam(const aBusGetParamRequest_t *request)
+{
+    if (sig_handle == NULL) return A_STATUS_NOT_READY;
+    return aBusGetParam(sig_handle, request);
 }

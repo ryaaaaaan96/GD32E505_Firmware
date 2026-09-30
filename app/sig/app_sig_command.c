@@ -1,14 +1,9 @@
 #include "app_sig.h"
 #include "aShell.h"
+#include "aOS.h"
 #include <errno.h>
 #include <inttypes.h>
 #include <string.h>
-
-/* 下标对应 sigIndex；RAW 暂不提供结构体的文本解析。 */
-static const aDataType_t command_types[APP_BUS_SIG_COUNT] = {
-    [APP_BUS_MOTOR] = ALIB_DATA_RAW,
-    [APP_BUS_COUNTER] = ALIB_DATA_U32
-};
 
 static aStatus_t number_parse(const char *text, int64_t *value)
 {
@@ -29,99 +24,343 @@ static aStatus_t number_parse(const char *text, int64_t *value)
     return A_STATUS_OK;
 }
 
-static int command_sig(int argc, char **argv)
+static int hex_digit(char c)
 {
-    aBusSetIndexRequest_t set_request;
-    aBusGetIndexRequest_t get_request;
-    aDataValue_t value;
-    aDataType_t type;
-    aStatus_t status;
-    int64_t number = 0;
-    int64_t id;
-    int64_t minimum = 0;
-    int64_t maximum;
-    void *data;
-    size_t size;
-    aBool_t writing;
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
 
-    if (argc < 3 || argc > 4) goto usage;
-    writing = strcmp(argv[1], "set") == 0;
-    if ((!writing && strcmp(argv[1], "get") != 0) ||
-        argc != (writing ? 4 : 3)) goto usage;
-    if (number_parse(argv[2], &id) != A_STATUS_OK ||
-        id < 0 || id >= APP_BUS_SIG_COUNT) {
-        ASHELL_PRINT("unknown sigID\r\n");
-        return -1;
+static aStatus_t text_parse(aDataType_t type, const char *text,
+                            void *data, size_t size)
+{
+    int64_t number;
+    aDataValue_t value;
+
+    if (type == ALIB_DATA_RAW) {
+        size_t length = strlen(text);
+        unsigned char *bytes = data;
+
+        if (length % 2U != 0U || length / 2U != size) {
+            return A_STATUS_INVALID_PARAM;
+        }
+        for (size_t i = 0; i < size; i++) {
+            int high = hex_digit(text[i * 2U]);
+            int low = hex_digit(text[i * 2U + 1U]);
+
+            if (high < 0 || low < 0) return A_STATUS_INVALID_PARAM;
+            bytes[i] = (unsigned char)((high << 4) | low);
+        }
+        return A_STATUS_OK;
     }
-    type = command_types[id];
-    size = aDataTypeSize(type);
+    if (size != aDataTypeSize(type) ||
+        number_parse(text, &number) != A_STATUS_OK) {
+        return A_STATUS_INVALID_PARAM;
+    }
     switch (type) {
     case ALIB_DATA_U8:
-        data = &value.u8;
-        maximum = UINT8_MAX;
+        if (number < 0 || number > UINT8_MAX) break;
+        value.u8 = (uint8_t)number;
+        memcpy(data, &value.u8, size);
+        return A_STATUS_OK;
+    case ALIB_DATA_U16:
+        if (number < 0 || number > UINT16_MAX) break;
+        value.u16 = (uint16_t)number;
+        memcpy(data, &value.u16, size);
+        return A_STATUS_OK;
+    case ALIB_DATA_U32:
+        if (number < 0 || number > UINT32_MAX) break;
+        value.u32 = (uint32_t)number;
+        memcpy(data, &value.u32, size);
+        return A_STATUS_OK;
+    case ALIB_DATA_S32:
+        if (number < INT32_MIN || number > INT32_MAX) break;
+        value.s32 = (int32_t)number;
+        memcpy(data, &value.s32, size);
+        return A_STATUS_OK;
+    default: break;
+    }
+    return A_STATUS_INVALID_PARAM;
+}
+
+/* 数据可能是结构体中的非对齐字段，不直接解引用整数指针。 */
+static void value_print(aDataType_t type, const void *data, size_t size)
+{
+    aDataValue_t value;
+    unsigned long number;
+
+    if (type == ALIB_DATA_RAW) {
+        const unsigned char *bytes = data;
+        const char hex[] = "0123456789ABCDEF";
+        char line[65];
+        size_t used = 0U;
+
+        for (size_t i = 0; i < size; i++) {
+            line[used++] = hex[bytes[i] >> 4];
+            line[used++] = hex[bytes[i] & 15U];
+            if (used == sizeof(line) - 1U || i + 1U == size) {
+                line[used] = '\0';
+                ASHELL_PRINT("%s", line);
+                used = 0U;
+            }
+        }
+        ASHELL_PRINT("\r\n");
+        return;
+    }
+    if (size != aDataTypeSize(type)) {
+        ASHELL_PRINT("invalid definition\r\n");
+        return;
+    }
+    switch (type) {
+    case ALIB_DATA_U8:
+        memcpy(&value.u8, data, size);
+        number = value.u8;
         break;
     case ALIB_DATA_U16:
-        data = &value.u16;
-        maximum = UINT16_MAX;
+        memcpy(&value.u16, data, size);
+        number = value.u16;
         break;
     case ALIB_DATA_U32:
-        data = &value.u32;
-        maximum = UINT32_MAX;
+        memcpy(&value.u32, data, size);
+        number = value.u32;
         break;
     case ALIB_DATA_S32:
-        data = &value.s32;
-        minimum = INT32_MIN;
-        maximum = INT32_MAX;
-        break;
+        memcpy(&value.s32, data, size);
+        ASHELL_PRINT("%ld\r\n", (long)value.s32);
+        return;
     default:
-        ASHELL_PRINT("sigID has no scalar text interface\r\n");
-        return -1;
+        ASHELL_PRINT("unsupported type\r\n");
+        return;
+    }
+    ASHELL_PRINT("%lu\r\n", number);
+}
+
+static void range_print(aDataType_t type, const aBusRange_t *range)
+{
+    unsigned long minimum;
+    unsigned long maximum;
+
+    if (range == NULL) {
+        ASHELL_PRINT(" range=none\r\n");
+        return;
+    }
+    switch (type) {
+    case ALIB_DATA_U8:
+        minimum = range->min.u8;
+        maximum = range->max.u8;
+        break;
+    case ALIB_DATA_U16:
+        minimum = range->min.u16;
+        maximum = range->max.u16;
+        break;
+    case ALIB_DATA_U32:
+        minimum = range->min.u32;
+        maximum = range->max.u32;
+        break;
+    case ALIB_DATA_S32:
+        ASHELL_PRINT(" range=[%ld,%ld]\r\n", (long)range->min.s32,
+                     (long)range->max.s32);
+        return;
+    default:
+        ASHELL_PRINT(" range=invalid\r\n");
+        return;
+    }
+    ASHELL_PRINT(" range=[%lu,%lu]\r\n", minimum, maximum);
+}
+
+static void sig_info_print(const aBusSigQuery_t *query,
+                           const aBusSigInfo_t *info)
+{
+    ASHELL_PRINT("sig[%u:%lu] key=%u type=%s size=%lu flags=0x%04X (",
+                 (unsigned)query->deviceID, (unsigned long)query->sigIndex,
+                 (unsigned)info->sigKey, aDataTypeName(info->type),
+                 (unsigned long)info->size, (unsigned)info->flags);
+    if (info->flags == 0U) {
+        ASHELL_PRINT("%s", aBusSigFlagName(0U));
+    } else {
+        aBool_t first = A_TRUE;
+
+        for (unsigned bit = 0U; bit < 16U; bit++) {
+            uint16_t flag = (uint16_t)(1U << bit);
+
+            if ((info->flags & flag) == 0U) continue;
+            ASHELL_PRINT("%s%s", first ? "" : "|", aBusSigFlagName(flag));
+            first = A_FALSE;
+        }
+    }
+    ASHELL_PRINT(") params=%lu", (unsigned long)info->param_count);
+    range_print(info->type, info->range);
+}
+
+static void param_info_print(size_t index, const aBusParam_t *param)
+{
+    ASHELL_PRINT("  param[%lu] type=%s offset=%lu size=%lu",
+                 (unsigned long)index, aDataTypeName(param->type),
+                 (unsigned long)param->offset, (unsigned long)param->size);
+    range_print(param->type, param->range);
+}
+
+static aStatus_t command_read(const aBusSigQuery_t *query,
+    aBool_t field, size_t index, void *data, size_t size)
+{
+    if (field) {
+        aBusGetParamRequest_t request;
+
+        aBusGetParamRequestStructInit(&request);
+        request.deviceID = query->deviceID;
+        request.sigIndex = query->sigIndex;
+        request.paramIndex = index;
+        request.dst = data;
+        request.size = size;
+        return appSigGetParam(&request);
+    } else {
+        aBusGetIndexRequest_t request;
+
+        aBusGetIndexRequestStructInit(&request);
+        request.deviceID = query->deviceID;
+        request.sigIndex = query->sigIndex;
+        request.dst = data;
+        request.size = size;
+        return appSigGet(&request);
+    }
+}
+
+static aStatus_t command_write(const aBusSigQuery_t *query,
+    aBool_t field, size_t index, const void *data, size_t size)
+{
+    if (field) {
+        aBusSetParamRequest_t request;
+
+        aBusSetParamRequestStructInit(&request);
+        request.deviceID = query->deviceID;
+        request.sigIndex = query->sigIndex;
+        request.paramIndex = index;
+        request.src = data;
+        request.size = size;
+        return appSigSetParam(&request);
+    } else {
+        aBusSetIndexRequest_t request;
+
+        aBusSetIndexRequestStructInit(&request);
+        request.deviceID = query->deviceID;
+        request.sigIndex = query->sigIndex;
+        request.src = data;
+        request.size = size;
+        return appSigSet(&request);
+    }
+}
+
+static int command_sig(int argc, char **argv)
+{
+    aBusSigQuery_t query;
+    aBusSigInfo_t info;
+    aDataType_t type;
+    aStatus_t status;
+    int64_t id = 0;
+    int64_t device;
+    int64_t param = 0;
+    size_t size;
+    void *data = NULL;
+    aBool_t writing;
+    aBool_t field;
+    aBool_t all;
+
+    if (argc < 3 || argc > 6) goto usage;
+    writing = strcmp(argv[1], "set") == 0;
+    if ((!writing && strcmp(argv[1], "get") != 0) ||
+        (writing && argc < 5) || (!writing && argc > 5)) goto usage;
+    all = !writing && argc == 3;
+    field = argc == (writing ? 6 : 5);
+    if (number_parse(argv[2], &device) != A_STATUS_OK ||
+        device < 0 || device > UINT16_MAX ||
+        (!all && number_parse(argv[3], &id) != A_STATUS_OK) ||
+        id < 0 || (uint64_t)id > SIZE_MAX ||
+        (field && (number_parse(argv[4], &param) != A_STATUS_OK ||
+                   param < 0 || (uint64_t)param > SIZE_MAX))) goto usage;
+    query.deviceID = (uint16_t)device;
+    query.sigIndex = (size_t)id;
+next_sig:
+    data = NULL;
+    status = appSigGetInfo(&query, &info);
+    /* 表内下标连续；首项不存在是未知设备，后续不存在表示遍历结束。 */
+    if (all && query.sigIndex != 0U && status == A_STATUS_NOT_FOUND) {
+        return 0;
+    }
+    if (status != A_STATUS_OK) goto done;
+    type = info.type;
+    size = info.size;
+    if (field) {
+        if (type != ALIB_DATA_STRUCT) {
+            status = A_STATUS_UNSUPPORTED;
+            goto done;
+        }
+        if ((size_t)param >= info.param_count) {
+            status = A_STATUS_NOT_FOUND;
+            goto done;
+        }
+        type = info.params[param].type;
+        size = info.params[param].size;
+    }
+    if (writing && type == ALIB_DATA_STRUCT) goto usage;
+    if (size == 0U) {
+        status = A_STATUS_INVALID_PARAM;
+        goto done;
+    }
+    /* 整组读取只取一次快照，避免显示各字段时混用不同次更新。 */
+    data = aOSAlloc(size);
+    if (data == NULL) {
+        status = A_STATUS_NO_MEMORY;
+        goto done;
     }
     if (writing) {
-        if (number_parse(argv[3], &number) != A_STATUS_OK ||
-            number < minimum || number > maximum) {
-            ASHELL_PRINT("invalid value\r\n");
-            return -1;
+        status = text_parse(type, argv[argc - 1], data, size);
+        if (status == A_STATUS_OK) {
+            status = command_write(&query, field, (size_t)param, data, size);
         }
-        switch (type) {
-        case ALIB_DATA_U8: value.u8 = (uint8_t)number; break;
-        case ALIB_DATA_U16: value.u16 = (uint16_t)number; break;
-        case ALIB_DATA_U32: value.u32 = (uint32_t)number; break;
-        case ALIB_DATA_S32: value.s32 = (int32_t)number; break;
-        default: return -1;
-        }
-        aBusSetIndexRequestStructInit(&set_request);
-        set_request.sigIndex = (size_t)id;
-        set_request.src = data;
-        set_request.size = size;
-        status = appSigSet(&set_request);
     } else {
-        aBusGetIndexRequestStructInit(&get_request);
-        get_request.sigIndex = (size_t)id;
-        get_request.dst = data;
-        get_request.size = size;
-        status = appSigGet(&get_request);
+        status = command_read(&query, field, (size_t)param, data, size);
     }
+    if (status != A_STATUS_OK) goto done;
+    if (!writing) sig_info_print(&query, &info);
+    if (type == ALIB_DATA_STRUCT) {
+        ASHELL_PRINT("sig[%u:%lu] (%lu params)\r\n", query.deviceID,
+                     (unsigned long)query.sigIndex,
+                     (unsigned long)info.param_count);
+        for (size_t i = 0; i < info.param_count; i++) {
+            const aBusParam_t *item = &info.params[i];
+
+            param_info_print(i, item);
+            ASHELL_PRINT("  param[%lu]=", (unsigned long)i);
+            value_print(item->type,
+                        (const unsigned char *)data + item->offset,
+                        item->size);
+        }
+    } else {
+        if (!writing && field) {
+            param_info_print((size_t)param, &info.params[param]);
+        }
+        ASHELL_PRINT("sig[%u:%lu]", query.deviceID,
+                     (unsigned long)query.sigIndex);
+        if (field) ASHELL_PRINT(".param[%lu]", (unsigned long)param);
+        ASHELL_PRINT("=");
+        value_print(type, data, size);
+    }
+done:
+    aOSFree(data);
     if (status != A_STATUS_OK) {
         ASHELL_PRINT("sig failed: %d\r\n", (int)status);
         return -1;
     }
-    if (type == ALIB_DATA_S32) {
-        ASHELL_PRINT("sig[%lu]=%ld\r\n", (unsigned long)id,
-                     (long)value.s32);
-    } else {
-        switch (type) {
-        case ALIB_DATA_U8: number = value.u8; break;
-        case ALIB_DATA_U16: number = value.u16; break;
-        default: number = value.u32; break;
-        }
-        ASHELL_PRINT("sig[%lu]=%lu\r\n", (unsigned long)id,
-                     (unsigned long)number);
+    if (all) {
+        query.sigIndex++;
+        goto next_sig;
     }
     return 0;
-
 usage:
-    ASHELL_PRINT("usage: sig get <sigID> | sig set <sigID> <value>\r\n");
+    ASHELL_PRINT("sig get <deviceID> [sigIndex [paramIndex]]\r\n"
+                 "sig set <deviceID> <sigIndex> [paramIndex] <value>\r\n"
+                 "RAW: exact-length hex; STRUCT: set a param\r\n");
     return -1;
 }
-ASHELL_CMD_EXPORT(sig, command_sig, "Read/write scalar by sigIndex");
+ASHELL_CMD_EXPORT(sig, command_sig, "Read/write SIG or STRUCT param");

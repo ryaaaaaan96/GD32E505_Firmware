@@ -64,13 +64,33 @@ ABUS_STORAGE_EXPORT 注册。aBus 按 deviceID + sigIndex 匹配，
 
 ### Shell 命令
 
-命令在 app/sig/app_sig_command.c 注册，按 sigIndex 数值访问：
+命令在 app/sig/app_sig_command.c 注册，按 deviceID + sigIndex 数值访问：
 
-- `sig get 1`：读取 Counter（APP_BUS_COUNTER）。
-- `sig set 1 100`：设置 Counter 为 100，任务随后继续自增。
+- `sig get 1 1`：读取 Counter（APP_BUS_COUNTER）。
+- `sig set 1 1 100`：设置 Counter 为 100，任务随后继续自增。
 
-当前 Shell 支持登记的 U8/U16/U32/S32 标量；Motor 下标为 0，
-属于结构体，暂不提供文本读写，仍可使用通用 C 接口整组访问。
-标量类型登记在 command_types 中。ID 与值采用十进制，非法输入
-不修改数据。命令默认不等待锁，忙时返回错误，用户可重试。
+当前 Shell 支持标量、RAW 和 STRUCT，类型和参数描述均来自点表。
+ID 和整数值采用十进制，RAW 使用十六进制；非法输入不修改数据。
+命令默认不等待锁，忙时返回错误，用户可重试。
 已删除 app/protocol 和 bus_demo，业务命令归 sig 模块管理。
+
+当前应用挂载一张表，通用读写请求的 deviceID 使用 APP_SIG_DEVICE_ID。
+aBus 支持一个 handle 挂载多表；应用后续扩展时可传入表数组与表数量，
+并按 deviceID 校验和路由请求。Shell 显式接收 deviceID 和 sigIndex，通过 appSigGetInfo 查询类型和长度，
+不维护测点类型表，也不引用具体测点枚举。
+
+### 通用 SIG 命令
+
+```text
+sig get 1 0           # Motor：显示全部已登记字段
+sig get 1 0 0         # Motor.speed
+sig set 1 0 0 200     # speed 范围为 0..6000
+sig set 1 0 1 -10     # temperature：S32，无业务上下限
+sig get 1 1           # Counter
+sig set 1 1 100       # Counter：U32，无业务上下限
+```
+
+命令从 SIG 定义获取类型和字段描述。RAW SIG/字段也支持按完整长度进行连续
+十六进制读写；Motor 为 STRUCT，必须指定参数才能文本赋值。
+SIG 和 Param 都通过可选 range 指针指定上下限，NULL 表示不限制业务范围。
+字段操作由 aBus 在原 SIG 锁内完成；任务直接修改绑定变量的同步仍由应用负责。
