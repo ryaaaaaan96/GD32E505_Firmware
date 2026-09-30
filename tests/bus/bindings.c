@@ -5,9 +5,9 @@ static uint32_t first[3];
 static uint32_t second[3];
 static uint32_t mixed[3];
 
-ABUS_STORAGE_EXPORT(first_binding, 0U, 1U, 0, first);
-ABUS_STORAGE_EXPORT(second_binding, 0U, 1U, 1, second);
-ABUS_STORAGE_EXPORT(mixed_binding, 0U, 2U, 0, mixed);
+ABUS_RAM_BIND_EXPORT(first_binding, 0U, 1U, 0, first);
+ABUS_RAM_BIND_EXPORT(second_binding, 0U, 1U, 1, second);
+ABUS_RAM_BIND_EXPORT(mixed_binding, 0U, 2U, 0, mixed);
 
 void bindings_fill(void)
 {

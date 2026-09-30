@@ -39,7 +39,7 @@ struct aBusHandle {
 
 #if ABUS_STATIC_ENABLE
 /** @brief 初始化未运行实例；capacity 是 SIG 状态数组容量。
- * 数据地址由 ABUS_STORAGE_EXPORT 收集，不需要应用提供总数据池。
+ * 数据地址由 ABUS_RAM_BIND_EXPORT 收集，不需要应用提供总数据池。
  */
 static inline void aBusInstanceStructInit(aBusHandle_t *handle,
                                          aBusSigState_t *sigs,

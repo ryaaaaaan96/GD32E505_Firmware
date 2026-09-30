@@ -148,7 +148,7 @@ status = aBusInitStatic(1U, &table, 1U, &instance);
 /* motor.c，MOTOR_DEVICE_ID 与私有表的 deviceID 一致。 */
 static MotorData_t motor_data;
 
-ABUS_STORAGE_EXPORT(motor_binding, MOTOR_INSTANCE_ID, MOTOR_DEVICE_ID,
+ABUS_RAM_BIND_EXPORT(motor_binding, MOTOR_INSTANCE_ID, MOTOR_DEVICE_ID,
                     MOTOR_SIG_CONFIG, motor_data);
 ```
 
@@ -336,7 +336,7 @@ RAW 显示十六进制。保留 `sig get 1 0`（整个 Motor）和
 创建接口第一个参数为 instanceID，匹配静态绑定的实例归属：
 
 ```c
-ABUS_STORAGE_EXPORT(counter_binding, 1U, 7U, COUNTER_INDEX, counter);
+ABUS_RAM_BIND_EXPORT(counter_binding, 1U, 7U, COUNTER_INDEX, counter);
 /* 实例 1 中设备 7 的 Counter 绑定到 counter。 */
 status = aBusCreate(1U, tables, table_count, &handle);
 ```

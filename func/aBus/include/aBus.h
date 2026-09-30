@@ -90,15 +90,15 @@ typedef struct {
     size_t sigIndex;
     void *data;
     size_t size;
-} aBusStorageBinding_t;
+} aBusRamBinding_t;
 
 #if defined(__GNUC__)
 /** object 必须为具有静态生命周期的可写对象，不是指向缓冲区的指针。 */
-#define ABUS_STORAGE_EXPORT(name, instance_id, device_id, index, object) \
-    static const aBusStorageBinding_t name = {                         \
+#define ABUS_RAM_BIND_EXPORT(name, instance_id, device_id, index, object) \
+    static const aBusRamBinding_t name = {                         \
         (instance_id), (device_id), (index), &(object), sizeof(object)  \
     };                                                                \
-    static const aBusStorageBinding_t *const name##_registration       \
+    static const aBusRamBinding_t *const name##_registration       \
         __attribute__((used, section(".abus_bindings"),                \
                        aligned(sizeof(void *)))) = &(name)
 #else

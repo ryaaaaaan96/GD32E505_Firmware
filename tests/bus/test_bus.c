@@ -369,8 +369,8 @@ static void model_tests(void)
     };
     static unsigned char byte_storage;
     static unsigned char group_storage[16];
-    ABUS_STORAGE_EXPORT(model_byte, 0U, 3U, 0, byte_storage);
-    ABUS_STORAGE_EXPORT(model_group, 0U, 3U, 1, group_storage);
+    ABUS_RAM_BIND_EXPORT(model_byte, 0U, 3U, 0, byte_storage);
+    ABUS_RAM_BIND_EXPORT(model_group, 0U, 3U, 1, group_storage);
     aBusHandle_t *handle = NULL;
     aBusSetKeyRequest_t set_request;
     aBusGetKeyRequest_t get_request;
@@ -544,10 +544,10 @@ static void binding_tests(void)
     };
     static uint32_t one, two;
     static uint8_t small;
-    ABUS_STORAGE_EXPORT(dup1, 0U, 4U, 0, one);
-    ABUS_STORAGE_EXPORT(dup2, 0U, 4U, 0, two);
-    ABUS_STORAGE_EXPORT(short1, 0U, 5U, 0, small);
-    ABUS_STORAGE_EXPORT(bad1, 0U, 6U, 2, one);
+    ABUS_RAM_BIND_EXPORT(dup1, 0U, 4U, 0, one);
+    ABUS_RAM_BIND_EXPORT(dup2, 0U, 4U, 0, two);
+    ABUS_RAM_BIND_EXPORT(short1, 0U, 5U, 0, small);
+    ABUS_RAM_BIND_EXPORT(bad1, 0U, 6U, 2, one);
     aBusHandle_t *handle = NULL;
 #if ABUS_STATIC_ENABLE
     aBusHandle_t instance;
@@ -596,7 +596,7 @@ static void binding_tests(void)
 }
 
 static uint32_t multi_counter;
-ABUS_STORAGE_EXPORT(multi_binding, 0U, 20U, 0U, multi_counter);
+ABUS_RAM_BIND_EXPORT(multi_binding, 0U, 20U, 0U, multi_counter);
 
 static void multi_table_tests(void)
 {
@@ -710,8 +710,8 @@ static void multi_table_tests(void)
 
 static uint32_t ranged_scalar;
 static unsigned char ranged_bytes[8];
-ABUS_STORAGE_EXPORT(range_scalar, 0U, 30U, 0U, ranged_scalar);
-ABUS_STORAGE_EXPORT(range_bytes, 0U, 30U, 1U, ranged_bytes);
+ABUS_RAM_BIND_EXPORT(range_scalar, 0U, 30U, 0U, ranged_scalar);
+ABUS_RAM_BIND_EXPORT(range_bytes, 0U, 30U, 1U, ranged_bytes);
 
 static void range_param_tests(void)
 {
@@ -791,10 +791,10 @@ static void range_param_tests(void)
 
 static uint32_t instance_a_data;
 static uint32_t instance_b_data;
-ABUS_STORAGE_EXPORT(instance_a_binding, 100U, 7U, 0U, instance_a_data);
-ABUS_STORAGE_EXPORT(instance_b_binding, 101U, 7U, 0U, instance_b_data);
+ABUS_RAM_BIND_EXPORT(instance_a_binding, 100U, 7U, 0U, instance_a_data);
+ABUS_RAM_BIND_EXPORT(instance_b_binding, 101U, 7U, 0U, instance_b_data);
 /* 不属于目标实例的无效绑定必须忽略。 */
-ABUS_STORAGE_EXPORT(instance_other, 102U, 7U, 99U, instance_b_data);
+ABUS_RAM_BIND_EXPORT(instance_other, 102U, 7U, 99U, instance_b_data);
 
 static void instance_namespace_tests(void)
 {

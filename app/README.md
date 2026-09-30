@@ -52,7 +52,7 @@ Counter 初值为 0，在 app/task/sig/app_sig_task.c 中定义为静态变量�
 
 表和 handle 均由 app_sig.c 私有持有。
 APP_SIG_BIND 使用统一的 APP_SIG_DEVICE_ID 与参数下标，直接交给
-ABUS_STORAGE_EXPORT 注册。aBus 按 instanceID + deviceID + sigIndex 匹配，
+ABUS_RAM_BIND_EXPORT 注册。aBus 按 instanceID + deviceID + sigIndex 匹配，
 只使用 .abus_bindings 收集；描述和收集指针均为 const，存放 Flash。
 同一绑定设备号只允许一个活动实例，由应用保证。
 绑定只关联存储，不额外提供并发保护。直接访问绑定变量的同步策略

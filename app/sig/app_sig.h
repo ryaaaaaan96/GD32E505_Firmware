@@ -14,7 +14,7 @@ typedef struct {
  * 绑定只关联存储，直接访问绑定变量的并发同步由应用自行决定。
  */
 #define APP_SIG_BIND(name, index, object) \
-    ABUS_STORAGE_EXPORT(name, APP_SIG_INSTANCE_ID, APP_SIG_DEVICE_ID, \
+    ABUS_RAM_BIND_EXPORT(name, APP_SIG_INSTANCE_ID, APP_SIG_DEVICE_ID, \
                         index, object)
 
 /* 仅启动阶段单线程调用一次，先完成 aOS 初始化。 */

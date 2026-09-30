@@ -116,8 +116,8 @@ static aStatus_t definitions_check(const aBusTable_t *table)
 #endif
 
 /* 链接脚本始终提供边界，即使没有任何绑定。段内只保存对齐的指针。 */
-extern const aBusStorageBinding_t *const __abus_bindings_start[];
-extern const aBusStorageBinding_t *const __abus_bindings_end[];
+extern const aBusRamBinding_t *const __abus_bindings_start[];
+extern const aBusRamBinding_t *const __abus_bindings_end[];
 
 /* RAM 状态按表顺序展开；不为每个条目重复保存 Flash 指针。 */
 static const aBusSig_t *sig_definition(const aBusTable_t *tables,
@@ -167,11 +167,11 @@ static void resources_release(aBusHandle_t *handle)
 static aStatus_t bindings_collect(aBusHandle_t *handle,
     const aBusTable_t *tables, size_t count)
 {
-    const aBusStorageBinding_t *const *cursor;
+    const aBusRamBinding_t *const *cursor;
 
     for (cursor = __abus_bindings_start;
          cursor != __abus_bindings_end; cursor++) {
-        const aBusStorageBinding_t *binding = *cursor;
+        const aBusRamBinding_t *binding = *cursor;
         const aBusTable_t *table;
         size_t offset;
 
