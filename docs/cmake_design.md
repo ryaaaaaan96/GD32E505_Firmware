@@ -91,7 +91,8 @@ app 不创建 Shell 任务和 console 资源。启用时 Shell 也不创建任�
 - aDrv 私有依赖 vendor target，厂商头和宏不向上层传播。
 - aOS 只公开 public/；FreeRTOS 头、port 和生成配置均为私有。
 - FreeRTOS kernel 为独立 OBJECT target，OS 适配位于 backend/freertos/。
-- aDataBase 核心使用通用存储接口，可选 aDataBaseFlash25q target 提供 Flash25Q 适配。
+- aDataBase 封装 KV 和 TSDB，核心使用通用存储接口；aDataBaseFlash25q 提供可选适配。
+- 官方 FlashDB/FAL 以 aDataBaseFlashDb OBJECT target 合入 aDataBase，源码保持原样。
 - aclass_build_options 提供优化/调试选项；aclass_project_options 增加项目告警策略。
   上游内核和厂商源码不直接继承项目的严格告警策略。
 
@@ -124,7 +125,10 @@ aclass_add_libraries(CONFIG_FILE <绝对路径>)，最后自行创建应用目�
 当前只实现 Embedded/FreeRTOS，选择其他后端仍明确报错。
 
 启用数据库必须提供 ADATABASE_LAYOUT_FILE，模块复制产品头到构建目录。
-本示例布局为 config/aDatabase_flash_layout.h；不同产品可提供自己的布局。
+本示例布局为 config/aDatabase_flash_layout.h；当前容量为 8 MiB，KV 和 TSDB
+分区分别为 128 KiB 和 512 KiB。不同产品可提供自己的布局。
+ADATABASE_STATIC_ENABLE / DYNAMIC_ENABLE 控制实例创建接口；至少启用一种。
+当前产品开启数据库，应用在 Flash 后打开已有实例，首次格式化由 db init 显式触发。
 
 ### Flash25Q / SFUD 构建
 

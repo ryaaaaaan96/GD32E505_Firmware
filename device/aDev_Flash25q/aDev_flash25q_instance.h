@@ -4,8 +4,8 @@
 #include "aDev_flash25q.h"
 #include "sfud.h"
 
-/* Static allocation only. Layout is private, not a stable ABI.
- * SFUD configuration must match the library. Never call SFUD directly. */
+/* 供静态分配对象存储使用；内部布局不构成稳定的二进制接口。
+ * SFUD 配置必须与库编译时一致；应用不得直接调用 SFUD。 */
 struct aDevFlash25qBus {
     aDrvSpiHandle_t spi;
     void *mutex;

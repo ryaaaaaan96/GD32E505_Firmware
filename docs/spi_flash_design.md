@@ -52,13 +52,18 @@ device/aDev_Flash25q/
 ├── aDev_flash25q_internal.h        内部状态和端口声明
 ├── config/                        项目 SFUD 配置
 ├── port/                          项目移植实现
-│   ├── aDev_flash25q_sfud.c
-│   ├── aDev_flash25q_spi.c
+│   ├── aDev_flash25q_sfud_port.c   SFUD 回调适配、芯片忙状态轮询
+│   ├── aDev_flash25q_spi_bus.c     SPI 总线事务、片选与字节收发
 │   └── aDev_flash25q_qspi.c        尚未实现
 ├── SFUD/                          官方仓库，保持原样
 │   └── sfud/{inc,src,port}/
 └── CMakeLists.txt
 ```
+
+SFUD 的 `wr` 回调由内部函数 `sfud_write_read` 实现，负责错误转换
+和芯片忙状态轮询；它调用 `aDevFlash25qSpiTransaction` 执行一次完整
+SPI 事务。后者管理总线锁、片选和字节收发，不负责 Flash 命令生成。
+`sfud_spi_port_init` 是官方约定的移植入口，保留原名。
 
 优先通过官方配置、`sfud_spi_port_init`、`wr`、`qspi_read` 和 user_data
 扩展点接入。保留上游许可，不修改官方移植模板，不编译官方 demo。

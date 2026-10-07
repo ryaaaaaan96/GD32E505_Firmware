@@ -5,9 +5,9 @@
 #define SFUD_DEBUG(...) ((void)0)
 #define SFUD_USING_SFDP
 #define SFUD_USING_FLASH_INFO_TABLE
-/* Objects are initialized individually; the upstream table is not exported. */
+/* 各设备独立初始化，不对外暴露官方设备表。 */
 #define SFUD_FLASH_DEVICE_TABLE {{.name = "unused"}}
-/* No global log buffer and no implicit console dependency. */
+/* 不使用全局日志缓冲区，不隐式依赖控制台。 */
 static inline void aDevFlash25qSfudLog(const char *format, ...)
 {
     (void)format;

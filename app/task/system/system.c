@@ -4,6 +4,9 @@
 #if ADEV_FLASH25Q_ENABLE
 #include "app_system_flash.h"
 #endif
+#if APP_DATABASE_ENABLE
+#include "app_database.h"
+#endif
 #if ABUS_ENABLE
 #include "app_sig.h"
 #include "app_sig_task.h"
@@ -118,6 +121,13 @@ aStatus_t aSystemInit(void)
 
 #if ADEV_FLASH25Q_ENABLE
     status = appSystemFlashInit();
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+#endif
+
+#if APP_DATABASE_ENABLE
+    status = appDatabaseInit();
     if (status != A_STATUS_OK) {
         return status;
     }

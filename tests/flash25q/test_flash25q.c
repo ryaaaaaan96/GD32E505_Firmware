@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Byte-level SPI NOR model: the real device port and upstream SFUD run here. */
+/* 字节级 SPI NOR 模型：运行实际设备移植层和 SFUD 官方源码。 */
 static uint8_t memory[8U * 1024U * 1024U];
 static uint8_t wire_rx, command, wel;
 static uint32_t address, tick;
@@ -238,7 +238,7 @@ int main(void)
     read.data = dst;
     write.data = src;
     assert(aDevFlash25qWrite(handle, &write) == A_STATUS_OK);
-    assert(program_count == 4); /* 6 + 256 + 256 + 82 bytes. */
+    assert(program_count == 4); /* 分四次写入：6、256、256、82 字节。 */
     assert(aDevFlash25qRead(handle, &read) == A_STATUS_OK);
     assert(memcmp(src, dst, sizeof(src)) == 0);
     erase.size = 4096;

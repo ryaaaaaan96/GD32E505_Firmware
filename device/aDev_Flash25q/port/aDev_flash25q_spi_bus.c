@@ -1,7 +1,8 @@
 #include "aDev_flash25q_internal.h"
 
-static aStatus_t exchange(aDevFlash25qHandle_t *handle,
-                          uint8_t tx, uint8_t *rx)
+/* 全双工交换一个字节；发送命令时也必须读取并丢弃接收字节。 */
+static aStatus_t spi_exchange_byte(
+    aDevFlash25qHandle_t *handle, uint8_t tx, uint8_t *rx)
 {
     aStatus_t status;
     aBool_t complete;
@@ -24,7 +25,7 @@ static aStatus_t exchange(aDevFlash25qHandle_t *handle,
     return status;
 }
 
-aStatus_t aDevFlash25qSpiTransfer(
+aStatus_t aDevFlash25qSpiTransaction(
     aDevFlash25qHandle_t *handle,
     const uint8_t *tx, size_t tx_size,
     uint8_t *rx, size_t rx_size)
@@ -42,9 +43,9 @@ aStatus_t aDevFlash25qSpiTransfer(
     if (status != A_STATUS_OK) return status;
     status = aDrvGpioWrite(&handle->cs, ADRV_GPIO_LOW);
     for (i = 0U; (i < tx_size) && (status == A_STATUS_OK); ++i)
-        status = exchange(handle, tx[i], &discard);
+        status = spi_exchange_byte(handle, tx[i], &discard);
     for (i = 0U; (i < rx_size) && (status == A_STATUS_OK); ++i)
-        status = exchange(handle, 0xFFU, &rx[i]);
+        status = spi_exchange_byte(handle, 0xFFU, &rx[i]);
     while ((status == A_STATUS_OK) && !complete) {
         status = aDrvSpiIsComplete(&bus->spi, &complete);
         if (!complete && (status == A_STATUS_OK) &&

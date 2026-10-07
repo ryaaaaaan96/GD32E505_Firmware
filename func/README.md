@@ -8,5 +8,5 @@ aShellInit 仅分配状态并绑定传输，aShellProcess 每次最多处理一�
 由应用任务或主循环调用；读取可能等待传输超时。aShellDeInit 前需停止所有调用者。
 关闭 Shell 时 API 保留空实现，app 不创建 Shell 任务。
 
-aDataBase 核心通过 aDataBaseStorage_t 注入存储操作，不依赖特定 Flash 型号；
+aDataBase 封装 KV 和 TSDB，通过 aDataBaseStorage_t 注入存储操作，不依赖特定 Flash 型号；
 Flash25Q 适配是可选 target。协议/功能模块不得直接绑定板级引脚或产品设备编号。

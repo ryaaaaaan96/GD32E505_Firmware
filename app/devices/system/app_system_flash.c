@@ -1,5 +1,8 @@
 #include "app_system_flash.h"
 #include "aDev_flash25q_instance.h"
+#if APP_DATABASE_ENABLE
+#include "aDataBase_flash25q.h"
+#endif
 #if ASHELL_ENABLE
 #include "aShell.h"
 #endif
@@ -56,6 +59,11 @@ aStatus_t appSystemFlashInit(void)
                      (unsigned long)info.capacity,
                      (unsigned long)info.erase_size);
     }
+#endif
+#if APP_DATABASE_ENABLE
+    /* 设备层绑定私有 Flash 句柄，数据库业务层无需获知 SPI 配置。 */
+    status = aDataBaseBindFlash25q(flash_handle);
+    if (status != A_STATUS_OK) return status;
 #endif
     return A_STATUS_OK;
 }

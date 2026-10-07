@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""在不修改产品配置的前提下编译验证各 SPI Flash 配置。"""
+"""在独立构建目录验证数据库分配开关、后端选择和关闭配置。"""
 from pathlib import Path
 import os
 import subprocess
@@ -10,28 +10,23 @@ toolchain = os.environ.get(
     "ARM_GCC_ROOT",
     str(Path.home() / "Tools/toolchain/mcu_arm_toolchain/arm-none-eabi-15.3"))
 profiles = {
-    "static": "set(ADEV_FLASH25Q_DYNAMIC_ENABLE OFF)",
-    "dynamic": "set(ADEV_FLASH25Q_STATIC_ENABLE OFF)",
-    "disabled": "set(ADATABASE_ENABLE OFF)\n"
-                "set(ADEV_FLASH25Q_ENABLE OFF)\n"
-                "set(ADRV_MODULE_SPI_ENABLE OFF)",
-    "database": "set(ADATABASE_ENABLE ON)\n"
-                "set(ADATABASE_BACKEND FLASH25Q)",
+    "static": "set(ADATABASE_DYNAMIC_ENABLE OFF)",
+    "dynamic": "set(ADATABASE_STATIC_ENABLE OFF)",
+    "custom": "set(ADATABASE_BACKEND CUSTOM)\n"
+              "set(ADEV_FLASH25Q_ENABLE OFF)\nset(ADRV_MODULE_SPI_ENABLE OFF)",
+    "disabled": "set(ADATABASE_ENABLE OFF)",
+    "no_shell": "set(ASHELL_ENABLE OFF)",
 }
-with tempfile.TemporaryDirectory(prefix="flash25q-build-") as directory:
+with tempfile.TemporaryDirectory(prefix="database-build-") as directory:
     base = Path(directory)
     force_link = base / "force.cmake"
-    force_link.write_text('''function(flash_force_link)
-    if(TARGET aDataBaseFlash25q)
-        get_target_property(libraries ${PROJECT_NAME} LINK_LIBRARIES)
-        list(REMOVE_ITEM libraries aDataBaseFlash25q)
-        set_property(TARGET ${PROJECT_NAME} PROPERTY LINK_LIBRARIES
-            "${libraries}")
+    force_link.write_text('''function(database_force_link)
+    if(TARGET aDataBase AND ADATABASE_BACKEND STREQUAL "CUSTOM")
         target_link_libraries(${PROJECT_NAME} PRIVATE
-            "-Wl,--whole-archive" aDataBaseFlash25q "-Wl,--no-whole-archive")
+            "-Wl,--whole-archive" aDataBase "-Wl,--no-whole-archive")
     endif()
 endfunction()
-cmake_language(DEFER CALL flash_force_link)
+cmake_language(DEFER CALL database_force_link)
 ''')
     for name, options in profiles.items():
         config = base / f"{name}.cmake"
@@ -50,4 +45,4 @@ cmake_language(DEFER CALL flash_force_link)
             if result.returncode or "warning:" in result.stdout + result.stderr:
                 print(result.stdout, result.stderr)
                 raise SystemExit(result.returncode or 1)
-        print(f"Flash25Q {name}: build/link passed", flush=True)
+        print(f"Database {name}: build/link passed", flush=True)

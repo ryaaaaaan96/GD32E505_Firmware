@@ -3,18 +3,17 @@
  * @brief 当前产品的 FAL 编译期存储布局。
  * @see docs/interface_contract.md 公共类型、错误、超时与生命周期约定。
  *
- * 容量、偏移、分区长度和擦除块均以字节表示；操作超时以毫秒表示。
+ * 容量、偏移、分区长度和擦除块均以字节表示；超时由各请求单独提供。
  * 后端容量/擦除粒度必须与布局匹配。偏移基于整个介质，不是分区内相对地址。
  */
 
 #ifndef ADATABASE_FLASH_LAYOUT_H
 #define ADATABASE_FLASH_LAYOUT_H
 
-/* Product-specific storage layout used by the FlashDB FAL adapter. */
+/* 当前板上的八兆字节 Flash；末尾测试扇区不属于数据库分区。 */
 #define ADATABASE_FLASH_DEVICE_NAME "flash25"
 #define ADATABASE_FLASH_BLOCK_SIZE 4096U
-#define ADATABASE_FLASH_OPERATION_TIMEOUT_MS 5000U
-#define ADATABASE_FLASH_CAPACITY_BYTES (16U * 1024U * 1024U)
+#define ADATABASE_FLASH_CAPACITY_BYTES (8U * 1024U * 1024U)
 
 #define ADATABASE_PART_PARAM_NAME "param"
 #define ADATABASE_PART_PARAM_OFFSET 0x00100000U

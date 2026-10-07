@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run unchanged SFUD and project SPI port against a byte-level NOR model."""
+"""使用字节级 NOR 模型验证未修改的 SFUD 源码和项目 SPI 移植层。"""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -20,8 +20,8 @@ with tempfile.TemporaryDirectory(prefix="flash25q-") as tmp:
             cmd += ["-I", str(directory)]
         cmd += [str(root / "tests/flash25q/test_flash25q.c")]
         cmd += [str(module / file) for file in (
-            "aDev_flash25q.c", "port/aDev_flash25q_spi.c",
-            "port/aDev_flash25q_sfud.c", "SFUD/sfud/src/sfud.c",
+            "aDev_flash25q.c", "port/aDev_flash25q_spi_bus.c",
+            "port/aDev_flash25q_sfud_port.c", "SFUD/sfud/src/sfud.c",
             "SFUD/sfud/src/sfud_sfdp.c")]
         subprocess.run(cmd + ["-o", str(exe)], check=True)
         subprocess.run([str(exe)], check=True, timeout=15)

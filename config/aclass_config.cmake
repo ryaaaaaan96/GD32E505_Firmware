@@ -12,7 +12,9 @@ set(ABUS_LOCK_GRANULARITY BUS)
 set(ASHELL_ENABLE ON)
 # Shell command history entries (1..255).
 set(ASHELL_HISTORY_COUNT 10)
-set(ADATABASE_ENABLE OFF)
+set(ADATABASE_ENABLE ON)
+set(ADATABASE_STATIC_ENABLE ON)
+set(ADATABASE_DYNAMIC_ENABLE ON)
 set(AMODBUS_ENABLE OFF)
 
 # Board
@@ -52,8 +54,8 @@ set(ADRV_MODULE_QSPI_ENABLE OFF)
 set(AOS_WORKER_STACK_BYTES 2048)
 set(AOS_WORKQUEUE_ENABLE OFF)
 set(AOS_WORKER_PRIORITY 4)
-# FLASH25Q builds the optional adapter; CUSTOM uses application-supplied ops.
+# FLASH25Q 编译 Flash 适配器；CUSTOM 由应用提供存储操作表。
 set(ADATABASE_BACKEND FLASH25Q)
 
-# Product-owned FlashDB geometry; custom profiles may override this path.
+# 产品持有 FlashDB 分区布局，自定义配置可以替换此文件。
 set(ADATABASE_LAYOUT_FILE "${CMAKE_CURRENT_LIST_DIR}/aDatabase_flash_layout.h")

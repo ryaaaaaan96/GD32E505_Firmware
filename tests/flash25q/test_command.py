@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the manual command's destructive bounds and verify-failure paths."""
+"""验证手动测试命令的擦写边界和校验失败处理。"""
 from pathlib import Path
 import subprocess
 import tempfile

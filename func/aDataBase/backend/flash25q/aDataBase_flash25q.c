@@ -1,7 +1,7 @@
 #include "aDataBase_flash25q.h"
 
-static aStatus_t read_storage(void *context, uint32_t address, uint8_t *buffer,
-                              uint32_t size, aTimeout_t timeout)
+static aStatus_t flash_read(void *context, uint32_t address,
+                            uint8_t *buffer, uint32_t size, aTimeout_t timeout)
 {
     aDevFlash25qReadRequest_t request;
 
@@ -13,9 +13,9 @@ static aStatus_t read_storage(void *context, uint32_t address, uint8_t *buffer,
     return aDevFlash25qRead(context, &request);
 }
 
-static aStatus_t write_storage(void *context, uint32_t address,
-                               const uint8_t *buffer, uint32_t size,
-                               aTimeout_t timeout)
+static aStatus_t flash_write(void *context, uint32_t address,
+                             const uint8_t *buffer, uint32_t size,
+                             aTimeout_t timeout)
 {
     aDevFlash25qWriteRequest_t request;
 
@@ -27,8 +27,8 @@ static aStatus_t write_storage(void *context, uint32_t address,
     return aDevFlash25qWrite(context, &request);
 }
 
-static aStatus_t erase_storage(void *context, uint32_t address, uint32_t size,
-                               aTimeout_t timeout)
+static aStatus_t flash_erase(void *context, uint32_t address,
+                             uint32_t size, aTimeout_t timeout)
 {
     aDevFlash25qEraseRequest_t request;
 
@@ -47,11 +47,12 @@ aStatus_t aDataBaseBindFlash25q(aDevFlash25qHandle_t *handle)
 
     status = aDevFlash25qGetInfo(handle, &info);
     if (status != A_STATUS_OK) return status;
+    aDataBaseStorageStructInit(&storage);
     storage.context = handle;
     storage.capacity = info.capacity;
     storage.erase_block_size = info.erase_size;
-    storage.read = read_storage;
-    storage.write = write_storage;
-    storage.erase = erase_storage;
+    storage.read = flash_read;
+    storage.write = flash_write;
+    storage.erase = flash_erase;
     return aDataBaseBindStorage(&storage);
 }

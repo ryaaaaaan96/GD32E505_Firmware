@@ -1,8 +1,10 @@
 #include "aDev_flash25q_internal.h"
 
-static sfud_err write_read(const sfud_spi *spi,
-                           const uint8_t *tx, size_t tx_size,
-                           uint8_t *rx, size_t rx_size)
+/* SFUD 读写回调：转换错误状态，并按操作总超时轮询芯片忙状态。 */
+static sfud_err sfud_write_read(
+    const sfud_spi *spi,
+    const uint8_t *tx, size_t tx_size,
+    uint8_t *rx, size_t rx_size)
 {
     aDevFlash25qHandle_t *handle = spi->user_data;
     aStatus_t status;
@@ -16,7 +18,7 @@ static sfud_err write_read(const sfud_spi *spi,
             handle->port_error = A_STATUS_TIMEOUT;
             return SFUD_ERR_TIMEOUT;
         }
-        status = aDevFlash25qSpiTransfer(handle, tx, tx_size, rx, rx_size);
+        status = aDevFlash25qSpiTransaction(handle, tx, tx_size, rx, rx_size);
         if (status != A_STATUS_OK) {
             handle->port_error = status;
             return SFUD_ERR_WRITE;
@@ -36,11 +38,11 @@ sfud_err sfud_spi_port_init(sfud_flash *flash)
 {
     if (flash->user_data == NULL) return SFUD_ERR_NOT_FOUND;
     flash->spi.user_data = flash->user_data;
-    flash->spi.wr = write_read;
+    flash->spi.wr = sfud_write_read;
     /* 外层已持有模块锁；void 锁回调不能表达加锁失败。 */
     flash->spi.lock = NULL;
     flash->spi.unlock = NULL;
-    /* Busy polling is budgeted in write_read, including transport errors. */
+    /* 忙状态轮询在 sfud_write_read 中统一控制超时，并处理传输错误。 */
     flash->retry.times = 0U;
     flash->retry.delay = NULL;
     return SFUD_SUCCESS;

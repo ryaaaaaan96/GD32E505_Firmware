@@ -31,6 +31,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-matrix-") as directory:
         'function(matrix_force_link)\n'
         '  get_target_property(libs "${PROJECT_NAME}" LINK_LIBRARIES)\n'
         '  list(REMOVE_ITEM libs aDevUsart)\n'
+        '  list(REMOVE_ITEM libs aDataBase aDataBaseFlash25q)\n'
         '  set_property(TARGET "${PROJECT_NAME}" PROPERTY LINK_LIBRARIES "${libs}")\n'
         '  target_link_libraries("${PROJECT_NAME}" PRIVATE '
         '"-Wl,--whole-archive" aDevUsart "-Wl,--no-whole-archive")\n'
