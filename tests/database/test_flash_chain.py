@@ -10,7 +10,8 @@ flash = root / "device/aDev_Flash25q"
 with tempfile.TemporaryDirectory(prefix="database-spi-") as directory:
     executable = Path(directory) / "test"
     sources = [root / "tests/database/test_flash_chain.c",
-               database / "aDataBase.c", database / "port/memory_port.c",
+               database / "aDataBase.c", database / "aDataBase_index.c",
+               database / "port/memory_port.c",
                root / "app/devices/system/app_system_memory.c",
                root / "func/aMemory/aMemory.c"]
     sources += [database / "FlashDB/src" / name for name in
@@ -22,7 +23,7 @@ with tempfile.TemporaryDirectory(prefix="database-spi-") as directory:
     command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
                "-fsanitize=undefined", "-fno-sanitize-recover=all"]
     for path in (database, database / "config", database / "FlashDB/inc",
-                 root / "func/aMemory",
+                 root / "func/aMemory", root / "func/aBus/include",
                  root / "app/devices/system", flash, flash / "config",
                  flash / "SFUD/sfud/inc", root / "config",
                  root / "platform/aLib/include",

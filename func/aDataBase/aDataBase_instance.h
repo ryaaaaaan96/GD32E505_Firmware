@@ -13,9 +13,28 @@ typedef struct aDataBaseInstance {
     aBool_t fault;
 } aDataBaseInstance_t;
 
+/** 静态索引容量：SIG 数为持久化清单长度；扇区数为分区长度 / 擦除块大小。
+ * 存储在关闭前保持有效，内容由模块管理；不保存业务值的副本。
+ * sector 数组使用 FlashDB 私有类型，仅在本静态布局头文件暴露。 */
+struct aDataBaseKvIndexStorage {
+    uint32_t *sig_offsets;
+    size_t sig_capacity;
+    struct kvdb_sec_info *sectors;
+    size_t sector_capacity;
+};
+
 struct aDataBaseKvHandle {
     aDataBaseInstance_t instance;
     struct fdb_kvdb db;
+    const aBusTable_t *tables;
+    size_t table_count;
+    const aDataBaseSigKey_t *persist_sigs;
+    size_t persist_count;
+    const uint16_t *const *sig_slots;
+    aDataBaseKvIndexStorage_t index;
+    void *index_memory; /**< 仅非 NULL 时由本实例释放。 */
+    uint32_t *active_slot; /**< 当前请求的 O(1) 槽位，模块锁保护。 */
+    char active_key[15]; /**< @sig:DDDD:KKKK，十六进制大写。 */
 };
 
 struct aDataBaseTsHandle {

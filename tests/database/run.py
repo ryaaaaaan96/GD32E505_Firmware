@@ -8,7 +8,8 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 module = root / "func/aDataBase"
 official = module / "FlashDB"
-sources = [module / "aDataBase.c", module / "port/memory_port.c",
+sources = [module / "aDataBase.c", module / "aDataBase_index.c",
+           module / "port/memory_port.c",
            root / "tests/database/os_mock.c",
            root / "func/aMemory/aMemory.c"]
 sources += [official / "src" / name for name in
@@ -36,7 +37,8 @@ int test_shell_print(const char *format, ...);
         if os.environ.get("SANITIZE"):
             command += ["-fsanitize=address", "-fno-omit-frame-pointer"]
         for path in (module, module / "config", official / "inc",
-                     root / "func/aMemory", root / "config",
+                     root / "func/aMemory", root / "func/aBus/include",
+                     root / "config",
                      root / "platform/aLib/include",
                      root / "platform/aOS/public"):
             command += ["-I", str(path)]
@@ -47,7 +49,8 @@ int test_shell_print(const char *format, ...);
             subprocess.run(command + flags + ["-c", str(source), "-o", obj],
                            check=True)
             objects.append(obj)
-        for test in ("test_storage", "test_database", "test_multidevice"):
+        for test in ("test_storage", "test_database", "test_multidevice",
+                     "test_index"):
             executable = str(Path(directory) / f"{test}-{static}-{dynamic}")
             test_source = root / "tests/database" / (test + ".c")
             subprocess.run(command + [str(test_source)] + objects +

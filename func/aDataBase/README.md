@@ -4,7 +4,7 @@
 [aDataBase.h](aDataBase.h) 仅使用项目类型，不暴露 FlashDB 或 SPI 类型。
 官方源码位于 `FlashDB/`，提交为
 `db0afd954ea0f11397e43f6baf3654979d446345`，在此基础上增加 aMemory
-存储适配补丁，KV/TSDB 算法源文件保持原样。
+存储适配补丁及可选 KV 索引补丁；TSDB 算法源文件保持原样。
 
 ```text
 应用 KV / TSDB
@@ -17,12 +17,14 @@
 | 文件或目录 | 职责 |
 | --- | --- |
 | aDataBase.h / aDataBase.c | 公共请求、生命周期、KV 和 TSDB 操作 |
+| aDataBase_index.c | SIG 持久化清单、稀疏索引、启动重建及直接映射 |
 | aDataBase_instance.h | 静态分配所需的私有实例布局 |
 | aDataBase_internal.h | 模块内部的事务和实例管理声明 |
 | config/fdb_cfg.h | 项目 FlashDB 配置，开启 KV、TSDB、64 位时间戳 |
 | config/fdb_memory_port.h | 向存储补丁提供总预算和首错记录 |
 | port/memory_port.c | 模块锁、事务状态及 aMemory 生命周期引用 |
 | patches/0001-amemory.patch | 四个上游文件的可重放存储适配补丁 |
+| patches/0002-kv-index.patch | KV 查找、提交及 GC 索引通知和完整扇区缓存 |
 | FlashDB | 编译 KV/TSDB 核心，不编译 FAL、示例或文件模式 |
 
 ## 对象和初始化
@@ -72,6 +74,134 @@ request.data = &speed;
 request.size = sizeof(speed);
 status = aDataBaseKvSet(handle, &request);
 ```
+
+## aBus 参数持久化索引
+
+数据库只借用 aBus 的只读定义，不需要持有或创建 aBus RAM handle。
+应用决定何时取快照、保存及恢复；模块不会在 aBus Set 时自动写 Flash。
+Set/Get 使用完整字节快照，不校验业务范围，也不改变业务 RAM 的同步规则。
+当前应用的 `db` 字符串 KV 命令保持原有用法；应用点表尚未自动接入保存。
+
+### 三种标识
+
+| 标识 | 用途 | 是否需要跨固件保持稳定 |
+| --- | --- | --- |
+| sigIndex | 当前 aBus 表内位置，业务请求定位 | 否 |
+| deviceID + sigKey | 外部 Flash 中识别同一 SIG | 是 |
+| 持久化槽位 | 紧凑 RAM 偏移数组下标 | 否，每次打开重新构建 |
+
+FlashDB 键为 `@sig:DDDD:KKKK`，D/K 各四位大写十六进制。
+不同数据库分区天然隔离；同一数据库内 deviceID 必须唯一。
+多个 aBus 实例复用相同 deviceID 时，应使用不同数据库分区或重新规划设备号。
+`name` 仅为运行实例名，不是键的命名空间。前缀 `@sig:` 保留给本接口。
+
+`persist_sigs` 是独立 const 清单，按 deviceID、sigKey 升序且不重复；
+只列出要保存的 SIG。偏移数组每项 4 字节，不随完整 aBus 表项数增长。
+初始化检查清单排序、键唯一性、定义匹配、长度和静态缓存容量。
+未列入清单的 SIG 返回 UNSUPPORTED；已列入但尚未保存返回 NOT_FOUND。
+清单删去某项不会自动删除外部 Flash 的旧记录。
+
+可选 `sig_slots` 放在程序 Flash，直接按 sigIndex 找到 RAM 槽位：
+
+```text
+正常访问：deviceID → 表 → sig_slots[sigIndex] → RAM 记录偏移
+启动恢复：FlashDB 记录的 deviceID + sigKey → 持久化清单 → RAM 记录偏移
+```
+
+设备定位为 O(表数)，配置直接映射后表内定位为 O(1)，不再按 sigKey 搜索。
+不提供某张表的映射时，使用清单二分查找 O(log P)，P 为持久化项数。
+这两种方式共用同一份 RAM 索引和同一种外部 Flash 格式，可以按表选择。
+直接映射使用 uint16_t，UINT16_MAX 表示不保存，实际槽位编号必须更小。
+外层映射指针数组与 tables 顺序一致，内层长度必须等于对应 sig_count；
+初始化检查每个映射是否对应清单中的正确稳定键。
+
+例如 1000 个 SIG 中只保存 50 个：RAM 偏移为 200 字节；完整直接映射
+另用约 2000 字节程序 Flash。二分方案省去这张映射，保留 200 字节 RAM。
+两种方式还需要完整扇区缓存及固定实例状态；这些未计入上述偏移大小。
+外部 Flash 记录位置会随写入和 GC 改变，位置只能保存在可更新的 RAM 中。
+
+### 配置示例
+
+假设 `bus_tables` 只有一张设备 1 的表，SIG 顺序为 Motor、Counter，
+只保存 Counter，其稳定键为 20。表及所有引用数组在关闭前保持有效且不变：
+
+```c
+static const aDataBaseSigKey_t persistent[] = {
+    { .deviceID = 1U, .sigKey = 20U }
+};
+static const uint16_t slots[] = {
+    ADATABASE_SIG_SLOT_NONE, 0U
+};
+static const uint16_t *const table_slots[] = { slots };
+
+aDataBaseKvConfig_t config;
+aDataBaseKvConfigStructInit(&config);
+config.name = "parameters";
+config.partition = "param";
+config.tables = bus_tables;
+config.table_count = 1U;
+config.persist_sigs = persistent;
+config.persist_count = 1U;
+config.sig_slots = table_slots;
+/* 动态入口为缓存一次申请整块内存；不逐项分配。 */
+status = aDataBaseKvCreate(&config, &handle);
+```
+
+纯静态入口额外提供下面的缓存。本例分区 128 KiB、擦除块 4 KiB：
+
+```c
+#include "aDataBase_instance.h"
+
+static aDataBaseKvHandle_t instance;
+static uint32_t sig_offsets[1];
+static struct kvdb_sec_info sectors[32];
+static aDataBaseKvIndexStorage_t index_storage = {
+    .sig_offsets = sig_offsets,
+    .sig_capacity = 1U,
+    .sectors = sectors,
+    .sector_capacity = 32U
+};
+
+config.index_storage = &index_storage;
+status = aDataBaseKvInitStatic(&config, &instance);
+```
+
+静态接口不为索引分配堆内存；模块锁仍由 aOS 创建。
+动态接口也可借用调用者提供的 index_storage，关闭时不释放借用数组。
+缓存不能在活动实例间共用。旧的纯静态字符串 KV 实例若不配置清单和缓存，
+继续使用官方小缓存；动态实例默认分配完整扇区缓存。
+
+保存及恢复由应用显式调用：
+
+```c
+aDataBaseSigSetRequest_t save;
+aDataBaseSigSetRequestStructInit(&save);
+save.deviceID = 1U;
+save.sigIndex = 1U; /* 业务代码应使用点表枚举。 */
+save.data = &counter_snapshot;
+save.size = sizeof(counter_snapshot);
+status = aDataBaseSigSet(handle, &save);
+```
+
+Get/ Delete 分别使用 `aDataBaseSigGetRequest_t`、
+`aDataBaseSigDeleteRequest_t` 及对应 StructInit。
+Get 长度必须同时匹配当前 SIG 定义和已存记录，长度不符返回 INVALID_PARAM，
+不会截断或覆盖输出。稳定键只解决身份对应；结构体字段布局、字节序、
+类型变化及默认值恢复策略仍由应用处理。
+
+### 一致性与开销
+
+打开数据库先执行官方恢复，再预热扇区写入位置、扫描记录并构建 RAM 索引。
+不存在的项也有明确状态，不会在每次首次保存时遍历历史记录。
+索引接入 FlashDB 内部查找；普通字符串接口操作同一个 SIG 键也会同步索引。
+仅在新记录提交成功后更新偏移；删除旧记录时核对旧地址，避免清除新地址。
+GC 搬迁同步修改偏移，扇区擦除后对应缓存失效。
+I/O 或索引记录 CRC 错误后实例停止业务访问，关闭重开完成恢复及重建。
+
+正常更新仍有当前记录 CRC 读取、Flash 编程和 RAM 扇区统计；并非零读取，
+也不承诺恒定写延迟。完整扇区缓存消除正常分配时的反复扇区 Flash 读取，
+分配逻辑仍为 O(扇区数) 的 RAM 遍历。启动及 GC 仍需遍历记录和擦除扇区。
+TSDB 不使用该索引，保持原有追加指针机制。
 
 ## TSDB
 
@@ -130,15 +260,18 @@ FlashDB 使用新增的 FDB_USING_AMEMORY_MODE，底层入口直接调用
 FlashDB 核心作为 OBJECT target 合入 aDataBase，与项目代码使用相同的
 编译参数，含 Wall、Wextra、Wpedantic、Werror。
 
-官方四个文件的修改保存在 patches/0001-amemory.patch。重新下载上述
-基线版本后，在项目根目录执行一次：
+修改分别保存为 aMemory 和 KV 索引两个补丁。重新下载上述基线版本后，
+在项目根目录依次执行一次，无需在 FlashDB 目录保留独立 Git 仓库：
 
 ```sh
-git -C func/aDataBase/FlashDB apply ../patches/0001-amemory.patch
+patch -d func/aDataBase/FlashDB -p1 < \
+    func/aDataBase/patches/0001-amemory.patch
+patch -d func/aDataBase/FlashDB -p1 < \
+    func/aDataBase/patches/0002-kv-index.patch
 ```
 
 已打补丁的目录不要重复应用。升级上游版本时需重新检查补丁和测试，
-构建脚本会在未找到 aMemory 模式时给出错误，不会自动修改上游目录。
+构建脚本检查两个扩展是否存在，不会自动修改上游目录。
 
 ```sh
 SANITIZE=1 python3 tests/database/run.py
@@ -151,3 +284,8 @@ cmake --build build/Debug -j 4
 TSDB 循环覆盖及禁止覆盖、64 位时间戳、重开持久化、超时和首错传播，
 以及真实 SFUD 和字节级 SPI 模型的完整链路。硬件数据库读写和掉电中断
 恢复仍需在板上验证。应用用法见 [app/database](../../app/database/README.md)。
+
+`test_index.c` 还覆盖直接映射与二分共存、稀疏清单、5000 次轮流更新及 GC、
+稳定键跨表重排、删除重开、长度变化、CRC 损坏及各写入步骤的失败注入。
+当前 4 字节测试值的正常替换为 5 次介质读回调，查询已知不存在项为零次；
+这些是主机 NOR 模型的调用计数，不是板上耗时或完整掉电可靠性证明。

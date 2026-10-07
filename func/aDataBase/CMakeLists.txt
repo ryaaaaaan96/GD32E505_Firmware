@@ -4,6 +4,11 @@ if(NOT flashdb_source MATCHES "FDB_USING_AMEMORY_MODE")
     message(FATAL_ERROR
         "Apply aDataBase/patches/0001-amemory.patch to FlashDB first")
 endif()
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/FlashDB/src/fdb_kvdb.c" kvdb_source)
+if(NOT kvdb_source MATCHES "fdb_kvdb_cache_prepare")
+    message(FATAL_ERROR
+        "Apply aDataBase/patches/0002-kv-index.patch to FlashDB first")
+endif()
 add_library(aDataBaseFlashDb OBJECT
     FlashDB/src/fdb.c
     FlashDB/src/fdb_kvdb.c
@@ -17,8 +22,12 @@ target_include_directories(aDataBaseFlashDb PUBLIC
 target_link_libraries(aDataBaseFlashDb PUBLIC aMemory
     PRIVATE aclass_project_options)
 
-add_library(aDataBase STATIC aDataBase.c port/memory_port.c)
-target_include_directories(aDataBase PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+add_library(aDataBase STATIC
+    aDataBase.c aDataBase_index.c port/memory_port.c)
+# 仅复用 aBus 只读定义；不要求创建 aBus RAM 实例或启用运行库。
+target_include_directories(aDataBase PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../aBus/include")
 target_link_libraries(aDataBase PUBLIC aMemory aDataBaseFlashDb
     PRIVATE aOS aclass_project_options)
 foreach(feature STATIC DYNAMIC)

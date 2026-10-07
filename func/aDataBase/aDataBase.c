@@ -120,7 +120,7 @@ static aStatus_t partition_get(const char *name,
 }
 
 static aStatus_t kv_initialize(const aDataBaseKvConfig_t *config,
-                               aDataBaseKvHandle_t *handle)
+                               aDataBaseKvHandle_t *handle, aBool_t dynamic)
 {
     const aMemoryHandle_t *partition;
     aStatus_t status;
@@ -136,16 +136,21 @@ static aStatus_t kv_initialize(const aDataBaseKvConfig_t *config,
     if (status != A_STATUS_OK) return aDataBaseOperationEnd(status);
     memset(handle, 0, sizeof(*handle));
     handle->instance.partition = partition;
+    status = aDataBaseIndexPrepare(handle, config, dynamic);
+    if (status != A_STATUS_OK) return aDataBaseOperationEnd(status);
     not_format = !config->format_if_needed;
     fdb_kvdb_control(&handle->db, FDB_KVDB_CTRL_SET_NOT_FORMAT, &not_format);
     result = fdb_kvdb_init(&handle->db, config->name, config->partition,
                            NULL, handle);
     status = result_get(result);
+    if (status == A_STATUS_OK && aDataBaseStorageError() == A_STATUS_OK)
+        status = aDataBaseIndexBuild(handle);
     if (not_format && result == FDB_READ_ERR &&
         aDataBaseStorageError() == A_STATUS_OK) status = A_STATUS_NOT_READY;
     status = aDataBaseOperationEnd(status);
     if (status != A_STATUS_OK) {
         (void)fdb_kvdb_deinit(&handle->db);
+        aDataBaseIndexRelease(handle);
         return status;
     }
     aDataBaseInstanceAdd(&handle->instance);
@@ -212,6 +217,7 @@ static aStatus_t kv_deinitialize(aDataBaseKvHandle_t *handle)
     status = aDataBaseOperationBegin(A_TIMEOUT_FOREVER);
     if (status != A_STATUS_OK) return status;
     (void)fdb_kvdb_deinit(&handle->db);
+    aDataBaseIndexRelease(handle);
     aDataBaseInstanceRemove(&handle->instance);
     return aDataBaseOperationEnd(A_STATUS_OK);
 }
@@ -233,7 +239,7 @@ static aStatus_t ts_deinitialize(aDataBaseTsHandle_t *handle)
 aStatus_t aDataBaseKvInitStatic(
     const aDataBaseKvConfig_t *config, aDataBaseKvHandle_t *handle)
 {
-    return kv_initialize(config, handle);
+    return kv_initialize(config, handle, A_FALSE);
 }
 
 aStatus_t aDataBaseKvDeInitStatic(aDataBaseKvHandle_t *handle)
@@ -268,7 +274,7 @@ aStatus_t aDataBaseKvCreate(
     *handle_out = NULL;
     handle = aOSAlloc(sizeof(*handle));
     if (handle == NULL) return A_STATUS_NO_MEMORY;
-    status = kv_initialize(config, handle);
+    status = kv_initialize(config, handle, A_TRUE);
     if (status != A_STATUS_OK) {
         aOSFree(handle);
         return status;
@@ -321,6 +327,17 @@ aStatus_t aDataBaseTsDestroy(aDataBaseTsHandle_t *handle)
 }
 #endif
 
+/* 任一路径发现索引故障，都停止使用本实例，防止旧地址参与后续写入。 */
+static aStatus_t kv_end(aDataBaseKvHandle_t *handle, aStatus_t status)
+{
+    handle->active_slot = NULL;
+    if (handle->db.index_fault) {
+        handle->instance.fault = A_TRUE;
+        status = A_STATUS_ERROR;
+    }
+    return instance_end(&handle->instance, status);
+}
+
 aStatus_t aDataBaseKvSet(
     aDataBaseKvHandle_t *handle, const aDataBaseKvSetRequest_t *request)
 {
@@ -335,10 +352,10 @@ aStatus_t aDataBaseKvSet(
     if (status != A_STATUS_OK) return status;
     if (handle->db.parent.sec_size <= record_overhead || request->size >
         handle->db.parent.sec_size - record_overhead)
-        return instance_end(&handle->instance, A_STATUS_INVALID_PARAM);
+        return kv_end(handle, A_STATUS_INVALID_PARAM);
     fdb_blob_make(&blob, request->data, request->size);
     status = result_get(fdb_kv_set_blob(&handle->db, request->key, &blob));
-    return instance_end(&handle->instance, status);
+    return kv_end(handle, status);
 }
 
 aStatus_t aDataBaseKvGet(
@@ -357,17 +374,17 @@ aStatus_t aDataBaseKvGet(
                              request->timeout);
     if (status != A_STATUS_OK) return status;
     if (fdb_kv_get_obj(&handle->db, request->key, &kv) == NULL)
-        return instance_end(&handle->instance, A_STATUS_NOT_FOUND);
+        return kv_end(handle, A_STATUS_NOT_FOUND);
     *request->size_out = kv.value_len;
     if (request->data == NULL && request->capacity == 0U)
-        return instance_end(&handle->instance, A_STATUS_OK);
+        return kv_end(handle, A_STATUS_OK);
     if (request->capacity < kv.value_len)
-        return instance_end(&handle->instance, A_STATUS_NO_MEMORY);
+        return kv_end(handle, A_STATUS_NO_MEMORY);
     fdb_blob_make(&blob, request->data, request->capacity);
     fdb_kv_to_blob(&kv, &blob);
     status = fdb_blob_read(&handle->db.parent, &blob) == kv.value_len
              ? A_STATUS_OK : A_STATUS_ERROR;
-    return instance_end(&handle->instance, status);
+    return kv_end(handle, status);
 }
 
 aStatus_t aDataBaseKvDelete(
@@ -382,9 +399,99 @@ aStatus_t aDataBaseKvDelete(
                              request->timeout);
     if (status != A_STATUS_OK) return status;
     if (fdb_kv_get_obj(&handle->db, request->key, &kv) == NULL)
-        return instance_end(&handle->instance, A_STATUS_NOT_FOUND);
+        return kv_end(handle, A_STATUS_NOT_FOUND);
     status = result_get(fdb_kv_del(&handle->db, request->key));
-    return instance_end(&handle->instance, status);
+    return kv_end(handle, status);
+}
+
+void aDataBaseSigSetRequestStructInit(aDataBaseSigSetRequest_t *request)
+{
+    if (request == NULL) return;
+    *request = (aDataBaseSigSetRequest_t){.timeout = A_TIMEOUT_MS(5000U)};
+}
+
+void aDataBaseSigGetRequestStructInit(aDataBaseSigGetRequest_t *request)
+{
+    if (request == NULL) return;
+    *request = (aDataBaseSigGetRequest_t){.timeout = A_TIMEOUT_MS(5000U)};
+}
+
+void aDataBaseSigDeleteRequestStructInit(aDataBaseSigDeleteRequest_t *request)
+{
+    if (request == NULL) return;
+    *request = (aDataBaseSigDeleteRequest_t){.timeout = A_TIMEOUT_MS(5000U)};
+}
+
+aStatus_t aDataBaseSigSet(
+    aDataBaseKvHandle_t *handle, const aDataBaseSigSetRequest_t *request)
+{
+    const aBusSig_t *sig;
+    struct fdb_blob blob;
+    aStatus_t status;
+
+    if (handle == NULL || request == NULL || request->data == NULL)
+        return A_STATUS_INVALID_PARAM;
+    status = instance_begin(&handle->instance, handle->db.parent.init_ok,
+                             request->timeout);
+    if (status != A_STATUS_OK) return status;
+    status = aDataBaseIndexSelect(handle, request->deviceID,
+                                 request->sigIndex, &sig);
+    if (status != A_STATUS_OK) return kv_end(handle, status);
+    if (request->size != sig->size)
+        return kv_end(handle, A_STATUS_INVALID_PARAM);
+    fdb_blob_make(&blob, request->data, request->size);
+    status = result_get(fdb_kv_set_blob(&handle->db,
+                                       handle->active_key, &blob));
+    return kv_end(handle, status);
+}
+
+aStatus_t aDataBaseSigGet(
+    aDataBaseKvHandle_t *handle, const aDataBaseSigGetRequest_t *request)
+{
+    const aBusSig_t *sig;
+    struct fdb_kv kv;
+    struct fdb_blob blob;
+    aStatus_t status;
+
+    if (handle == NULL || request == NULL || request->data == NULL)
+        return A_STATUS_INVALID_PARAM;
+    status = instance_begin(&handle->instance, handle->db.parent.init_ok,
+                             request->timeout);
+    if (status != A_STATUS_OK) return status;
+    status = aDataBaseIndexSelect(handle, request->deviceID,
+                                 request->sigIndex, &sig);
+    if (status != A_STATUS_OK) return kv_end(handle, status);
+    if (request->size != sig->size)
+        return kv_end(handle, A_STATUS_INVALID_PARAM);
+    if (fdb_kv_get_obj(&handle->db, handle->active_key, &kv) == NULL)
+        return kv_end(handle, A_STATUS_NOT_FOUND);
+    if (kv.value_len != request->size)
+        return kv_end(handle, A_STATUS_INVALID_PARAM);
+    fdb_blob_make(&blob, request->data, request->size);
+    fdb_kv_to_blob(&kv, &blob);
+    status = fdb_blob_read(&handle->db.parent, &blob) == request->size
+             ? A_STATUS_OK : A_STATUS_ERROR;
+    return kv_end(handle, status);
+}
+
+aStatus_t aDataBaseSigDelete(
+    aDataBaseKvHandle_t *handle, const aDataBaseSigDeleteRequest_t *request)
+{
+    const aBusSig_t *sig;
+    struct fdb_kv kv;
+    aStatus_t status;
+
+    if (handle == NULL || request == NULL) return A_STATUS_INVALID_PARAM;
+    status = instance_begin(&handle->instance, handle->db.parent.init_ok,
+                             request->timeout);
+    if (status != A_STATUS_OK) return status;
+    status = aDataBaseIndexSelect(handle, request->deviceID,
+                                 request->sigIndex, &sig);
+    if (status != A_STATUS_OK) return kv_end(handle, status);
+    if (fdb_kv_get_obj(&handle->db, handle->active_key, &kv) == NULL)
+        return kv_end(handle, A_STATUS_NOT_FOUND);
+    status = result_get(fdb_kv_del(&handle->db, handle->active_key));
+    return kv_end(handle, status);
 }
 
 static aStatus_t ts_space_check(aDataBaseTsHandle_t *handle, size_t size)
