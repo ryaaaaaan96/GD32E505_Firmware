@@ -109,6 +109,12 @@ device 依赖 aOS 的单调时基实现软件超时，但
 aDrv 不依赖 aOS。func 在其上构成 aDataBase（含 FlashDB 所需 FAL 适配）、aModbus
 和 aShell 等功能。
 
+采集/转发类通信协议默认依赖 aBus，业务类型、长度和范围规则由 aBus 持有。
+aModbus 在模块内部提供地址段、SIG 映射及编码转换，不设置独立 backend 目录。
+协议实例借用 aBus 和传输，应用管理任务、设备、采样周期与重连策略；
+主站从远端采集后发布 aBus，从站根据地址映射读写 aBus。
+详见 [aModbus](../func/aModbus/README.md)。
+
 工程不设置集中式 board 目录。引脚、外部器件型号、总线参数和设备句柄由使用它
 们的应用模块持有。platform 不提供 `main()` 或自动初始化注册表。
 

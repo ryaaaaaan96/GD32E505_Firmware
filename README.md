@@ -14,8 +14,10 @@ system、startup、完整标准外设库和驱动实现全部由 `aDrv` 管理�
 - LED 暂按低电平点亮配置，实物极性不同时修改 `app/devices/system/app_system_device.c` 中的实例配置。
 
 app 包含 Shell、SPI Flash、KV/TSDB 和日志测试；日志当前接 Shell 输出队列，
-测试命令见 [日志演示](app/log/README.md)。QSPI、Modbus 和 RS485 默认关闭；
+测试命令见 [日志演示](app/log/README.md)。QSPI 和 RS485 默认关闭；
 RS485 属于 aDevUsart 可选功能，详见 [USART / RS485 统一设计](docs/usart_design.md)。
+Modbus 库默认编译，提供 RTU/TCP 主从站及 aBus 映射；当前未绑定板级端口，
+使用方式和验证范围见 [aModbus](func/aModbus/README.md)。
 
 ## 分层
 

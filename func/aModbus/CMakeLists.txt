@@ -1,18 +1,30 @@
-add_library(
-    aModbus
-    STATIC
-        aModbus.c
+# 官方源码保持不变，直接继承项目参数，不加载上游工程 CMake。
+add_library(aModbus STATIC
+    aModbus.c
+    aModbus_bus.c
+    nanoMODBUS/nanomodbus.c
 )
-
-target_include_directories(
-    aModbus
-    PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}"
+target_include_directories(aModbus PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/nanoMODBUS"
 )
-
-target_link_libraries(
-    aModbus
-    PUBLIC
-        aLib
+target_link_libraries(aModbus PUBLIC aBus
+    PRIVATE aOS aclass_project_options)
+foreach(feature STATIC DYNAMIC CLIENT SERVER)
+    target_compile_definitions(aModbus PUBLIC
+        AMODBUS_${feature}_ENABLE=$<BOOL:${AMODBUS_${feature}_ENABLE}>
+    )
+endforeach()
+if(NOT AMODBUS_CLIENT_ENABLE)
+    target_compile_definitions(aModbus PUBLIC NMBS_CLIENT_DISABLED)
+endif()
+if(NOT AMODBUS_SERVER_ENABLE)
+    target_compile_definitions(aModbus PUBLIC NMBS_SERVER_DISABLED)
+endif()
+# 首版仅暴露基础功能码，裁剪暂不提供的从站功能。
+target_compile_definitions(aModbus PUBLIC
+    NMBS_SERVER_READ_FILE_RECORD_DISABLED
+    NMBS_SERVER_WRITE_FILE_RECORD_DISABLED
+    NMBS_SERVER_READ_WRITE_REGISTERS_DISABLED
+    NMBS_SERVER_READ_DEVICE_IDENTIFICATION_DISABLED
 )
-target_link_libraries(aModbus PRIVATE aclass_project_options)

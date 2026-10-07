@@ -35,7 +35,9 @@ endfunction()
 # ── Inputs: validate every switch before evaluating any edge ──────────
 foreach(module AOS_WORKQUEUE ABUS ABUS_STATIC ABUS_DYNAMIC ABUS_DEF_CHECK ASHELL
         ALOG
-        ADATABASE ADATABASE_STATIC ADATABASE_DYNAMIC AMODBUS ADEV_LED ADEV_USART
+        ADATABASE ADATABASE_STATIC ADATABASE_DYNAMIC
+        AMODBUS AMODBUS_STATIC AMODBUS_DYNAMIC AMODBUS_CLIENT AMODBUS_SERVER
+        ADEV_LED ADEV_USART
         ADEV_USART_INTERRUPT ADEV_USART_DIRECT ADEV_USART_ASYNC
         ADEV_USART_RS485 ADEV_USART_STATIC ADEV_USART_DYNAMIC ADEV_FLASH25Q
         ADEV_FLASH25Q_STATIC ADEV_FLASH25Q_DYNAMIC)
@@ -58,6 +60,17 @@ foreach(feature INTERRUPT DMA)
 endforeach()
 
 # ── func / aShell ─────────────────────────────────────────────────────
+
+# ── func / aModbus ────────────────────────────────────────────────────
+_aclass_requires(AMODBUS_ENABLE ABUS_ENABLE)
+if(AMODBUS_ENABLE AND NOT AMODBUS_STATIC_ENABLE AND
+   NOT AMODBUS_DYNAMIC_ENABLE)
+    message(FATAL_ERROR "aModbus requires STATIC or DYNAMIC allocation")
+endif()
+if(AMODBUS_ENABLE AND NOT AMODBUS_CLIENT_ENABLE AND
+   NOT AMODBUS_SERVER_ENABLE)
+    message(FATAL_ERROR "aModbus requires CLIENT or SERVER role")
+endif()
 
 # ── func / aLog ───────────────────────────────────────────────────────
 # 日志后端由应用注入，不强制依赖 Shell 或数据库。
@@ -83,7 +96,6 @@ if(ADATABASE_ENABLE)
     endif()
 endif()
 
-# ── func / aModbus (transport supplied by caller) ──────────────────────
 
 # ── device / LED ──────────────────────────────────────────────────────
 _aclass_requires(ADEV_LED_ENABLE ADRV_MODULE_GPIO_ENABLE)
