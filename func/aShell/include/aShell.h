@@ -80,6 +80,13 @@ typedef struct {
  */
 aStatus_t aShellGetOutputStats(aShellOutputStats_t *stats);
 
+/** 原始字节整条复制入队，不格式化，不要求 NUL，不等待空间或发送。
+ * 用于日志等输出适配；只允许任务上下文调用。
+ * 满队列或锁争用返回 BUSY 并整条丢弃；size 为 0 允许 data 为 NULL。
+ * 未初始化返回 NOT_READY；禁用实现返回 OK，不访问数据。
+ */
+aStatus_t aShellWrite(const char *data, size_t size);
+
 /** ASHELL_PRINT 的实现：格式化并复制入队，任务上下文，不等待空间/发送。
  * OK 表示完整入队；BUSY 表示空间不足或锁争用，本条整条丢弃。
  * 文本超过 255 字节返回 INVALID_PARAM，格式化失败返回 ERROR，均不截断。

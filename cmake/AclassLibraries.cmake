@@ -17,7 +17,8 @@ function(aclass_add_libraries)
     # Export resolved capability variables for the product application.
     get_cmake_property(variables VARIABLES)
     foreach(variable IN LISTS variables)
-        if(variable MATCHES "^(ABUS_|AOS_|ASHELL_|ADATABASE_|AMODBUS_|ADEV_|ADRV_)")
+        if(variable MATCHES
+           "^(ABUS_|AOS_|ASHELL_|ALOG_|ADATABASE_|AMODBUS_|ADEV_|ADRV_)")
             set(${variable} "${${variable}}" PARENT_SCOPE)
         endif()
     endforeach()

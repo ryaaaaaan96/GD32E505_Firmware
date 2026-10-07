@@ -13,15 +13,15 @@ system、startup、完整标准外设库和驱动实现全部由 `aDrv` 管理�
 - PA8 通过 `aDevLed` 设备驱动，每 500 ms 翻转一次；
 - LED 暂按低电平点亮配置，实物极性不同时修改 `app/devices/system/app_system_device.c` 中的实例配置。
 
-app 不再链接 Flash、数据库和 Modbus；RS485 已合并为 aDevUsart 的可选功能，
-默认关闭，详见 [USART / RS485 统一设计](docs/usart_design.md)。当前工程也只启用 GPIO 与 USART
-驱动，未使用模块仍保留源码，可由后续项目按需打开。
+app 包含 Shell、SPI Flash、KV/TSDB 和日志测试；日志当前接 Shell 输出队列，
+测试命令见 [日志演示](app/log/README.md)。QSPI、Modbus 和 RS485 默认关闭；
+RS485 属于 aDevUsart 可选功能，详见 [USART / RS485 统一设计](docs/usart_design.md)。
 
 ## 分层
 
 ```text
 app                 main()、项目配置、显式初始化和测试
-├── func            aDataBase（含 FlashDB/FAL 适配）、aModbus、aShell 等功能
+├── func            aDataBase、aLog、aModbus、aShell 等功能
 ├── device          USART、RS485、Flash25Q 等硬件无关设备语义
 └── platform
     ├── aLib        布尔/状态/超时/错误类型、编译器属性和公共定义

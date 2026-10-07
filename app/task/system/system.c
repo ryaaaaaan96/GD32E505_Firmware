@@ -7,6 +7,10 @@
 #if APP_DATABASE_ENABLE
 #include "app_database.h"
 #endif
+#if APP_LOG_ENABLE
+#include "app_log.h"
+#include "aLog.h"
+#endif
 #if ABUS_ENABLE
 #include "app_sig.h"
 #include "app_sig_task.h"
@@ -81,6 +85,15 @@ static aStatus_t shellInit(void)
         return status;
     }
 
+#if APP_LOG_ENABLE
+    /* 在 Shell 任务启动前初始化日志，避免命令与 Init 并发。 */
+    status = appLogInit();
+    if (status != A_STATUS_OK) {
+        (void)aShellDeInit();
+        return status;
+    }
+#endif
+
     core_clock_hz = aDrvGetCoreClockHz();
     ASHELL_PRINT("\r\nsystem clock: %lu Hz\r\n",
                 (unsigned long)core_clock_hz);
@@ -93,6 +106,9 @@ static aStatus_t shellInit(void)
     task_config.priority = AOS_TASK_PRIO_LOW;
     status = aOSCreateTask(&task_config, NULL);
     if (status != A_STATUS_OK) {
+#if APP_LOG_ENABLE
+        (void)aLogDeInit();
+#endif
         (void)aShellDeInit();
         return status;
     }

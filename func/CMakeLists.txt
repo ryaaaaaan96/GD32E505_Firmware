@@ -11,3 +11,4 @@ if(AMODBUS_ENABLE)
 endif()
 
 add_subdirectory(aShell)
+add_subdirectory(aLog)

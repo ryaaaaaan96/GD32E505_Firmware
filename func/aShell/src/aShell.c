@@ -92,6 +92,13 @@ aBool_t aShellIsEnabled(void)
     return A_TRUE;
 }
 
+aStatus_t aShellWrite(const char *data, size_t size)
+{
+    if (data == NULL && size != 0U) return A_STATUS_INVALID_PARAM;
+    if (!aShellContext.ready) return A_STATUS_NOT_READY;
+    return aShellOutputWrite(data, size);
+}
+
 aStatus_t aShellPrintf(const char *format, ...)
 {
     char buffer[ASHELL_PRINT_BUFFER_SIZE];

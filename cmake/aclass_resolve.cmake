@@ -34,6 +34,7 @@ endfunction()
 
 # ── Inputs: validate every switch before evaluating any edge ──────────
 foreach(module AOS_WORKQUEUE ABUS ABUS_STATIC ABUS_DYNAMIC ABUS_DEF_CHECK ASHELL
+        ALOG
         ADATABASE ADATABASE_STATIC ADATABASE_DYNAMIC AMODBUS ADEV_LED ADEV_USART
         ADEV_USART_INTERRUPT ADEV_USART_DIRECT ADEV_USART_ASYNC
         ADEV_USART_RS485 ADEV_USART_STATIC ADEV_USART_DYNAMIC ADEV_FLASH25Q
@@ -57,6 +58,18 @@ foreach(feature INTERRUPT DMA)
 endforeach()
 
 # ── func / aShell ─────────────────────────────────────────────────────
+
+# ── func / aLog ───────────────────────────────────────────────────────
+# 日志后端由应用注入，不强制依赖 Shell 或数据库。
+if(NOT "${ALOG_OUTPUT_LEVEL}" MATCHES "^[1-5]$")
+    message(FATAL_ERROR "ALOG_OUTPUT_LEVEL must be an integer in [1, 5]")
+endif()
+if(NOT "${ALOG_LINE_BUFFER_SIZE}" MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "ALOG_LINE_BUFFER_SIZE must be in [256, 4096]")
+endif()
+if(ALOG_LINE_BUFFER_SIZE LESS 256 OR ALOG_LINE_BUFFER_SIZE GREATER 4096)
+    message(FATAL_ERROR "ALOG_LINE_BUFFER_SIZE must be in [256, 4096]")
+endif()
 
 # ── func / aDataBase ──────────────────────────────────────────────────
 if(ADATABASE_ENABLE)

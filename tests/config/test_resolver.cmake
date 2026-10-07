@@ -13,6 +13,20 @@ if(DEFINED CASE)
         set(ABUS_DYNAMIC_ENABLE OFF)
     elseif(CASE STREQUAL "bus_dynamic")
         set(ABUS_STATIC_ENABLE OFF)
+    elseif(CASE STREQUAL "log_off")
+        set(ALOG_ENABLE OFF)
+    elseif(CASE STREQUAL "log_invalid_level")
+        set(ALOG_OUTPUT_LEVEL 6)
+    elseif(CASE STREQUAL "log_small_buffer")
+        set(ALOG_LINE_BUFFER_SIZE 128)
+    elseif(CASE STREQUAL "log_large_buffer")
+        set(ALOG_LINE_BUFFER_SIZE 8192)
+    elseif(CASE STREQUAL "log_invalid_bool")
+        set(ALOG_ENABLE typo)
+    elseif(CASE STREQUAL "log_independent")
+        set(ASHELL_ENABLE OFF)
+        set(ADATABASE_ENABLE OFF)
+        set(ADEV_FLASH25Q_ENABLE OFF)
     elseif(CASE STREQUAL "bus_no_allocation")
         set(ABUS_STATIC_ENABLE OFF)
         set(ABUS_DYNAMIC_ENABLE OFF)
@@ -103,6 +117,8 @@ if(DEFINED CASE)
 endif()
 
 foreach(case default bus_static bus_dynamic bus_no_allocation bus_check_off bus_check_invalid bus_none bus_sig bus_off bus_invalid_lock
+        log_off log_invalid_level log_small_buffer log_large_buffer
+        log_invalid_bool log_independent
         minimal polling independent_app missing_input missing_dma
         missing_usart_dma dma_without_async
         async_without_direct direct_without_dma missing_device missing_gpio invalid_bool
@@ -111,7 +127,7 @@ foreach(case default bus_static bus_dynamic bus_no_allocation bus_check_off bus_
         COMMAND "${CMAKE_COMMAND}" "-DCASE=${case}" -P "${CMAKE_CURRENT_LIST_FILE}"
         RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
     )
-    if(case MATCHES "^(default|bus_static|bus_dynamic|bus_check_off|bus_none|bus_sig|bus_off|minimal|polling|independent_app|database_custom|dma_without_async|async_without_direct|direct_without_dma)$")
+    if(case MATCHES "^(default|bus_static|bus_dynamic|bus_check_off|bus_none|bus_sig|bus_off|minimal|polling|independent_app|database_custom|dma_without_async|async_without_direct|direct_without_dma|log_off|log_independent)$")
         if(NOT result EQUAL 0)
             message(FATAL_ERROR "${case} should succeed: ${error}")
         endif()
@@ -121,6 +137,10 @@ foreach(case default bus_static bus_dynamic bus_no_allocation bus_check_off bus_
         endif()
         if(case STREQUAL "bus_no_allocation")
             set(expected "aBus requires STATIC or DYNAMIC")
+        elseif(case STREQUAL "log_invalid_level")
+            set(expected "ALOG_OUTPUT_LEVEL")
+        elseif(case MATCHES "^log_(small|large)_buffer$")
+            set(expected "ALOG_LINE_BUFFER_SIZE")
         elseif(case STREQUAL "bus_invalid_lock")
             set(expected "ABUS_LOCK_GRANULARITY")
         elseif(case STREQUAL "missing_input")

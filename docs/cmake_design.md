@@ -92,6 +92,9 @@ app 不创建 Shell 任务和 console 资源。启用时 Shell 也不创建任�
 - aOS 只公开 public/；FreeRTOS 头、port 和生成配置均为私有。
 - FreeRTOS kernel 为独立 OBJECT target，OS 适配位于 backend/freertos/。
 - aDataBase 封装 KV 和 TSDB，核心使用通用存储接口；aDataBaseFlash25q 提供可选适配。
+- aLog 封装 EasyLogger，输出由应用注入，不依赖 Shell 或数据库。
+- ALOG_ENABLE、ALOG_OUTPUT_LEVEL、ALOG_LINE_BUFFER_SIZE 在产品 CMake 配置。
+- 官方日志核心继承项目参数，异步、缓冲、pthread 和插件不参与构建。
 - 官方 FlashDB/FAL 以 aDataBaseFlashDb OBJECT target 合入 aDataBase，源码保持原样。
 - aclass_build_options 提供优化/调试选项；aclass_project_options 增加项目告警策略。
   上游内核和厂商源码不直接继承项目的严格告警策略。

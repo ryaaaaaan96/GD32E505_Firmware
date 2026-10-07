@@ -10,3 +10,7 @@ aShellInit 仅分配状态并绑定传输，aShellProcess 每次最多处理一�
 
 aDataBase 封装 KV 和 TSDB，通过 aDataBaseStorage_t 注入存储操作，不依赖特定 Flash 型号；
 Flash25Q 适配是可选 target。协议/功能模块不得直接绑定板级引脚或产品设备编号。
+
+aLog 封装官方 EasyLogger，应用注入输出回调；默认不创建独立队列或任务。
+当前应用复用 Shell 字节队列，后续可适配 Flash、文件或多个输出后端。
+日志外层锁使用 aOS；上游配置和头仅私有可见，打印宏统一为 ALOG_*。
