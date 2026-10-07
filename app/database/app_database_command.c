@@ -1,5 +1,5 @@
 #include "app_database.h"
-#include "aDatabase_flash_layout.h"
+#include "aMemory_layout.h"
 #include "aShell.h"
 #include <errno.h>
 #include <inttypes.h>
@@ -204,10 +204,10 @@ static int database_command(int argc, char **argv)
     } else if (argc == 2 && strcmp(argv[1], "info") == 0) {
         ASHELL_PRINT("KV: 0x%08lX, %lu bytes; TSDB: 0x%08lX, "
                      "%lu bytes\r\n",
-                     (unsigned long)ADATABASE_PART_PARAM_OFFSET,
-                     (unsigned long)ADATABASE_PART_PARAM_SIZE,
-                     (unsigned long)ADATABASE_PART_LOG_OFFSET,
-                     (unsigned long)ADATABASE_PART_LOG_SIZE);
+                     (unsigned long)AMEMORY_PART_PARAM_OFFSET,
+                     (unsigned long)AMEMORY_PART_PARAM_SIZE,
+                     (unsigned long)AMEMORY_PART_LOG_OFFSET,
+                     (unsigned long)AMEMORY_PART_LOG_SIZE);
         status = appDatabaseTsGetInfo(&info);
         if (status == A_STATUS_OK)
             ASHELL_PRINT("last_time=%s, max_record=%lu, "

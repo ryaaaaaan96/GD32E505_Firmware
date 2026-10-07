@@ -3,12 +3,13 @@
 封装官方 FlashDB，提供 KV 参数存储和 TSDB 时序存储。业务头文件
 [aDataBase.h](aDataBase.h) 仅使用项目类型，不暴露 FlashDB 或 SPI 类型。
 官方源码位于 `FlashDB/`，提交为
-`db0afd954ea0f11397e43f6baf3654979d446345`，保持原样。
+`db0afd954ea0f11397e43f6baf3654979d446345`，在此基础上增加 aMemory
+存储适配补丁，KV/TSDB 算法源文件保持原样。
 
 ```text
 应用 KV / TSDB
-    → aDataBase → FlashDB → 官方 FAL → 通用存储操作表
-    → 可选 Flash25q 适配 → SFUD → SPI 移植层 → aDrvSpi
+    → aDataBase → FlashDB → aMemory → 应用设备回调
+    → Flash25q → SFUD → SPI 移植层 → aDrvSpi
 ```
 
 ## 文件职责
@@ -19,28 +20,30 @@
 | aDataBase_instance.h | 静态分配所需的私有实例布局 |
 | aDataBase_internal.h | 模块内部的事务和实例管理声明 |
 | config/fdb_cfg.h | 项目 FlashDB 配置，开启 KV、TSDB、64 位时间戳 |
-| config/fal_cfg.h | 使用官方 FAL 的编译期设备表和分区表 |
-| port/fal_storage_port.c | 绑定存储操作表、边界检查、总预算和首错记录 |
-| backend/flash25q | 从已初始化 Flash 句柄生成通用存储操作表 |
-| FlashDB | 官方源码及自带 FAL；不编译示例或文件后端 |
+| config/fdb_memory_port.h | 向存储补丁提供总预算和首错记录 |
+| port/memory_port.c | 模块锁、事务状态及 aMemory 生命周期引用 |
+| patches/0001-amemory.patch | 四个上游文件的可重放存储适配补丁 |
+| FlashDB | 编译 KV/TSDB 核心，不编译 FAL、示例或文件模式 |
 
 ## 对象和初始化
 
-目前绑定一个全局介质，每个分区最多有一个活动数据库实例。
+aMemory 支持注册多个设备和分区，每个分区最多有一个活动数据库实例。
+数据库按分区名选取存储，不绑定唯一全局介质。
 KV 和 TSDB 使用不同句柄，可以同时存在。句柄既可由应用静态提供，
 也可通过 Create 动态创建；不拥有底层 Flash。
 
-1. 应用初始化 Flash，并通过 aDataBaseBindFlash25q 绑定，或自行提供
-   aDataBaseStorage_t 并调用 aDataBaseBindStorage。
+1. 应用初始化设备并注册到 aMemory，然后调用 aDataBaseInit。
 2. 对配置调用 StructInit，补齐 name 和 partition。
 3. 调用 KvInitStatic / KvCreate 或 TsInitStatic / TsCreate。
 4. 使用请求结构体调用读写接口。
-5. 停止所有使用者，关闭全部数据库，再解绑和销毁底层介质。
+5. 停止使用者，关闭全部数据库，再调用 aDataBaseDeInit、
+   aMemoryDeInit，最后销毁底层设备。
 
 静态实例需要包含 aDataBase_instance.h；该头文件的布局不是稳定 ABI。
 配置 name 借用至实例关闭；请求和数据仅在本次调用期间借用。
 全部生命周期必须由应用串行编排，不得与业务操作并发。
-存在活动实例时 UnbindStorage 返回 BUSY，同一分区重复创建返回 BUSY。
+存在活动实例时 DeInit 返回 BUSY，同一分区重复创建返回 BUSY。
+aDataBaseInit 至 DeInit 期间持有 aMemory 引用，阻止存储提前反初始化。
 
 默认 format_if_needed 为 A_FALSE：未格式化或扇区头无效时返回 NOT_READY，
 不会因此自动擦除。打开已有数据库仍可能进行官方的未完成事务恢复。
@@ -107,22 +110,38 @@ status = aDataBaseTsAppend(handle, &request);
 后续官方回调停止访问介质，避免上游修复路径掩盖超时或 I/O 错误。
 发生存储错误的实例拒绝继续业务访问，应用关闭并重新打开后恢复缓存。
 
-禁止绕过封装直接调用 FlashDB 或 FAL，否则无法满足锁、错误和总预算契约。
-官方 FAL 使用静态分区表，生命周期重新绑定时仍沿用同一产品布局。
+禁止绕过 aDataBase 封装调用 FlashDB，否则无法满足锁、错误和总预算契约。
+数据库调用设备回调时持有模块锁，设备回调不得再次调用数据库接口。
+数据库存续期间，其他使用者不得直接擦写其分区，避免破坏数据及内部缓存。
 
 ## 构建和验证
 
-ADATABASE_ENABLE 控制整个模块，STATIC_ENABLE / DYNAMIC_ENABLE 控制创建接口，
-启用模块时至少选择一种。ADATABASE_BACKEND 支持 FLASH25Q 和 CUSTOM。
-CUSTOM 只需同步存储操作表，数据库核心不依赖具体芯片或驱动。
-产品必须提供 ADATABASE_LAYOUT_FILE，容量、擦除块与探测信息严格匹配。
+ADATABASE_ENABLE 控制整个模块，依赖 AMEMORY_ENABLE。
+STATIC_ENABLE / DYNAMIC_ENABLE 控制创建接口，至少启用一种。
+不再提供 ADATABASE_BACKEND、ADATABASE_LAYOUT_FILE 或 Flash25q 适配 target。
+产品布局由应用注册到 aMemory，数据库库目标不读取产品布局头文件。
 
-官方 FlashDB / FAL 作为 OBJECT target 合入 aDataBase，继承项目告警参数。
-仅对官方目标关闭 unused-parameter：官方 FAL 模式不使用 sync 参数。
-项目封装仍使用完整的 Wall、Wextra、Wpedantic、Werror。
+FlashDB 使用新增的 FDB_USING_AMEMORY_MODE，底层入口直接调用
+`aMemoryRead/Write/Erase`，不链接或调用 FAL。默认 FDB_WRITE_GRAN=1；
+初始化检查可读写擦除、擦除值 0xFF、编程粒度匹配及分区长度等条件，
+不支持的介质会在访问存储前拒绝打开。aMemory 的地址可以超过 4 GiB，
+但当前 FlashDB 分区内地址仍为 32 位，分区容量必须不超过 UINT32_MAX。
+
+FlashDB 核心作为 OBJECT target 合入 aDataBase，与项目代码使用相同的
+编译参数，含 Wall、Wextra、Wpedantic、Werror。
+
+官方四个文件的修改保存在 patches/0001-amemory.patch。重新下载上述
+基线版本后，在项目根目录执行一次：
 
 ```sh
-python3 tests/database/run.py
+git -C func/aDataBase/FlashDB apply ../patches/0001-amemory.patch
+```
+
+已打补丁的目录不要重复应用。升级上游版本时需重新检查补丁和测试，
+构建脚本会在未找到 aMemory 模式时给出错误，不会自动修改上游目录。
+
+```sh
+SANITIZE=1 python3 tests/database/run.py
 python3 tests/database/test_flash_chain.py
 python3 tests/database/build_matrix.py
 cmake --build build/Debug -j 4

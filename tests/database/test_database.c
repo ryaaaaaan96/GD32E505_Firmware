@@ -1,5 +1,5 @@
 #include "aDataBase_internal.h"
-#include "aDatabase_flash_layout.h"
+#include "aMemory_layout.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -7,7 +7,7 @@
 extern uint32_t database_tick;
 extern size_t database_allocations;
 extern int database_fail_lock;
-static uint8_t memory[ADATABASE_FLASH_CAPACITY_BYTES];
+static uint8_t memory[AMEMORY_FLASH_CAPACITY_BYTES];
 static unsigned reads, writes, erases;
 static int fail_read, fail_write;
 static uint32_t io_tick;
@@ -15,14 +15,18 @@ static uint32_t io_tick;
 static void bounds(uint32_t address, uint32_t size)
 {
     assert(address <= sizeof(memory) && size <= sizeof(memory) - address);
-    assert(address >= ADATABASE_PART_PARAM_OFFSET);
-    assert(address + size <= ADATABASE_PART_LOG_OFFSET +
-           ADATABASE_PART_LOG_SIZE);
+    assert(address >= AMEMORY_PART_PARAM_OFFSET);
+    assert(address + size <= AMEMORY_PART_LOG_OFFSET +
+           AMEMORY_PART_LOG_SIZE);
 }
 
-static aStatus_t read_bytes(void *context, uint32_t address,
-                           uint8_t *buffer, uint32_t size, aTimeout_t timeout)
+static aStatus_t read_bytes(
+    void *context, const aMemoryReadRequest_t *request)
 {
+    uint32_t address = (uint32_t)request->address;
+    uint32_t size = (uint32_t)request->size;
+    aTimeout_t timeout = request->timeout;
+    uint8_t *buffer = request->data;
     assert(context == memory && aTimeoutIsValid(timeout));
     bounds(address, size);
     ++reads;
@@ -32,10 +36,13 @@ static aStatus_t read_bytes(void *context, uint32_t address,
     return A_STATUS_OK;
 }
 
-static aStatus_t write_bytes(void *context, uint32_t address,
-                            const uint8_t *buffer, uint32_t size,
-                            aTimeout_t timeout)
+static aStatus_t write_bytes(
+    void *context, const aMemoryWriteRequest_t *request)
 {
+    uint32_t address = (uint32_t)request->address;
+    uint32_t size = (uint32_t)request->size;
+    aTimeout_t timeout = request->timeout;
+    const uint8_t *buffer = request->data;
     assert(context == memory && aTimeoutIsValid(timeout));
     bounds(address, size);
     ++writes;
@@ -49,18 +56,23 @@ static aStatus_t write_bytes(void *context, uint32_t address,
     return A_STATUS_OK;
 }
 
-static aStatus_t erase_bytes(void *context, uint32_t address,
-                            uint32_t size, aTimeout_t timeout)
+static aStatus_t erase_bytes(
+    void *context, const aMemoryEraseRequest_t *request)
 {
+    uint32_t address = (uint32_t)request->address;
+    uint32_t size = (uint32_t)request->size;
+    aTimeout_t timeout = request->timeout;
     assert(context == memory && aTimeoutIsValid(timeout));
     bounds(address, size);
-    assert(address % ADATABASE_FLASH_BLOCK_SIZE == 0U);
-    assert(size % ADATABASE_FLASH_BLOCK_SIZE == 0U);
+    assert(address % AMEMORY_FLASH_BLOCK_SIZE == 0U);
+    assert(size % AMEMORY_FLASH_BLOCK_SIZE == 0U);
     ++erases;
     database_tick += io_tick;
     memset(memory + address, 0xFF, size);
     return A_STATUS_OK;
 }
+
+#include "memory_fixture.h"
 
 static aDataBaseKvHandle_t *kv;
 static aDataBaseTsHandle_t *ts;
@@ -132,7 +144,6 @@ static void iterate(aDataBaseTsIterateRequest_t *request)
 
 int main(void)
 {
-    aDataBaseStorage_t storage;
     aDataBaseKvConfig_t kc;
     aDataBaseTsConfig_t tc;
     aDataBaseKvSetRequest_t set;
@@ -148,20 +159,14 @@ int main(void)
 
     memset(memory, 0xFF, sizeof(memory));
     memset(input, 0xA5, sizeof(input));
-    aDataBaseStorageStructInit(&storage);
-    storage.context = memory;
-    storage.capacity = sizeof(memory);
-    storage.erase_block_size = ADATABASE_FLASH_BLOCK_SIZE;
-    storage.read = read_bytes;
-    storage.write = write_bytes;
-    storage.erase = erase_bytes;
-    assert(aDataBaseBindStorage(&storage) == A_STATUS_OK);
+    assert(memory_start() == A_STATUS_OK);
+    assert(aDataBaseInit() == A_STATUS_OK);
     aDataBaseKvConfigStructInit(&kc);
     kc.name = "kv";
-    kc.partition = ADATABASE_PART_PARAM_NAME;
+    kc.partition = AMEMORY_PART_PARAM_NAME;
     aDataBaseTsConfigStructInit(&tc);
     tc.name = "ts";
-    tc.partition = ADATABASE_PART_LOG_NAME;
+    tc.partition = AMEMORY_PART_LOG_NAME;
     /* 空白介质不得在默认初始化时被擦写。 */
     assert(kv_open(&kc) == A_STATUS_NOT_READY);
     assert(ts_open(&tc) == A_STATUS_NOT_READY);
@@ -178,7 +183,7 @@ int main(void)
     tc.format_if_needed = A_TRUE;
     assert(kv_open(&kc) == A_STATUS_OK);
     assert(ts_open(&tc) == A_STATUS_OK);
-    assert(aDataBaseUnbindStorage() == A_STATUS_BUSY);
+    assert(aDataBaseDeInit() == A_STATUS_BUSY);
 #if ADATABASE_STATIC_ENABLE && ADATABASE_DYNAMIC_ENABLE
     assert(aDataBaseKvInitStatic(&kc, &kv_storage) == A_STATUS_BUSY);
     assert(aDataBaseTsInitStatic(&tc, &ts_storage) == A_STATUS_BUSY);
@@ -261,8 +266,8 @@ int main(void)
     /* 关闭、重新绑定和重开后，KV 及六十四位时间戳均从 Flash 恢复。 */
     kv_close();
     ts_close();
-    assert(aDataBaseUnbindStorage() == A_STATUS_OK);
-    assert(aDataBaseBindStorage(&storage) == A_STATUS_OK);
+    assert(aDataBaseDeInit() == A_STATUS_OK);
+    assert(aDataBaseInit() == A_STATUS_OK);
     kc.format_if_needed = A_FALSE;
     tc.format_if_needed = A_FALSE;
     assert(kv_open(&kc) == A_STATUS_OK);
@@ -294,7 +299,7 @@ int main(void)
     assert(aDataBaseKvDelete(kv, &del) == A_STATUS_OK);
     assert(aDataBaseKvGet(kv, &get) == A_STATUS_NOT_FOUND);
     assert(aDataBaseKvDelete(kv, &del) == A_STATUS_NOT_FOUND);
-    /* 后端首错必须保留，后续官方回调不得继续访问实际介质。 */
+    /* 存储首错必须保留，后续官方回调不得继续访问实际介质。 */
     before = writes;
     fail_write = 1;
     assert(aDataBaseKvSet(kv, &set) == A_STATUS_TIMEOUT);
@@ -310,7 +315,8 @@ int main(void)
     assert(aDataBaseTsGetInfo(ts, &info) == A_STATUS_NOT_READY);
     kv_close();
     ts_close();
-    assert(aDataBaseUnbindStorage() == A_STATUS_OK);
+    assert(aDataBaseDeInit() == A_STATUS_OK);
+    assert(aMemoryDeInit() == A_STATUS_OK);
     assert(database_allocations == 0U);
     puts("真实 FlashDB KV/TSDB：回收、覆盖、持久化及错误传播验证通过");
     return 0;

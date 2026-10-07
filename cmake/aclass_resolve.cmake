@@ -34,7 +34,7 @@ endfunction()
 
 # ── Inputs: validate every switch before evaluating any edge ──────────
 foreach(module AOS_WORKQUEUE ABUS ABUS_STATIC ABUS_DYNAMIC ABUS_DEF_CHECK ASHELL
-        ALOG
+        ALOG AMEMORY
         ADATABASE ADATABASE_STATIC ADATABASE_DYNAMIC
         AMODBUS AMODBUS_STATIC AMODBUS_DYNAMIC AMODBUS_CLIENT AMODBUS_SERVER
         ADEV_LED ADEV_USART
@@ -84,15 +84,19 @@ if(ALOG_LINE_BUFFER_SIZE LESS 256 OR ALOG_LINE_BUFFER_SIZE GREATER 4096)
     message(FATAL_ERROR "ALOG_LINE_BUFFER_SIZE must be in [256, 4096]")
 endif()
 
+# aMemory 独立于具体设备，数据库只依赖统一存储接口。
+_aclass_requires(ADATABASE_ENABLE AMEMORY_ENABLE)
+if(NOT "${AMEMORY_MAX_PARTITIONS}" MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "AMEMORY_MAX_PARTITIONS must be in [1, 256]")
+endif()
+if(AMEMORY_MAX_PARTITIONS GREATER 256)
+    message(FATAL_ERROR "AMEMORY_MAX_PARTITIONS must be in [1, 256]")
+endif()
+
 # ── func / aDataBase ──────────────────────────────────────────────────
 if(ADATABASE_ENABLE)
     if(NOT ADATABASE_STATIC_ENABLE AND NOT ADATABASE_DYNAMIC_ENABLE)
         message(FATAL_ERROR "aDataBase requires STATIC or DYNAMIC allocation")
-    endif()
-    if(ADATABASE_BACKEND STREQUAL "FLASH25Q")
-        _aclass_requires(ADATABASE_ENABLE ADEV_FLASH25Q_ENABLE)
-    elseif(NOT ADATABASE_BACKEND STREQUAL "CUSTOM")
-        message(FATAL_ERROR "ADATABASE_BACKEND must be FLASH25Q or CUSTOM")
     endif()
 endif()
 

@@ -31,15 +31,12 @@ with tempfile.TemporaryDirectory(prefix="aclass-matrix-") as directory:
         'function(matrix_force_link)\n'
         '  get_target_property(libs "${PROJECT_NAME}" LINK_LIBRARIES)\n'
         '  list(REMOVE_ITEM libs aDevUsart)\n'
-        '  list(REMOVE_ITEM libs aDataBase aDataBaseFlash25q)\n'
+        '  list(REMOVE_ITEM libs aDataBase)\n'
         '  set_property(TARGET "${PROJECT_NAME}" PROPERTY LINK_LIBRARIES "${libs}")\n'
         '  target_link_libraries("${PROJECT_NAME}" PRIVATE '
         '"-Wl,--whole-archive" aDevUsart "-Wl,--no-whole-archive")\n'
         '  if(TARGET aDataBase)\n'
         '    target_link_libraries("${PROJECT_NAME}" PRIVATE "-Wl,--whole-archive" aDataBase "-Wl,--no-whole-archive")\n'
-        '  endif()\n'
-        '  if(TARGET aDataBaseFlash25q)\n'
-        '    target_link_libraries("${PROJECT_NAME}" PRIVATE "-Wl,--whole-archive" aDataBaseFlash25q "-Wl,--no-whole-archive")\n'
         '  endif()\n'
         'endfunction()\n'
         'cmake_language(DEFER CALL matrix_force_link)\n'
@@ -53,10 +50,11 @@ with tempfile.TemporaryDirectory(prefix="aclass-matrix-") as directory:
         ]
         lines.append(f"set(AOS_WORKQUEUE_ENABLE {'ON' if name == 'full_worker' else 'OFF'})")
         if name.startswith("database_"):
-            backend = name.removeprefix("database_").upper()
-            lines += ["set(ADATABASE_ENABLE ON)", f"set(ADATABASE_BACKEND {backend})"]
-            if backend == "FLASH25Q":
+            lines += ["set(ADATABASE_ENABLE ON)"]
+            if name == "database_flash25q":
                 lines += ["set(ADEV_FLASH25Q_ENABLE ON)", "set(ADRV_MODULE_QSPI_ENABLE ON)"]
+            else:
+                lines += ["set(ADEV_FLASH25Q_ENABLE OFF)"]
         for feature, enabled in zip(("INTERRUPT", "DIRECT", "ASYNC", "RS485"), values):
             lines.append(f"set(ADEV_USART_{feature}_ENABLE {'ON' if enabled else 'OFF'})")
         dma = values[4]

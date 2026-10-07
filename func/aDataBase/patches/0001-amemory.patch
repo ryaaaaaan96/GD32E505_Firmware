@@ -1,0 +1,176 @@
+diff --git a/inc/fdb_def.h b/inc/fdb_def.h
+index e3b0ee5..37f4b0e 100644
+--- a/inc/fdb_def.h
++++ b/inc/fdb_def.h
+@@ -265,6 +265,9 @@ struct fdb_db {
+     const char *name;                            /**< database name */
+     fdb_db_type type;                            /**< database type */
+     union {
++#ifdef FDB_USING_AMEMORY_MODE
++        const aMemoryHandle_t *memory; /**< aMemory 分区句柄。 */
++#endif
+ #ifdef FDB_USING_FAL_MODE
+         const struct fal_partition *part;        /**< flash partition for saving database */
+ #endif
+diff --git a/inc/flashdb.h b/inc/flashdb.h
+index 3b2a4b7..0f2f41f 100644
+--- a/inc/flashdb.h
++++ b/inc/flashdb.h
+@@ -23,6 +23,10 @@
+ #include <fal.h>
+ #endif
+ 
++#ifdef FDB_USING_AMEMORY_MODE
++#include <aMemory.h>
++#endif
++
+ #include <fdb_def.h>
+ 
+ 
+diff --git a/src/fdb.c b/src/fdb.c
+index 8de2b2a..424f96f 100644
+--- a/src/fdb.c
++++ b/src/fdb.c
+@@ -24,8 +24,9 @@
+ 
+ #define FDB_LOG_TAG ""
+ 
+-#if !defined(FDB_USING_FAL_MODE) && !defined(FDB_USING_FILE_MODE)
+-#error "Please defined the FDB_USING_FAL_MODE or FDB_USING_FILE_MODE macro"
++#if !defined(FDB_USING_FAL_MODE) && !defined(FDB_USING_FILE_MODE) && \
++    !defined(FDB_USING_AMEMORY_MODE)
++#error "Please select a FlashDB storage mode"
+ #endif
+ 
+ fdb_err_t _fdb_init_ex(fdb_db_t db, const char *name, const char *path, fdb_db_type type, void *user_data)
+@@ -80,7 +81,30 @@ fdb_err_t _fdb_init_ex(fdb_db_t db, const char *name, const char *path, fdb_db_t
+         }
+ 
+         db->max_size = db->storage.part->len;
+-#endif /* FDB_USING_FAL_MODE */
++#elif defined(FDB_USING_AMEMORY_MODE)
++        aMemoryInfo_t info;
++        size_t block_size;
++
++        db->storage.memory = aMemoryFind(path);
++        if (db->storage.memory == NULL) return FDB_PART_NOT_FOUND;
++        if (aMemoryGetInfo(db->storage.memory, &info) != A_STATUS_OK)
++            return FDB_INIT_FAILED;
++        block_size = info.geometry.erase_granularity;
++        /* 当前 FlashDB 构建的编程粒度必须适配介质，所有地址为分区内偏移。 */
++        if (info.access != AMEMORY_ACCESS_ALL || block_size == 0 ||
++            block_size > UINT32_MAX ||
++            info.geometry.capacity > UINT32_MAX ||
++            info.geometry.read_granularity != 1 ||
++            info.geometry.write_granularity > (FDB_WRITE_GRAN + 7) / 8 ||
++            info.geometry.program_bits != FDB_WRITE_GRAN ||
++            info.geometry.erased_value != 0xFF)
++            return FDB_INIT_FAILED;
++        if (db->sec_size == 0) db->sec_size = (uint32_t)block_size;
++        else if (db->sec_size % block_size != 0) return FDB_INIT_FAILED;
++        if ((db->sec_size & (db->sec_size - 1)) != 0)
++            return FDB_INIT_FAILED;
++        db->max_size = (uint32_t)info.geometry.capacity;
++#endif /* 存储模式 */
+     }
+ 
+     /* the block size MUST to be the Nth power of 2 */
+@@ -150,6 +174,11 @@ const char *_fdb_db_path(fdb_db_t db)
+     else {
+ #ifdef FDB_USING_FAL_MODE
+         return db->storage.part->name;
++#elif defined(FDB_USING_AMEMORY_MODE)
++        aMemoryInfo_t info;
++
++        return aMemoryGetInfo(db->storage.memory, &info) == A_STATUS_OK
++               ? info.name : NULL;
+ #else
+         return NULL;
+ #endif
+diff --git a/src/fdb_utils.c b/src/fdb_utils.c
+index d6f663e..1ef3743 100644
+--- a/src/fdb_utils.c
++++ b/src/fdb_utils.c
+@@ -15,6 +15,9 @@
+ #include <string.h>
+ #include <flashdb.h>
+ #include <fdb_low_lvl.h>
++#ifdef FDB_USING_AMEMORY_MODE
++#include <fdb_memory_port.h>
++#endif
+ 
+ #define FDB_LOG_TAG "[utils]"
+ 
+@@ -269,6 +272,20 @@ fdb_err_t _fdb_flash_read(fdb_db_t db, uint32_t addr, void *buf, size_t size)
+         if (fal_partition_read(db->storage.part, addr, (uint8_t *) buf, size) < 0) {
+             result = FDB_READ_ERR;
+         }
++#elif defined(FDB_USING_AMEMORY_MODE)
++        aMemoryReadRequest_t request;
++        aStatus_t status = aDataBaseStorageError();
++
++        if (status == A_STATUS_OK) {
++            aMemoryReadRequestStructInit(&request);
++            request.address = addr;
++            request.data = buf;
++            request.size = size;
++            request.timeout = aDataBaseStorageTimeout();
++            status = aMemoryRead(db->storage.memory, &request);
++            aDataBaseStorageFail(status);
++        }
++        if (status != A_STATUS_OK) result = FDB_READ_ERR;
+ #endif
+     }
+ 
+@@ -290,6 +307,19 @@ fdb_err_t _fdb_flash_erase(fdb_db_t db, uint32_t addr, size_t size)
+         if (fal_partition_erase(db->storage.part, addr, size) < 0) {
+             result = FDB_ERASE_ERR;
+         }
++#elif defined(FDB_USING_AMEMORY_MODE)
++        aMemoryEraseRequest_t request;
++        aStatus_t status = aDataBaseStorageError();
++
++        if (status == A_STATUS_OK) {
++            aMemoryEraseRequestStructInit(&request);
++            request.address = addr;
++            request.size = size;
++            request.timeout = aDataBaseStorageTimeout();
++            status = aMemoryErase(db->storage.memory, &request);
++            aDataBaseStorageFail(status);
++        }
++        if (status != A_STATUS_OK) result = FDB_ERASE_ERR;
+ #endif
+     }
+ 
+@@ -298,6 +328,10 @@ fdb_err_t _fdb_flash_erase(fdb_db_t db, uint32_t addr, size_t size)
+ 
+ fdb_err_t _fdb_flash_write(fdb_db_t db, uint32_t addr, const void *buf, size_t size, bool sync)
+ {
++#ifdef FDB_USING_AMEMORY_MODE
++    /* aMemory 同步写入，不使用延后提交。 */
++    (void)sync;
++#endif
+     fdb_err_t result = FDB_NO_ERR;
+ 
+     if (db->file_mode) {
+@@ -312,6 +346,20 @@ fdb_err_t _fdb_flash_write(fdb_db_t db, uint32_t addr, const void *buf, size_t s
+         {
+             result = FDB_WRITE_ERR;
+         }
++#elif defined(FDB_USING_AMEMORY_MODE)
++        aMemoryWriteRequest_t request;
++        aStatus_t status = aDataBaseStorageError();
++
++        if (status == A_STATUS_OK) {
++            aMemoryWriteRequestStructInit(&request);
++            request.address = addr;
++            request.data = buf;
++            request.size = size;
++            request.timeout = aDataBaseStorageTimeout();
++            status = aMemoryWrite(db->storage.memory, &request);
++            aDataBaseStorageFail(status);
++        }
++        if (status != A_STATUS_OK) result = FDB_WRITE_ERR;
+ #endif
+     }
+ 

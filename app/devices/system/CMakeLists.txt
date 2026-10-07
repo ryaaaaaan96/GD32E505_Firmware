@@ -38,8 +38,16 @@ endif()
 
 target_compile_definitions(${APP_TARGET} PRIVATE
     ADEV_FLASH25Q_ENABLE=$<BOOL:${ADEV_FLASH25Q_ENABLE}>
+    AMEMORY_ENABLE=$<BOOL:${AMEMORY_ENABLE}>
 )
 if(ADEV_FLASH25Q_ENABLE)
     target_sources(${APP_TARGET} PRIVATE app_system_flash.c)
     target_link_libraries(${APP_TARGET} PRIVATE aFlash25q)
+endif()
+
+if(AMEMORY_ENABLE AND ADEV_FLASH25Q_ENABLE)
+    target_sources(${APP_TARGET} PRIVATE app_system_memory.c)
+    target_include_directories(${APP_TARGET} PRIVATE
+        "${ACLASS_PRODUCT_DIR}/config")
+    target_link_libraries(${APP_TARGET} PRIVATE aMemory)
 endif()

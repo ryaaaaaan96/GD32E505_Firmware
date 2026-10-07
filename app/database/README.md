@@ -9,7 +9,7 @@ aSystemInit 在 Flash 初始化之后调用 appDatabaseInit，启动先尝试打
 
 ## 分区
 
-布局位于 config/aDatabase_flash_layout.h，按已识别的 8 MiB、4 KiB 擦除块配置。
+布局位于 config/aMemory_layout.h，按已识别的 8 MiB、4 KiB 擦除块配置。
 
 | 数据库 | 分区名 | 起始地址 | 长度 | 地址范围 |
 | --- | --- | --- | --- | --- |
@@ -77,3 +77,6 @@ db kv del speed
 
 I/O 失败使对应实例进入故障状态，可先 db close，再 db init 尝试恢复。
 若底层 SPI 总线已进入故障状态，需要先恢复外设；当前应用可通过复位重新初始化。
+
+设备初始化后由 app_system_memory.c 注册 aMemory 设备和分区，再初始化
+aDataBase 服务。FlashDB 通过 aMemory 直接访问分区，产品不再配置 FAL。

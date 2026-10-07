@@ -111,9 +111,9 @@ void aDataBaseTsIterateRequestStructInit(aDataBaseTsIterateRequest_t *request)
 }
 
 static aStatus_t partition_get(const char *name,
-                               const struct fal_partition **partition)
+                               const aMemoryHandle_t **partition)
 {
-    *partition = fal_partition_find(name);
+    *partition = aMemoryFind(name);
     if (*partition == NULL) return A_STATUS_NOT_FOUND;
     if (aDataBasePartitionIsUsed(*partition)) return A_STATUS_BUSY;
     return A_STATUS_OK;
@@ -122,7 +122,7 @@ static aStatus_t partition_get(const char *name,
 static aStatus_t kv_initialize(const aDataBaseKvConfig_t *config,
                                aDataBaseKvHandle_t *handle)
 {
-    const struct fal_partition *partition;
+    const aMemoryHandle_t *partition;
     aStatus_t status;
     bool not_format;
     fdb_err_t result;
@@ -138,7 +138,7 @@ static aStatus_t kv_initialize(const aDataBaseKvConfig_t *config,
     handle->instance.partition = partition;
     not_format = !config->format_if_needed;
     fdb_kvdb_control(&handle->db, FDB_KVDB_CTRL_SET_NOT_FORMAT, &not_format);
-    result = fdb_kvdb_init(&handle->db, config->name, partition->name,
+    result = fdb_kvdb_init(&handle->db, config->name, config->partition,
                            NULL, handle);
     status = result_get(result);
     if (not_format && result == FDB_READ_ERR &&
@@ -161,8 +161,8 @@ static fdb_time_t unused_clock(void)
 static aStatus_t ts_initialize(const aDataBaseTsConfig_t *config,
                                aDataBaseTsHandle_t *handle)
 {
-    const struct fal_partition *partition;
-    const struct fal_flash_dev *flash;
+    const aMemoryHandle_t *partition;
+    aMemoryInfo_t info;
     aStatus_t status;
     bool not_format;
     bool rollover;
@@ -175,15 +175,17 @@ static aStatus_t ts_initialize(const aDataBaseTsConfig_t *config,
     if (status != A_STATUS_OK) return status;
     status = partition_get(config->partition, &partition);
     if (status != A_STATUS_OK) return aDataBaseOperationEnd(status);
-    flash = fal_flash_device_find(partition->flash_name);
-    if (flash == NULL || flash->blk_size <= record_overhead ||
-        config->max_record_size > flash->blk_size - record_overhead)
+    status = aMemoryGetInfo(partition, &info);
+    if (status != A_STATUS_OK ||
+        info.geometry.erase_granularity <= record_overhead ||
+        config->max_record_size >
+        info.geometry.erase_granularity - record_overhead)
         return aDataBaseOperationEnd(A_STATUS_INVALID_PARAM);
     memset(handle, 0, sizeof(*handle));
     handle->instance.partition = partition;
     not_format = !config->format_if_needed;
     fdb_tsdb_control(&handle->db, FDB_TSDB_CTRL_SET_NOT_FORMAT, &not_format);
-    result = fdb_tsdb_init(&handle->db, config->name, partition->name,
+    result = fdb_tsdb_init(&handle->db, config->name, config->partition,
                            unused_clock, config->max_record_size, handle);
     status = result_get(result);
     if (not_format && result == FDB_READ_ERR &&

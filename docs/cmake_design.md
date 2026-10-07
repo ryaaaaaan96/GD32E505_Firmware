@@ -94,11 +94,12 @@ app 不创建 Shell 任务和 console 资源。启用时 Shell 也不创建任�
 - aDrv 私有依赖 vendor target，厂商头和宏不向上层传播。
 - aOS 只公开 public/；FreeRTOS 头、port 和生成配置均为私有。
 - FreeRTOS kernel 为独立 OBJECT target，OS 适配位于 backend/freertos/。
-- aDataBase 封装 KV 和 TSDB，核心使用通用存储接口；aDataBaseFlash25q 提供可选适配。
+- aMemory 提供存储设备与分区接口；aDataBase 依赖 aMemory，封装 KV 和 TSDB。
 - aLog 封装 EasyLogger，输出由应用注入，不依赖 Shell 或数据库。
 - ALOG_ENABLE、ALOG_OUTPUT_LEVEL、ALOG_LINE_BUFFER_SIZE 在产品 CMake 配置。
 - 官方日志核心继承项目参数，异步、缓冲、pthread 和插件不参与构建。
-- 官方 FlashDB/FAL 以 aDataBaseFlashDb OBJECT target 合入 aDataBase，源码保持原样。
+- FlashDB 以 aDataBaseFlashDb OBJECT target 合入 aDataBase；仅存储接口打补丁，
+  不编译 FAL，继承项目完整编译参数。
 - aclass_build_options 提供优化/调试选项；aclass_project_options 增加项目告警策略。
   上游内核和厂商源码不直接继承项目的严格告警策略。
 
@@ -131,9 +132,10 @@ aclass_add_libraries(CONFIG_FILE <绝对路径>)，最后自行创建应用目�
 库入口不创建 main 或固件目标，构建产物仍使用顶层统一 lib/bin 目录。
 当前只实现 Embedded/FreeRTOS，选择其他后端仍明确报错。
 
-启用数据库必须提供 ADATABASE_LAYOUT_FILE，模块复制产品头到构建目录。
-本示例布局为 config/aDatabase_flash_layout.h；当前容量为 8 MiB，KV 和 TSDB
-分区分别为 128 KiB 和 512 KiB。不同产品可提供自己的布局。
+启用数据库需要 AMEMORY_ENABLE；AMEMORY_MAX_PARTITIONS 配置注册表容量。
+产品在应用设备层提供介质回调，并通过宏定义设备和分区；库不复制产品头。
+本示例布局为 config/aMemory_layout.h；当前容量为 8 MiB，KV 和 TSDB
+分区分别为 128 KiB 和 512 KiB。不同产品注册各自的布局。
 ADATABASE_STATIC_ENABLE / DYNAMIC_ENABLE 控制实例创建接口；至少启用一种。
 当前产品开启数据库，应用在 Flash 后打开已有实例，首次格式化由 db init 显式触发。
 

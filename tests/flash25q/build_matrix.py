@@ -16,19 +16,19 @@ profiles = {
                 "set(ADEV_FLASH25Q_ENABLE OFF)\n"
                 "set(ADRV_MODULE_SPI_ENABLE OFF)",
     "database": "set(ADATABASE_ENABLE ON)\n"
-                "set(ADATABASE_BACKEND FLASH25Q)",
+                "set(AMEMORY_ENABLE ON)",
 }
 with tempfile.TemporaryDirectory(prefix="flash25q-build-") as directory:
     base = Path(directory)
     force_link = base / "force.cmake"
     force_link.write_text('''function(flash_force_link)
-    if(TARGET aDataBaseFlash25q)
+    if(TARGET aDataBase)
         get_target_property(libraries ${PROJECT_NAME} LINK_LIBRARIES)
-        list(REMOVE_ITEM libraries aDataBaseFlash25q)
+        list(REMOVE_ITEM libraries aDataBase)
         set_property(TARGET ${PROJECT_NAME} PROPERTY LINK_LIBRARIES
             "${libraries}")
         target_link_libraries(${PROJECT_NAME} PRIVATE
-            "-Wl,--whole-archive" aDataBaseFlash25q "-Wl,--no-whole-archive")
+            "-Wl,--whole-archive" aDataBase "-Wl,--no-whole-archive")
     endif()
 endfunction()
 cmake_language(DEFER CALL flash_force_link)

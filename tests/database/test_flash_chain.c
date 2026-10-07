@@ -2,9 +2,28 @@
 #define main flash_model_existing_main
 #include "../flash25q/test_flash25q.c"
 #undef main
-#include "aDataBase_flash25q.h"
+#include "app_system_memory.h"
 #include "aDataBase_instance.h"
 #include <assert.h>
+
+static aDevFlash25qHandle_t *test_flash;
+
+aStatus_t appSystemFlashGetInfo(aDevFlash25qInfo_t *info)
+{
+    return aDevFlash25qGetInfo(test_flash, info);
+}
+aStatus_t appSystemFlashRead(const aDevFlash25qReadRequest_t *request)
+{
+    return aDevFlash25qRead(test_flash, request);
+}
+aStatus_t appSystemFlashWrite(const aDevFlash25qWriteRequest_t *request)
+{
+    return aDevFlash25qWrite(test_flash, request);
+}
+aStatus_t appSystemFlashErase(const aDevFlash25qEraseRequest_t *request)
+{
+    return aDevFlash25qErase(test_flash, request);
+}
 
 static size_t records;
 static aBool_t verify_record(const aDataBaseTsRecord_t *record, void *context)
@@ -40,7 +59,9 @@ int main(void)
     fc.bus = &bus;
     fc.cs_pin = ADRV_PIN(ADRV_GPIO_PORT_B, 12);
     assert(aDevFlash25qInitStatic(&fc, &flash) == A_STATUS_OK);
-    assert(aDataBaseBindFlash25q(&flash) == A_STATUS_OK);
+    test_flash = &flash;
+    assert(appSystemMemoryInit() == A_STATUS_OK);
+    assert(aDataBaseInit() == A_STATUS_OK);
     aDataBaseKvConfigStructInit(&kc);
     kc.name = "kv";
     kc.partition = "param";
@@ -83,10 +104,11 @@ int main(void)
     assert(aDataBaseTsIterate(&ts, &iterate) == A_STATUS_OK && records == 1U);
     assert(aDataBaseKvDeInitStatic(&kv) == A_STATUS_OK);
     assert(aDataBaseTsDeInitStatic(&ts) == A_STATUS_OK);
-    assert(aDataBaseUnbindStorage() == A_STATUS_OK);
+    assert(aDataBaseDeInit() == A_STATUS_OK);
+    assert(aMemoryDeInit() == A_STATUS_OK);
     assert(aDevFlash25qDeInitStatic(&flash) == A_STATUS_OK);
     assert(aDevFlash25qBusDeInitStatic(&bus) == A_STATUS_OK);
     assert(allocation_count == 0U);
-    puts("FlashDB → FAL → Flash25q → SFUD → SPI 整条链路验证通过");
+    puts("FlashDB → aMemory → Flash25q → SFUD → SPI 整条链路验证通过");
     return 0;
 }

@@ -1,5 +1,5 @@
 #include "app_database.h"
-#include "aDatabase_flash_layout.h"
+#include "aMemory_layout.h"
 #if !ADATABASE_DYNAMIC_ENABLE
 #include "aDataBase_instance.h"
 #endif
@@ -23,7 +23,7 @@ aStatus_t appDatabaseOpen(aBool_t format_if_needed)
     if (kv_handle != NULL || ts_handle != NULL) return A_STATUS_BUSY;
     aDataBaseKvConfigStructInit(&kv_config);
     kv_config.name = "parameters";
-    kv_config.partition = ADATABASE_PART_PARAM_NAME;
+    kv_config.partition = AMEMORY_PART_PARAM_NAME;
     kv_config.format_if_needed = format_if_needed;
     kv_config.timeout = A_TIMEOUT_MS(30000U);
 #if ADATABASE_DYNAMIC_ENABLE
@@ -36,7 +36,7 @@ aStatus_t appDatabaseOpen(aBool_t format_if_needed)
 
     aDataBaseTsConfigStructInit(&ts_config);
     ts_config.name = "records";
-    ts_config.partition = ADATABASE_PART_LOG_NAME;
+    ts_config.partition = AMEMORY_PART_LOG_NAME;
     ts_config.format_if_needed = format_if_needed;
     /* 预留给采集记录；时间戳和记录格式由业务提供。 */
     ts_config.max_record_size = 256U;

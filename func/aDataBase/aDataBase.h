@@ -14,21 +14,6 @@ typedef struct aDataBaseKvHandle aDataBaseKvHandle_t;
 typedef struct aDataBaseTsHandle aDataBaseTsHandle_t;
 typedef int64_t aDataBaseTime_t;
 
-/** 同步存储后端；成功必须完成全部请求，地址为整个介质的字节偏移。
- * 操作表复制保存，context 借用至解绑；回调不得再次调用数据库接口。
- * 同时仅绑定一个介质，可在不同分区创建多个数据库实例。 */
-typedef struct {
-    void *context;
-    size_t capacity;
-    size_t erase_block_size;
-    aStatus_t (*read)(void *context, uint32_t address, uint8_t *buffer,
-                     uint32_t size, aTimeout_t timeout);
-    aStatus_t (*write)(void *context, uint32_t address, const uint8_t *buffer,
-                      uint32_t size, aTimeout_t timeout);
-    aStatus_t (*erase)(void *context, uint32_t address, uint32_t size,
-                      aTimeout_t timeout);
-} aDataBaseStorage_t;
-
 typedef struct {
     const char *name; /**< 实例名，借用至反初始化或销毁。 */
     const char *partition; /**< 产品布局中的分区名，仅初始化时读取。 */
@@ -96,7 +81,6 @@ typedef struct {
     aBool_t rollover;
 } aDataBaseTsInfo_t;
 
-void aDataBaseStorageStructInit(aDataBaseStorage_t *storage);
 void aDataBaseKvConfigStructInit(aDataBaseKvConfig_t *config);
 void aDataBaseTsConfigStructInit(aDataBaseTsConfig_t *config);
 void aDataBaseKvSetRequestStructInit(aDataBaseKvSetRequest_t *request);
@@ -106,11 +90,11 @@ void aDataBaseTsAppendRequestStructInit(aDataBaseTsAppendRequest_t *request);
 void aDataBaseTsIterateRequestStructInit(aDataBaseTsIterateRequest_t *request);
 
 /** 生命周期由应用串行编排，不得与任何数据库调用并发。
- * 几何参数必须与产品布局完全一致；存在活动实例时解绑返回 BUSY。
+ * 先初始化 aMemory，再初始化本模块；存在活动实例时 DeInit 返回 BUSY。
  * 静态实例布局在 aDataBase_instance.h，初始化后禁止复制或移动。
  * 同一分区仅允许一个实例；所有接口均限任务上下文。 */
-aStatus_t aDataBaseBindStorage(const aDataBaseStorage_t *storage);
-aStatus_t aDataBaseUnbindStorage(void);
+aStatus_t aDataBaseInit(void);
+aStatus_t aDataBaseDeInit(void);
 
 #if ADATABASE_STATIC_ENABLE
 aStatus_t aDataBaseKvInitStatic(
@@ -131,7 +115,7 @@ aStatus_t aDataBaseTsDestroy(aDataBaseTsHandle_t *handle);
 
 /** 完整操作统一串行化，超时包含锁等待及存储调用；不支持 NO_WAIT。
  * 获取值不截断；未知 key 返回 NOT_FOUND，缓冲不足返回 NO_MEMORY。
- * 首个后端错误优先返回；I/O 失败后实例需关闭并重新打开以恢复缓存。
+ * 首个存储错误优先返回；I/O 失败后实例需关闭并重新打开以恢复缓存。
  * 失败可能已有部分数据写入，不承诺回滚。 */
 aStatus_t aDataBaseKvSet(
     aDataBaseKvHandle_t *handle, const aDataBaseKvSetRequest_t *request);

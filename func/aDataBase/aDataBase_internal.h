@@ -8,8 +8,9 @@ aStatus_t aDataBaseOperationBegin(aTimeout_t timeout);
 aStatus_t aDataBaseOperationEnd(aStatus_t status);
 aStatus_t aDataBaseStorageError(void);
 void aDataBaseStorageFail(aStatus_t status);
+aTimeout_t aDataBaseStorageTimeout(void);
 void aDataBaseInstanceAdd(aDataBaseInstance_t *instance);
 void aDataBaseInstanceRemove(aDataBaseInstance_t *instance);
-aBool_t aDataBasePartitionIsUsed(const struct fal_partition *partition);
+aBool_t aDataBasePartitionIsUsed(const aMemoryHandle_t *partition);
 
 #endif

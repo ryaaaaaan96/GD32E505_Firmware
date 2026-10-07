@@ -10,12 +10,11 @@ flash = root / "device/aDev_Flash25q"
 with tempfile.TemporaryDirectory(prefix="database-spi-") as directory:
     executable = Path(directory) / "test"
     sources = [root / "tests/database/test_flash_chain.c",
-               database / "aDataBase.c", database / "port/fal_storage_port.c",
-               database / "backend/flash25q/aDataBase_flash25q.c"]
+               database / "aDataBase.c", database / "port/memory_port.c",
+               root / "app/devices/system/app_system_memory.c",
+               root / "func/aMemory/aMemory.c"]
     sources += [database / "FlashDB/src" / name for name in
                 ("fdb.c", "fdb_kvdb.c", "fdb_tsdb.c", "fdb_utils.c")]
-    sources += [database / "FlashDB/port/fal/src" / name for name in
-                ("fal.c", "fal_flash.c", "fal_partition.c")]
     sources += [flash / name for name in
                 ("aDev_flash25q.c", "port/aDev_flash25q_spi_bus.c",
                  "port/aDev_flash25q_sfud_port.c", "SFUD/sfud/src/sfud.c",
@@ -23,8 +22,8 @@ with tempfile.TemporaryDirectory(prefix="database-spi-") as directory:
     command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
                "-fsanitize=undefined", "-fno-sanitize-recover=all"]
     for path in (database, database / "config", database / "FlashDB/inc",
-                 database / "FlashDB/port/fal/inc",
-                 database / "backend/flash25q", flash, flash / "config",
+                 root / "func/aMemory",
+                 root / "app/devices/system", flash, flash / "config",
                  flash / "SFUD/sfud/inc", root / "config",
                  root / "platform/aLib/include",
                  root / "platform/aOS/public", root / "platform/aDrv/include"):

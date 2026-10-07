@@ -94,15 +94,16 @@ if(DEFINED CASE)
         unset(ADRV_MODULE_DMA_ENABLE)
     elseif(CASE STREQUAL "database_custom")
         set(ADATABASE_ENABLE ON)
-        set(ADATABASE_BACKEND CUSTOM)
         set(ADEV_FLASH25Q_ENABLE OFF)
-    elseif(CASE STREQUAL "database_missing_flash")
-        set(ADATABASE_ENABLE ON)
-        set(ADATABASE_BACKEND FLASH25Q)
-        set(ADEV_FLASH25Q_ENABLE OFF)
-    elseif(CASE STREQUAL "database_invalid_backend")
-        set(ADATABASE_ENABLE ON)
-        set(ADATABASE_BACKEND typo)
+    elseif(CASE STREQUAL "database_missing_memory")
+        set(AMEMORY_ENABLE OFF)
+    elseif(CASE STREQUAL "memory_invalid_capacity")
+        set(AMEMORY_MAX_PARTITIONS 0)
+    elseif(CASE STREQUAL "memory_invalid_bool")
+        set(AMEMORY_ENABLE typo)
+    elseif(CASE STREQUAL "memory_off")
+        set(ADATABASE_ENABLE OFF)
+        set(AMEMORY_ENABLE OFF)
     elseif(CASE STREQUAL "minimal" OR CASE STREQUAL "polling")
         set(ASHELL_ENABLE OFF)
         foreach(feature INTERRUPT DIRECT ASYNC RS485)
@@ -140,14 +141,15 @@ foreach(case default bus_static bus_dynamic bus_no_allocation bus_check_off bus_
         minimal polling independent_app missing_input missing_dma
         missing_usart_dma dma_without_async
         async_without_direct direct_without_dma missing_device missing_gpio invalid_bool
-        database_custom database_missing_flash database_invalid_backend
+        database_custom database_missing_memory memory_invalid_capacity
+        memory_invalid_bool memory_off
         modbus_missing_bus modbus_no_allocation modbus_no_role
         modbus_invalid_bool modbus_client_static modbus_server_dynamic)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" "-DCASE=${case}" -P "${CMAKE_CURRENT_LIST_FILE}"
         RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
     )
-    if(case MATCHES "^(default|bus_static|bus_dynamic|bus_check_off|bus_none|bus_sig|bus_off|minimal|polling|independent_app|database_custom|dma_without_async|async_without_direct|direct_without_dma|log_off|log_independent|modbus_client_static|modbus_server_dynamic)$")
+    if(case MATCHES "^(default|bus_static|bus_dynamic|bus_check_off|bus_none|bus_sig|bus_off|minimal|polling|independent_app|database_custom|memory_off|dma_without_async|async_without_direct|direct_without_dma|log_off|log_independent|modbus_client_static|modbus_server_dynamic)$")
         if(NOT result EQUAL 0)
             message(FATAL_ERROR "${case} should succeed: ${error}")
         endif()
@@ -179,10 +181,10 @@ foreach(case default bus_static bus_dynamic bus_no_allocation bus_check_off bus_
             set(expected "ADEV_USART_ENABLE")
         elseif(case STREQUAL "missing_gpio")
             set(expected "ADRV_MODULE_GPIO_ENABLE")
-        elseif(case STREQUAL "database_missing_flash")
-            set(expected "ADEV_FLASH25Q_ENABLE")
-        elseif(case STREQUAL "database_invalid_backend")
-            set(expected "ADATABASE_BACKEND")
+        elseif(case STREQUAL "database_missing_memory")
+            set(expected "AMEMORY_ENABLE")
+        elseif(case STREQUAL "memory_invalid_capacity")
+            set(expected "AMEMORY_MAX_PARTITIONS")
         else()
             set(expected "must be boolean")
         endif()

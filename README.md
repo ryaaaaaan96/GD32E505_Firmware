@@ -23,7 +23,7 @@ Modbus 库默认编译，提供 RTU/TCP 主从站及 aBus 映射；当前未绑�
 
 ```text
 app                 main()、项目配置、显式初始化和测试
-├── func            aDataBase、aLog、aModbus、aShell 等功能
+├── func            aMemory、aDataBase、aLog、aModbus、aShell 等功能
 ├── device          USART、RS485、Flash25Q 等硬件无关设备语义
 └── platform
     ├── aLib        布尔/状态/超时/错误类型、编译器属性和公共定义

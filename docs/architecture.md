@@ -104,10 +104,11 @@ device 提供硬件无关的设备组合，例如 `RS485 = USART + DE GPIO`（�
 aDevUsart 可选配置，统一收发接口，详见 [RS485 设计](usart_design.md)）、
 `Flash25Q` 已在原模块内封装 SFUD，通过 SPI port 对接 aDrvSpi，
 详见 [Flash25Q 链路设计](spi_flash_design.md)。QSPI port 尚未实现。
-不新增 a25q，未来 aMemory 属于 func 层。
+不新增 a25q，aMemory 在 func 层提供设备注册、分区和同步读写擦除。
 device 依赖 aOS 的单调时基实现软件超时，但
-aDrv 不依赖 aOS。func 在其上构成 aDataBase（含 FlashDB 所需 FAL 适配）、aModbus
-和 aShell 等功能。
+aDrv 不依赖 aOS。func 在其上构成 aDataBase、aModbus 和 aShell 等功能。
+FlashDB 通过项目维护的存储补丁直接调用 aMemory，不再使用 FAL；
+应用设备层提供具体介质回调，数据库不设置 backend 目录。
 
 采集/转发类通信协议默认依赖 aBus，业务类型、长度和范围规则由 aBus 持有。
 aModbus 在模块内部提供地址段、SIG 映射及编码转换，不设置独立 backend 目录。

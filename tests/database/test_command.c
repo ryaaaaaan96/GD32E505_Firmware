@@ -31,7 +31,6 @@ static int command(int count, char **arguments)
 
 int main(void)
 {
-    aDataBaseStorage_t storage;
     aDataBaseTsInfo_t info;
     aDataBaseTsAppendRequest_t append;
     unsigned before;
@@ -46,14 +45,8 @@ int main(void)
                              "9223372036854775808" };
 
     memset(memory, 0xFF, sizeof(memory));
-    aDataBaseStorageStructInit(&storage);
-    storage.context = memory;
-    storage.capacity = sizeof(memory);
-    storage.erase_block_size = ADATABASE_FLASH_BLOCK_SIZE;
-    storage.read = read_bytes;
-    storage.write = write_bytes;
-    storage.erase = erase_bytes;
-    assert(aDataBaseBindStorage(&storage) == A_STATUS_OK);
+    assert(memory_start() == A_STATUS_OK);
+    assert(aDataBaseInit() == A_STATUS_OK);
     assert(appDatabaseInit() == A_STATUS_OK && erases == 0U);
     assert(command(4, get) == -1);
     assert(command(2, init) == 0);
@@ -92,7 +85,8 @@ int main(void)
     assert(appDatabaseTsGetInfo(&info) == A_STATUS_OK);
     assert(info.last_timestamp == append.timestamp);
     assert(command(2, close) == 0);
-    assert(aDataBaseUnbindStorage() == A_STATUS_OK);
+    assert(aDataBaseDeInit() == A_STATUS_OK);
+    assert(aMemoryDeInit() == A_STATUS_OK);
     assert(database_allocations == 0U);
     puts("数据库 Shell 命令及输出边界验证通过");
     return 0;

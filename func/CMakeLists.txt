@@ -2,6 +2,10 @@ if(ABUS_ENABLE)
     add_subdirectory(aBus)
 endif()
 
+if(AMEMORY_ENABLE)
+    add_subdirectory(aMemory)
+endif()
+
 if(ADATABASE_ENABLE)
     add_subdirectory(aDataBase)
 endif()
