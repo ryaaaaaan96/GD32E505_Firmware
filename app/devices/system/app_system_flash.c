@@ -1,11 +1,5 @@
 #include "app_system_flash.h"
 #include "aDev_flash25q_instance.h"
-#if APP_DATABASE_ENABLE
-#include "aDataBase.h"
-#endif
-#if AMEMORY_ENABLE
-#include "app_system_memory.h"
-#endif
 #if ASHELL_ENABLE
 #include "aShell.h"
 #endif
@@ -63,29 +57,7 @@ aStatus_t appSystemFlashInit(void)
                      (unsigned long)info.erase_size);
     }
 #endif
-#if AMEMORY_ENABLE
-    status = appSystemMemoryInit();
-    if (status != A_STATUS_OK) goto fail;
-#endif
-#if APP_DATABASE_ENABLE
-    status = aDataBaseInit();
-    if (status != A_STATUS_OK) {
-        (void)aMemoryDeInit();
-        goto fail;
-    }
-#endif
     return A_STATUS_OK;
-#if AMEMORY_ENABLE
-fail:
-#if ADEV_FLASH25Q_DYNAMIC_ENABLE
-    (void)aDevFlash25qDestroy(flash_handle);
-#else
-    (void)aDevFlash25qDeInitStatic(flash_handle);
-#endif
-    flash_handle = NULL;
-    (void)aDevFlash25qBusDeInitStatic(&flash_bus);
-    return status;
-#endif
 }
 
 aStatus_t appSystemFlashGetInfo(aDevFlash25qInfo_t *info)

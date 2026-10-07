@@ -25,7 +25,7 @@ static void irq_receive(void *argument)
     }
 
     handle->rx_buffer[handle->rx_head] = data;
-    handle->rx_head = (handle->rx_head + 1U) % handle->rx_buffer_size;
+    if (++handle->rx_head == handle->rx_buffer_size) handle->rx_head = 0U;
     ++handle->rx_count;
 #if ADEV_USART_ASYNC_ENABLE
     async_rx_dispatch(handle);
@@ -194,20 +194,31 @@ static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
     size_t count = 0U;
 
     while (count < buffer_size) {
-        aBool_t available;
+        size_t available;
+        size_t tail;
         aStatus_t status = A_STATUS_OK;
 
         aOSCriticalEnter();
-        available = handle->rx_count != 0U;
-        if (available) {
-            ((uint8_t *)buffer)[count] = handle->rx_buffer[handle->rx_tail];
-            handle->rx_tail = (handle->rx_tail + 1U) % handle->rx_buffer_size;
-            --handle->rx_count;
-        }
+        available = handle->rx_count;
+        tail = handle->rx_tail;
         aOSCriticalExit();
 
-        if (available) {
-            ++count;
+        if (available != 0U) {
+            size_t length = handle->rx_buffer_size - tail;
+
+            if (length > available) length = available;
+            if (length > buffer_size - count) length = buffer_size - count;
+            /* rx_mutex 保证单消费者；复制完成前不释放占用，ISR 只能
+             * 写空闲位置，满时丢弃新字节。因此复制期间无需屏蔽中断。 */
+            memcpy((uint8_t *)buffer + count,
+                   handle->rx_buffer + tail, length);
+            tail += length;
+            if (tail == handle->rx_buffer_size) tail = 0U;
+            aOSCriticalEnter();
+            handle->rx_tail = tail;
+            handle->rx_count -= length;
+            aOSCriticalExit();
+            count += length;
         } else if (count != 0U) {
             return (aSSize_t)count;
         } else if (handle->rx_wait_object != NULL) {

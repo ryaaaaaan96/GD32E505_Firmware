@@ -1,4 +1,7 @@
 #include "app_sig.h"
+#if APP_MODBUS_ENABLE
+#include "app_sig_modbus.h"
+#endif
 #if !ABUS_DYNAMIC_ENABLE
 #include "aBus_instance.h"
 #endif
@@ -130,3 +133,35 @@ aStatus_t appSigGetParam(const aBusGetParamRequest_t *request)
     if (sig_handle == NULL) return A_STATUS_NOT_READY;
     return aBusGetParam(sig_handle, request);
 }
+
+#if APP_MODBUS_ENABLE
+#if AMODBUS_DYNAMIC_ENABLE
+aStatus_t appSigModbusCreate(const aModbusConfig_t *config,
+                             aModbusHandle_t **handle_out)
+{
+    aModbusConfig_t bound;
+
+    if (handle_out == NULL) return A_STATUS_INVALID_PARAM;
+    *handle_out = NULL;
+    if (config == NULL) return A_STATUS_INVALID_PARAM;
+    if (sig_handle == NULL) return A_STATUS_NOT_READY;
+    bound = *config;
+    bound.bus = sig_handle;
+    return aModbusCreate(&bound, handle_out);
+}
+#endif
+
+#if AMODBUS_STATIC_ENABLE
+aStatus_t appSigModbusInitStatic(const aModbusConfig_t *config,
+                                 aModbusHandle_t *handle)
+{
+    aModbusConfig_t bound;
+
+    if (config == NULL || handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (sig_handle == NULL) return A_STATUS_NOT_READY;
+    bound = *config;
+    bound.bus = sig_handle;
+    return aModbusInitStatic(&bound, handle);
+}
+#endif
+#endif

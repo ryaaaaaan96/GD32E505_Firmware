@@ -46,7 +46,6 @@ int main(void)
 
     memset(memory, 0xFF, sizeof(memory));
     assert(memory_start() == A_STATUS_OK);
-    assert(aDataBaseInit() == A_STATUS_OK);
     assert(appDatabaseInit() == A_STATUS_OK && erases == 0U);
     assert(command(4, get) == -1);
     assert(command(2, init) == 0);

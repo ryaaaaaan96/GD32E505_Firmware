@@ -47,6 +47,11 @@ static aDevUsartRxEventType_t async_rx_reason;
 static aStatus_t async_tx_status;
 static size_t async_rx_length;
 static uint32_t uptime_ms;
+static unsigned critical_entries, critical_depth;
+static unsigned inject_on_exit;
+static aDevUsartHandle_t *inject_handle;
+static uint8_t rx_byte = 42U;
+static void fire(aDevUsartHandle_t *h, aDrvUsartExti_t event);
 typedef struct {
     aOSTimerCallback_t callback;
     void *argument;
@@ -101,8 +106,16 @@ aStatus_t aOSTimerStart(aOSTimer_t timer, uint32_t milliseconds)
 aStatus_t aOSTimerStop(aOSTimer_t timer) { (void)timer; return A_STATUS_OK; }
 aStatus_t aOSTimerDestroy(aOSTimer_t *timer)
 { free(*timer); *timer = NULL; return A_STATUS_OK; }
-void aOSCriticalEnter(void) {}
-void aOSCriticalExit(void) {}
+void aOSCriticalEnter(void) { ++critical_entries; ++critical_depth; }
+void aOSCriticalExit(void)
+{
+    assert(critical_depth != 0U);
+    --critical_depth;
+    if (inject_on_exit != 0U && --inject_on_exit == 0U) {
+        assert(critical_depth == 0U);
+        fire(inject_handle, ADRV_USART_EXTI_RXNE);
+    }
+}
 aOSCriticalState_t aOSCriticalEnterFromISR(void) { return 0U; }
 void aOSCriticalExitFromISR(aOSCriticalState_t state) { (void)state; }
 aSSize_t aOSFailWithStatus(aStatus_t s) { last_error = s; return -1; }
@@ -137,7 +150,7 @@ aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *h, uint8_t b)
 { (void)h; (void)b; if (!byte_budget) return A_STATUS_BUSY; --byte_budget; tc = A_FALSE; return A_STATUS_OK; }
 aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *h, uint8_t *b)
 { (void)h; if (!rx_byte_budget) return A_STATUS_BUSY;
-  --rx_byte_budget; *b = 42; return A_STATUS_OK; }
+  --rx_byte_budget; *b = rx_byte; return A_STATUS_OK; }
 aStatus_t aDrvUsartIsTransmitComplete(const aDrvUsartHandle_t *h, aBool_t *v)
 { (void)h; *v = tc; return A_STATUS_OK; }
 aBool_t aDrvUsartDmaTxIsSupported(aDrvUsartId_t id) { (void)id; return dma_supported; }
@@ -236,6 +249,52 @@ static void service_pending(aDevUsartHandle_t *h)
     assert(h->drv_handle.software_pending);
     h->drv_handle.software_pending = A_FALSE;
     fire(h, ADRV_USART_EXTI_SOFTWARE);
+}
+
+/* 非 2 的幂容量、满缓冲、回绕、部分读取及复制窗口内的 ISR。 */
+static void buffered_rx_tests(void)
+{
+    aDevUsartConfig_t config;
+    aDevUsartHandle_t handle;
+    uint8_t ring[7], output[7];
+    unsigned before;
+
+    aDevUsartConfigStructInit(&config);
+    config.mode = ADEV_USART_RX_INTERRUPT_BUFFERED;
+    config.rx_buffer = ring;
+    config.rx_buffer_size = sizeof(ring);
+    rx_byte_budget = SIZE_MAX;
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    for (rx_byte = 0U; rx_byte < 7U; ++rx_byte)
+        fire(&handle, ADRV_USART_EXTI_RXNE);
+    assert(handle.rx_head == 0U && handle.rx_count == 7U);
+    inject_handle = &handle;
+    inject_on_exit = 1U;
+    before = critical_entries;
+    assert(aDevUsartRead(&handle, output, sizeof(output),
+                        A_TIMEOUT_NO_WAIT) == 7);
+    assert(critical_entries - before == 2U);
+    for (size_t i = 0U; i < 7U; ++i) assert(output[i] == i);
+    /* 未提交前仍占满：到达的新字节丢弃，已占用的数据保持稳定。 */
+    assert(aDevUsartHasRxOverflowed(&handle));
+    aDevUsartClearRxOverflow(&handle);
+    for (rx_byte = 10U; rx_byte < 15U; ++rx_byte)
+        fire(&handle, ADRV_USART_EXTI_RXNE);
+    assert(aDevUsartRead(&handle, output, 3U, A_TIMEOUT_NO_WAIT) == 3);
+    for (size_t i = 0U; i < 3U; ++i) assert(output[i] == 10U + i);
+    for (rx_byte = 15U; rx_byte < 18U; ++rx_byte)
+        fire(&handle, ADRV_USART_EXTI_RXNE);
+    /* 快照后再来一个字节，提交必须保留 ISR 新增的 rx_count。 */
+    inject_on_exit = 1U;
+    before = critical_entries;
+    assert(aDevUsartRead(&handle, output, 6U, A_TIMEOUT_NO_WAIT) == 6);
+    assert(critical_entries - before == 4U);
+    for (size_t i = 0U; i < 6U; ++i) assert(output[i] == 13U + i);
+    assert(handle.rx_count == 0U && !aDevUsartHasRxOverflowed(&handle));
+    assert(aDevUsartRead(&handle, output, 1U, A_TIMEOUT_NO_WAIT) == -1);
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+    assert(critical_depth == 0U && mutex_count == 0U && locks == 0U);
+    rx_byte = 42U;
 }
 
 int main(void)
@@ -590,6 +649,7 @@ int main(void)
     assert(aDevUsartInitStatic(&c, h) == A_STATUS_OK);
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
     assert(mutex_count == 0U && locks == 0U);
+    buffered_rx_tests();
     puts("RS485 USART tests passed");
     return 0;
 }

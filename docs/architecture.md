@@ -111,6 +111,9 @@ FlashDB 通过项目维护的存储补丁直接调用 aMemory，不再使用 FAL
 应用设备层提供具体介质回调，数据库不设置 backend 目录。
 
 采集/转发类通信协议默认依赖 aBus，业务类型、长度和范围规则由 aBus 持有。
+aBus_table.h 单独提供只读定义，CMake 的 aBusTable 目标仅依赖 aLib。
+aDataBase 借用该契约，无需启用 aBus 的 RAM 实例、锁或分配接口；
+aModbus 需要读写运行值，因此仍依赖完整 aBus。
 aModbus 在模块内部提供地址段、SIG 映射及编码转换，不设置独立 backend 目录。
 协议实例借用 aBus 和传输，应用管理任务、设备、采样周期与重连策略；
 主站从远端采集后发布 aBus，从站根据地址映射读写 aBus。
@@ -133,22 +136,27 @@ aModbus 在模块内部提供地址段、SIG 映射及编码转换，不设置�
 通用 device 层仍分别提供 aDevUsart 和 aDevLed，不因为应用组合而合并设备类型。
 
 启动顺序为 main → aDrvInit → aOSInit → 创建 appInit 任务 → aOSRun。
-调度器启动后，由 main.c 内的 appInitTask 调用 aSystemInit；Shell/status 仍在
-各自模块中创建任务。初始化任务优先级为 HIGH，初始化可能阻塞并允许其他就绪任务运行，
-不承诺所有初始化完成前业务任务绝不执行。初始化成功后自删除，不复用为 workqueue。
+调度器启动后，由 main.c 内的 appInitTask 调用 aSystemInit。状态灯任务可先运行；
+控制台及 Shell 先完成状态初始化，启动文字仅入队。随后按顺序初始化 Flash、
+aMemory 分区、数据库及 SIG 服务，最后创建 Shell 任务，开放命令输入。
+数据库模块初始化由 appDatabaseInit 管理，Flash 初始化只负责设备探测。
+初始化任务优先级为 HIGH，阻塞期间允许已就绪的状态灯任务运行；Shell 命令
+不会与服务初始化交错。初始化成功后自删除，不复用为 workqueue。
 初始化任务通过 aOSTaskExit() 自退出，无需保存全局任务句柄；
 aOSDeleteTask(handle) 仍用于删除指定任务，传入 NULL 保持空操作语义。
 system.c 内部的静态函数 statusInit 调用 appSystemStatusLedInit 并创建状态任务；
-同文件内的静态函数 shellInit 调用 appSystemConsoleInit 完成控制台及 Shell 初始化，再创建调用 Process 的任务。
+同文件内 shellInit 初始化控制台、Shell 和日志；shellTaskStart 在服务就绪后
+创建调用 Process 的任务。中途失败向 main 返回错误，不启动 Shell，不自动重试；
+已成功初始化的其他服务保留，仍按启动失败停机策略处理。
 不存在集中初始化全部实例的注册表、链接段或分散加载。
 
-应用通过专用 Init 合并初始化与接口获取：LED 返回句柄，控制台返回 aStream_t，
-不提供独立 Open：
+应用通过专用 Init 完成设备初始化：LED 返回借用句柄，控制台内部绑定 aStream_t
+并初始化 Shell，只返回状态；不提供独立 Open：
 
 - 仅在驱动/OS 就绪后的启动阶段单线程调用，由应用保证每个实例只初始化一次。
 - 首次初始化可能分配 OS 资源，不能当作无副作用查询。
 - 直接初始化并返回本次结果，不缓存阶段或错误，不提供重复/重入保护；各实例独立，不联动回滚。
-- NULL 输出参数返回 INVALID_PARAM；失败清空输出句柄或流字段。
+- LED 的 NULL 输出参数返回 INVALID_PARAM；失败清空输出句柄。
 - 句柄为共享借用，调用者不得销毁、反初始化或修改配置；运行阶段传递已取得的句柄。
 - Shell 关闭时 console 声明、配置和实现一起裁剪。
 - 不做运行时跨设备资源冲突检查；构建期资源告警尚未实现，设备参数/能力检查仍保留。

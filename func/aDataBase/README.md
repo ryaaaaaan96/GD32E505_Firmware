@@ -78,6 +78,9 @@ status = aDataBaseKvSet(handle, &request);
 ## aBus 参数持久化索引
 
 数据库只借用 aBus 的只读定义，不需要持有或创建 aBus RAM handle。
+公共接口包含 `aBus_table.h`，CMake 依赖 `aBusTable`；关闭 aBus 及其两种
+分配接口时，KV/TSDB 与 SIG 持久化仍可独立编译。动态构建不向业务目标
+传播 FlashDB 的配置和头文件；启用静态分配时为实例布局保留这些依赖。
 应用决定何时取快照、保存及恢复；模块不会在 aBus Set 时自动写 Flash。
 Set/Get 使用完整字节快照，不校验业务范围，也不改变业务 RAM 的同步规则。
 当前应用的 `db` 字符串 KV 命令保持原有用法；应用点表尚未自动接入保存。

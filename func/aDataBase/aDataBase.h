@@ -2,7 +2,7 @@
 #define ADATABASE_H
 
 #include "aLib.h"
-#include "aBus.h"
+#include "aBus_table.h"
 
 #ifndef ADATABASE_STATIC_ENABLE
 #define ADATABASE_STATIC_ENABLE 1

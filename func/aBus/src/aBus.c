@@ -119,17 +119,6 @@ static aStatus_t definitions_check(const aBusTable_t *table)
 extern const aBusRamBinding_t *const __abus_bindings_start[];
 extern const aBusRamBinding_t *const __abus_bindings_end[];
 
-/* RAM 状态按表顺序展开；不为每个条目重复保存 Flash 指针。 */
-static const aBusSig_t *sig_definition(const aBusTable_t *tables,
-                                      size_t index)
-{
-    while (index >= tables->sig_count) {
-        index -= tables->sig_count;
-        tables++;
-    }
-    return &tables->sigs[index];
-}
-
 static const aBusTable_t *table_find(const aBusTable_t *tables,
     size_t count, uint16_t deviceID, size_t *offset)
 {
@@ -240,24 +229,29 @@ static aStatus_t resources_prepare(aBusHandle_t *handle,
     }
     status = bindings_collect(handle, tables, count);
     if (status != A_STATUS_OK) goto fail;
-    for (size_t i = 0; i < total; i++) {
-        const aBusSig_t *sig = sig_definition(tables, i);
+    /* 按表顺序访问定义与 RAM，不为每个 SIG 从第一张表重新查找。 */
+    for (size_t t = 0U, offset = 0U; t < count; t++) {
+        const aBusTable_t *table = &tables[t];
+        for (size_t i = 0U; i < table->sig_count; i++) {
+            const aBusSig_t *sig = &table->sigs[i];
 
-        if (handle->sigs[i].data != NULL) continue;
+            if (handle->sigs[offset + i].data != NULL) continue;
 #if ABUS_STATIC_ENABLE
 #if ABUS_DYNAMIC_ENABLE
-        if (!handle->dynamic_storage)
+            if (!handle->dynamic_storage)
 #endif
-        {
-            status = A_STATUS_NOT_FOUND;
-            goto fail;
-        }
+            {
+                status = A_STATUS_NOT_FOUND;
+                goto fail;
+            }
 #endif
-        if (sig->size > SIZE_MAX - missing) {
-            status = A_STATUS_INVALID_PARAM;
-            goto fail;
+            if (sig->size > SIZE_MAX - missing) {
+                status = A_STATUS_INVALID_PARAM;
+                goto fail;
+            }
+            missing += sig->size;
         }
-        missing += sig->size;
+        offset += table->sig_count;
     }
 #if ABUS_DYNAMIC_ENABLE
     if (missing != 0U) {
@@ -266,12 +260,6 @@ static aStatus_t resources_prepare(aBusHandle_t *handle,
             status = A_STATUS_NO_MEMORY;
             goto fail;
         }
-    }
-    next = handle->allocation;
-    for (size_t i = 0; i < total; i++) {
-        if (handle->sigs[i].data != NULL) continue;
-        handle->sigs[i].data = next;
-        next += sig_definition(tables, i)->size;
     }
 #endif
 #if ABUS_LOCK_MODE == ABUS_LOCK_SIG
@@ -284,15 +272,29 @@ static aStatus_t resources_prepare(aBusHandle_t *handle,
     status = aOSMutexCreate(&handle->mutex);
     if (status != A_STATUS_OK) goto fail;
 #endif
-    for (size_t i = 0; i < total; i++) {
-        const aBusSig_t *sig = sig_definition(tables, i);
-        void *data = handle->sigs[i].data;
+#if ABUS_DYNAMIC_ENABLE
+    next = handle->allocation;
+#endif
+    /* 资源全部就绪后，合并数据地址分配与默认值写入这一遍遍历。 */
+    for (size_t t = 0U, offset = 0U; t < count; t++) {
+        const aBusTable_t *table = &tables[t];
+        for (size_t i = 0U; i < table->sig_count; i++) {
+            const aBusSig_t *sig = &table->sigs[i];
+            aBusSigState_t *entry = &handle->sigs[offset + i];
 
-        if (sig->default_data != NULL) {
-            memcpy(data, sig->default_data, sig->size);
-        } else {
-            memset(data, 0, sig->size);
+#if ABUS_DYNAMIC_ENABLE
+            if (entry->data == NULL) {
+                entry->data = next;
+                next += sig->size;
+            }
+#endif
+            if (sig->default_data != NULL) {
+                memcpy(entry->data, sig->default_data, sig->size);
+            } else {
+                memset(entry->data, 0, sig->size);
+            }
         }
+        offset += table->sig_count;
     }
     handle->tables = tables;
     handle->table_count = count;

@@ -102,6 +102,15 @@ aStatus_t aDrvGpioInit(const aDrvGpioConfig_t *config,
     }
     gpio_init(gpio.port, mode, GPIO_OSPEED_50MHZ, gpio.pin_mask);
 
+    /* 显式用作 GPIO 时释放 JTAG 引脚，PA13/PA14 的 SWD 调试仍保留。
+     * 先设置输出电平，再交出引脚控制权，避免 DE 短暂进入发送态。 */
+    if (config->pin == ADRV_PIN(ADRV_GPIO_PORT_A, 15) ||
+        config->pin == ADRV_PIN(ADRV_GPIO_PORT_B, 3) ||
+        config->pin == ADRV_PIN(ADRV_GPIO_PORT_B, 4)) {
+        rcu_periph_clock_enable(RCU_AF);
+        gpio_pin_remap_config(GPIO_SWJ_SWDPENABLE_REMAP, ENABLE);
+    }
+
     handle->pin = config->pin;
     handle->initialized = A_TRUE;
     return A_STATUS_OK;

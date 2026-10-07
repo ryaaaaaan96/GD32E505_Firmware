@@ -15,3 +15,24 @@ with tempfile.TemporaryDirectory(prefix="aclass-startup-") as directory:
     ], cwd=root, check=True)
     subprocess.run([executable], check=True)
 print("Application startup sequencing/self-delete/failure tests passed")
+
+with tempfile.TemporaryDirectory(prefix="aclass-system-") as directory:
+    executable = str(Path(directory) / "test_system")
+    includes = ("platform/aDrv/include", "platform/aOS/public",
+                "platform/aLib/include", "device/aDev_LED",
+                "device/aDev_Flash25q", "app/task/system",
+                "app/devices/system", "app/database", "app/log",
+                "app/sig", "app/task/sig", "func/aShell/include",
+                "func/aMemory", "func/aDataBase", "func/aLog",
+                "func/aBus/include", "app/modbus", "app/task/modbus")
+    subprocess.run([
+        "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+        *["-I" + path for path in includes],
+        *["-D" + feature + "=1" for feature in (
+            "ASHELL_ENABLE", "APP_LOG_ENABLE", "ADEV_FLASH25Q_ENABLE",
+            "AMEMORY_ENABLE", "APP_DATABASE_ENABLE", "ABUS_ENABLE",
+            "APP_MODBUS_ENABLE")],
+        "app/task/system/system.c", "tests/app_startup/test_system.c",
+        "-o", executable,
+    ], cwd=root, check=True)
+    subprocess.run([executable], check=True)

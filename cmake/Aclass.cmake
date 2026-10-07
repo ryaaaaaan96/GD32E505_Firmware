@@ -152,7 +152,7 @@ function(aclass_add_libraries)
     get_cmake_property(variables VARIABLES)
     foreach(variable IN LISTS variables)
         if(variable MATCHES
-           "^(ABUS_|AOS_|ASHELL_|ALOG_|ADATABASE_|AMEMORY_|AMODBUS_|ADEV_|ADRV_)")
+           "^(APP_|ABUS_|AOS_|ASHELL_|ALOG_|ADATABASE_|AMEMORY_|AMODBUS_|ADEV_|ADRV_)")
             set(${variable} "${${variable}}" PARENT_SCOPE)
         endif()
     endforeach()

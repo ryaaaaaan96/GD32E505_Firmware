@@ -83,6 +83,8 @@ aStatus_t appDatabaseInit(void)
 {
     aStatus_t status;
 
+    status = aDataBaseInit();
+    if (status != A_STATUS_OK) return status;
     /* 启动不允许因空白或损坏的扇区头而自动格式化。 */
     status = appDatabaseOpen(A_FALSE);
 #if ASHELL_ENABLE

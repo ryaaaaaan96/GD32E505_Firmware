@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """使用真实 ARM 工具链，验证协议角色/分配裁剪及固件最终链接。"""
 from pathlib import Path
+import json
 import os
 import subprocess
 import tempfile
@@ -12,6 +13,8 @@ toolchain = os.environ.get(
 profiles = {
     "both": (1, 1, 1, 1, 1),
     "static_client": (1, 1, 0, 1, 0),
+    "dynamic_client": (1, 0, 1, 1, 0),
+    "static_server": (1, 1, 0, 0, 1),
     "dynamic_server": (1, 0, 1, 0, 1),
     "disabled": (0, 0, 0, 0, 0),
 }
@@ -22,6 +25,13 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-build-") as directory:
     hook.write_text('''
 function(force_modbus)
     if(TARGET aModbus)
+        file(WRITE "${CMAKE_BINARY_DIR}/modbus_api_probe.c"
+            "#include <aModbus.h>\\n"
+            "#if AMODBUS_STATIC_ENABLE\\n"
+            "#include <aModbus_instance.h>\\n#endif\\n")
+        add_library(modbus_api_probe OBJECT
+            "${CMAKE_BINARY_DIR}/modbus_api_probe.c")
+        target_link_libraries(modbus_api_probe PRIVATE aModbus)
         target_link_libraries("${PROJECT_NAME}" PRIVATE aModbus)
         if(AMODBUS_STATIC_ENABLE)
             target_link_options("${PROJECT_NAME}" PRIVATE
@@ -48,6 +58,12 @@ cmake_language(DEFER CALL force_modbus)
         enabled, static, dynamic, client, server = values
         config = base / f"{name}.cmake"
         lines = [f'include("{root}/config/aclass_config.cmake")']
+        lines += [f"set(APP_MODBUS_MASTER_ENABLE "
+                  f"{'ON' if name.endswith('client') else 'OFF'})"]
+        if name.startswith("static_"):
+            lines += ["set(ASHELL_ENABLE OFF)",
+                      "set(ADEV_USART_STATIC_ENABLE ON)",
+                      "set(ADEV_USART_DYNAMIC_ENABLE OFF)"]
         for feature, value in zip(("ENABLE", "STATIC_ENABLE", "DYNAMIC_ENABLE",
                                    "CLIENT_ENABLE", "SERVER_ENABLE"), values):
             lines += [f"set(AMODBUS_{feature} {'ON' if value else 'OFF'})"]
@@ -66,7 +82,19 @@ cmake_language(DEFER CALL force_modbus)
                 raise RuntimeError(result.stdout + result.stderr)
         archive = build / "lib/libaModbus.a"
         assert archive.exists() == bool(enabled)
+        database = json.loads((build / "compile_commands.json").read_text())
+        demo = [item for item in database
+                if item["file"].endswith("app_modbus.c")]
+        assert bool(demo) == bool(enabled), name
+        if demo:
+            macro = "-DAPP_MODBUS_MASTER_ENABLE="
+            assert macro + ("1" if name.endswith("client") else "0") in \
+                demo[0]["command"], demo
         if enabled:
+            probe = next(item["command"] for item in database
+                         if item["file"].endswith("modbus_api_probe.c"))
+            assert ("/nanoMODBUS" in probe) == bool(static), probe
+            assert ("-DNMBS_" in probe) == bool(static), probe
             nm = str(Path(toolchain) / "bin/arm-none-eabi-nm")
             symbols = subprocess.check_output([nm, str(archive)], text=True)
             exported = {line.split()[-1] for line in symbols.splitlines()

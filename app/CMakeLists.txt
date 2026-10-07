@@ -16,6 +16,7 @@ add_subdirectory(devices)
 add_subdirectory(flash_test)
 add_subdirectory(database)
 add_subdirectory(log)
+add_subdirectory(modbus)
 add_subdirectory(task)
 
 target_link_libraries(

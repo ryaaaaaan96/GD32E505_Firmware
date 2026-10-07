@@ -1,8 +1,10 @@
 # 应用数据库
 
 app/database 私有持有 KV 和 TSDB 实例，设备初始化层绑定现有 SPI1 Flash。
-aSystemInit 在 Flash 初始化之后调用 appDatabaseInit，启动先尝试打开
-已有数据库；空白介质提示运行 db init，并继续初始化其他应用服务。
+aSystemInit 依次初始化 Flash、aMemory 分区，再调用 appDatabaseInit。
+appDatabaseInit 内部调用 aDataBaseInit 后尝试打开已有数据库；空白介质
+提示运行 db init，并继续初始化其他应用服务。Shell 任务最后启动，命令
+不会与启动时的数据库打开操作交错。appDatabaseInit 仅在启动时调用一次。
 
 默认启用 ADATABASE_ENABLE，后端为 FLASH25Q。数据库模块本身支持多实例；
 这里只采用应用层单例。时序采集任务暂不自动创建，记录由业务调用追加。

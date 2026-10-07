@@ -1,3 +1,11 @@
+add_library(aBusTable INTERFACE)
+target_include_directories(aBusTable INTERFACE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(aBusTable INTERFACE aLib)
+if(NOT ABUS_ENABLE)
+    return()
+endif()
+
 if(NOT ABUS_LOCK_GRANULARITY MATCHES "^(NONE|BUS|SIG)$")
     message(FATAL_ERROR "ABUS_LOCK_GRANULARITY must be NONE, BUS or SIG")
 endif()
@@ -24,8 +32,7 @@ target_compile_definitions(aBus PUBLIC
 target_compile_definitions(aBus PRIVATE
     ABUS_DEF_CHECK_ENABLE=$<BOOL:${ABUS_DEF_CHECK_ENABLE}>
 )
-target_include_directories(aBus PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(aBus PUBLIC aLib PRIVATE aclass_project_options)
+target_link_libraries(aBus PUBLIC aBusTable PRIVATE aclass_project_options)
 if(NOT ABUS_LOCK_GRANULARITY STREQUAL "NONE")
     # Public instance/state storage uses the opaque aOS mutex type.
     target_link_libraries(aBus PUBLIC aOS)

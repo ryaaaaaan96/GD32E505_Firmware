@@ -55,7 +55,7 @@ typedef struct {
     uint32_t baud_rate; /**< 非零波特率，单位 bit/s。 */
     aDrvUsartParity_t parity; /**< 无/奇/偶校验。 */
     aDrvUsartStopBits_t stop_bits; /**< 1 或 2 个停止位。 */
-    aDrvGpioPin_t tx_pin; /**< TX 引脚，需满足当前 port 引脚映射。 */
+    aDrvGpioPin_t tx_pin; /**< TX；USART2 按 PB10/PC10/PD8 自动重映射。 */
     aDrvGpioPin_t rx_pin; /**< RX 引脚，需满足当前 port 引脚映射。 */
 } aDrvUsartConfig_t;
 

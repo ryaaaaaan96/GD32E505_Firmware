@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """在独立构建目录验证数据库分配开关、存储依赖和关闭配置。"""
 from pathlib import Path
+import json
 import os
 import subprocess
 import tempfile
@@ -16,11 +17,24 @@ profiles = {
     "disabled": "set(ADATABASE_ENABLE OFF)",
     "memory_off": "set(ADATABASE_ENABLE OFF)\nset(AMEMORY_ENABLE OFF)",
     "no_shell": "set(ASHELL_ENABLE OFF)",
+    "metadata_only": ("set(ABUS_ENABLE OFF)\n"
+                      "set(ABUS_STATIC_ENABLE OFF)\n"
+                      "set(ABUS_DYNAMIC_ENABLE OFF)\n"
+                      "set(AMODBUS_ENABLE OFF)"),
 }
 with tempfile.TemporaryDirectory(prefix="database-build-") as directory:
     base = Path(directory)
     force_link = base / "force.cmake"
     force_link.write_text('''function(database_force_link)
+    if(TARGET aDataBase)
+        file(WRITE "${CMAKE_BINARY_DIR}/database_api_probe.c"
+            "#include <aDataBase.h>\\n"
+            "#if ADATABASE_STATIC_ENABLE\\n"
+            "#include <aDataBase_instance.h>\\n#endif\\n")
+        add_library(database_api_probe OBJECT
+            "${CMAKE_BINARY_DIR}/database_api_probe.c")
+        target_link_libraries(database_api_probe PRIVATE aDataBase)
+    endif()
     if(TARGET aDataBase AND NOT ADEV_FLASH25Q_ENABLE)
         target_link_libraries(${PROJECT_NAME} PRIVATE
             "-Wl,--whole-archive" aDataBase "-Wl,--no-whole-archive")
@@ -49,4 +63,12 @@ cmake_language(DEFER CALL database_force_link)
         elf = next((build / "bin").glob("*.elf"))
         symbols = subprocess.check_output([nm, str(elf)], text=True)
         assert not any(" fal_" in line for line in symbols.splitlines())
+        if name != "disabled" and name != "memory_off":
+            database = json.loads((build / "compile_commands.json").read_text())
+            probe = next(item["command"] for item in database
+                         if item["file"].endswith("database_api_probe.c"))
+            assert ("/FlashDB/inc" in probe) == (name != "dynamic"), probe
+            assert "-DABUS_LOCK_MODE=" not in probe, probe
+            if name == "metadata_only":
+                assert not (build / "lib/libaBus.a").exists()
         print(f"Database {name}: build/link passed; no FAL", flush=True)

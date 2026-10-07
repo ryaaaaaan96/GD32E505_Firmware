@@ -75,6 +75,25 @@ static uint32_t map_parity(aDrvUsartParity_t parity)
     }
 }
 
+/* USART2 的三组 TX/RX 路由；重初始化时也显式恢复默认映射。 */
+static aStatus_t usart2_route(const aDrvUsartConfig_t *config,
+                              uint32_t *remap)
+{
+    if (config->tx_pin == ADRV_PIN(ADRV_GPIO_PORT_B, 10) &&
+        config->rx_pin == ADRV_PIN(ADRV_GPIO_PORT_B, 11)) {
+        *remap = 0U;
+    } else if (config->tx_pin == ADRV_PIN(ADRV_GPIO_PORT_C, 10) &&
+               config->rx_pin == ADRV_PIN(ADRV_GPIO_PORT_C, 11)) {
+        *remap = GPIO_USART2_PARTIAL_REMAP;
+    } else if (config->tx_pin == ADRV_PIN(ADRV_GPIO_PORT_D, 8) &&
+               config->rx_pin == ADRV_PIN(ADRV_GPIO_PORT_D, 9)) {
+        *remap = GPIO_USART2_FULL_REMAP;
+    } else {
+        return A_STATUS_INVALID_PARAM;
+    }
+    return A_STATUS_OK;
+}
+
 void aDrvUsartConfigStructInit(aDrvUsartConfig_t *config)
 {
     if (config == NULL) {
@@ -119,6 +138,7 @@ aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *config,
     const aDrvPrivateUsartMapping_t *mapping;
     aDrvPrivateGpio_t tx_gpio;
     aDrvPrivateGpio_t rx_gpio;
+    uint32_t remap = 0U;
 
     if ((config == NULL) || (handle == NULL) ||
         (config->baud_rate == 0U) ||
@@ -136,8 +156,16 @@ aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *config,
     if (aDrvPrivateUsartHandleGet(config->id) != NULL) {
         return A_STATUS_BUSY;
     }
+    if (config->id == ADRV_USART_2 &&
+        usart2_route(config, &remap) != A_STATUS_OK) {
+        return A_STATUS_INVALID_PARAM;
+    }
 
     rcu_periph_clock_enable(RCU_AF);
+    if (config->id == ADRV_USART_2) {
+        gpio_pin_remap_config(GPIO_USART2_FULL_REMAP, DISABLE);
+        if (remap != 0U) gpio_pin_remap_config(remap, ENABLE);
+    }
     rcu_periph_clock_enable(mapping->clock);
     rcu_periph_clock_enable(tx_gpio.clock);
     rcu_periph_clock_enable(rx_gpio.clock);

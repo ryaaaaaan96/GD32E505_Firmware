@@ -6,8 +6,7 @@
 #ifndef ABUS_H
 #define ABUS_H
 
-#include "aLib.h"
-#include "aDataType.h"
+#include "aBus_table.h"
 
 #define ABUS_LOCK_NONE 0
 #define ABUS_LOCK_BUS 1
@@ -32,53 +31,7 @@
 #error "Enable at least one aBus allocation API"
 #endif
 
-/** @brief 只控制读写时使用锁；不影响创建，NONE 模式忽略。 */
-#define ABUS_SIG_FLAG_LOCK (1U << 0)
-
-/** @brief 单个 SIG 标志位的静态名称；组合位应逐位查询。 */
-static inline const char *aBusSigFlagName(uint16_t flag)
-{
-    switch (flag) {
-    case 0U: return "NONE";
-    case ABUS_SIG_FLAG_LOCK: return "LOCK";
-    default: return "UNKNOWN";
-    }
-}
-
-/** @brief 可选整数范围；联合体成员由所属 SIG/Param 的 type 决定。 */
-typedef struct {
-    aDataValue_t min;
-    aDataValue_t max;
-} aBusRange_t;
-
-/** @brief STRUCT 字段描述；允许未登记字段，不支持嵌套 STRUCT。 */
-typedef struct {
-    size_t offset; /**< 相对 SIG 起点，建议使用 offsetof。 */
-    size_t size; /**< 必须大于零；标量须与类型大小一致。 */
-    aDataType_t type;
-    const aBusRange_t *range; /**< NULL 不限范围；RAW 必须为 NULL。 */
-} aBusParam_t;
-
-/** @brief 只读 SIG 定义，当前值统一存放在连续数据区。 */
-typedef struct {
-    uint16_t sigKey; /**< 同表唯一且跨版本稳定，不要求连续。 */
-    uint16_t flags;
-    aDataType_t type; /**< 整组类型；可解析结构体用 STRUCT，字节块用 RAW。 */
-    size_t size; /**< 完整快照字节数，必须大于零。 */
-    const void *default_data; /**< size 字节默认值；NULL 表示清零。 */
-    const aBusRange_t *range; /**< 标量可选；RAW/STRUCT 必须为 NULL。 */
-    const aBusParam_t *params; /**< 仅 STRUCT 使用；可为 NULL。 */
-    size_t param_count;
-} aBusSig_t;
-
 typedef struct aBusHandle aBusHandle_t;
-
-/** @brief 只读表定义；表及引用的定义在实例使用期保持有效且不变。 */
-typedef struct {
-    const aBusSig_t *sigs; /**< 连续的 Flash 定义表。 */
-    size_t sig_count;
-    uint16_t deviceID; /**< 绑定所属逻辑表标识；应用保证唯一性。 */
-} aBusTable_t;
 
 /** @brief 按 instanceID + deviceID + sigIndex 匹配的只读绑定描述。
  * 含绑定的同一 instanceID 只允许一个活动实例，由应用保证。
@@ -105,16 +58,6 @@ typedef struct {
 /* 其他工具链需实现独立的收集适配。 */
 #error "aBus storage collection currently requires GCC-compatible sections"
 #endif
-
-#define ABUS_TABLE_DEFAULT { NULL, 0U, 0U }
-
-static inline void aBusTableStructInit(aBusTable_t *table)
-{
-    if (table != NULL) {
-        const aBusTable_t defaults = ABUS_TABLE_DEFAULT;
-        *table = defaults;
-    }
-}
 
 /** 定义及默认数据在实例使用期间保持有效且不变。
  * instanceID 选择静态绑定的归属，包含 0 的所有 uint16_t 值均有效。

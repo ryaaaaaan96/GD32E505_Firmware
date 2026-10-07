@@ -4,6 +4,9 @@
 #if ADEV_FLASH25Q_ENABLE
 #include "app_system_flash.h"
 #endif
+#if AMEMORY_ENABLE && ADEV_FLASH25Q_ENABLE
+#include "app_system_memory.h"
+#endif
 #if APP_DATABASE_ENABLE
 #include "app_database.h"
 #endif
@@ -14,6 +17,10 @@
 #if ABUS_ENABLE
 #include "app_sig.h"
 #include "app_sig_task.h"
+#endif
+#if APP_MODBUS_ENABLE
+#include "app_modbus.h"
+#include "app_modbus_task.h"
 #endif
 #if ASHELL_ENABLE
 #include "aDrv_basic.h"
@@ -76,7 +83,6 @@ static void shellTask(void *argument)
 
 static aStatus_t shellInit(void)
 {
-    aOSTaskConfig_t task_config;
     aStatus_t status;
     uint32_t core_clock_hz;
 
@@ -98,6 +104,15 @@ static aStatus_t shellInit(void)
     ASHELL_PRINT("\r\nsystem clock: %lu Hz\r\n",
                 (unsigned long)core_clock_hz);
     ASHELL_PRINT("system peripherals initialized\r\n");
+
+    return A_STATUS_OK;
+}
+
+/* 所有命令依赖的服务就绪后才启动消费者，避免与初始化交错。 */
+static aStatus_t shellTaskStart(void)
+{
+    aOSTaskConfig_t task_config;
+    aStatus_t status;
 
     aOSTaskConfigStructInit(&task_config);
     task_config.name = "shell";
@@ -142,6 +157,13 @@ aStatus_t aSystemInit(void)
     }
 #endif
 
+#if AMEMORY_ENABLE && ADEV_FLASH25Q_ENABLE
+    status = appSystemMemoryInit();
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+#endif
+
 #if APP_DATABASE_ENABLE
     status = appDatabaseInit();
     if (status != A_STATUS_OK) {
@@ -156,6 +178,24 @@ aStatus_t aSystemInit(void)
         return status;
     }
     status = appSigTaskInit();
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+#endif
+
+#if APP_MODBUS_ENABLE
+    status = appModbusInit();
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+    status = appModbusTaskInit();
+    if (status != A_STATUS_OK) {
+        return status;
+    }
+#endif
+
+#if ASHELL_ENABLE
+    status = shellTaskStart();
     if (status != A_STATUS_OK) {
         return status;
     }

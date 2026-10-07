@@ -122,7 +122,7 @@ static void irq_transmit(void *argument)
     if (aDrvUsartTryWriteByte(&handle->drv_handle,
                               handle->tx_buffer[handle->tx_tail]) ==
         A_STATUS_OK) {
-        handle->tx_tail = (handle->tx_tail + 1U) % handle->tx_buffer_size;
+        if (++handle->tx_tail == handle->tx_buffer_size) handle->tx_tail = 0U;
         --handle->tx_count;
         aOSWaitObjectNotifyFromISR(handle->tx_wait_object);
         if (handle->tx_count == 0U) {

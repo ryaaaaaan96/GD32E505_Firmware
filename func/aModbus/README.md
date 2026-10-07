@@ -1,5 +1,9 @@
 # aModbus
 
+公共业务接口不包含 nanoMODBUS 类型。仅启用动态分配时，上游头目录和
+`NMBS_*` 裁剪宏为库私有；启用静态分配时，实例布局头需要这些依赖，
+由 CMake 向实例创建方传播，保证双方布局一致。
+
 基于 nanoMODBUS 的同步主从站模块，默认依赖 aBus。
 官方源码位于 `nanoMODBUS/`，当前版本为提交 `91d6782`，保持原样。
 工程直接编译官方 `nanomodbus.c`，继承统一的 C11、优化和告警参数，
@@ -159,7 +163,9 @@ aStatus_t appSigModbusServerInit(const aModbusTransport_t *transport,
 }
 ```
 
-此片段说明绑定方式，未向当前 app 增加该函数或选择板级串口。
+此片段说明绑定方式。当前板级实例见
+[应用主从演示](../../app/modbus/README.md)：USART2 PC10/PC11、PA15 DE，
+使用 appSigModbusCreate / appSigModbusInitStatic 绑定私有 SIG 实例。
 
 ## 两级回调与并发
 
