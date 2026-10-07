@@ -1,4 +1,4 @@
-# AClass MCU 工程公共 CMake 规范与工程选择入口。
+# AClass 构建入口：工程选择、公共编译选项、库加载与固件产物。
 
 include_guard(GLOBAL)
 set(ACLASS_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
@@ -125,6 +125,38 @@ macro(aclass_initialize)
         -Wall -Wextra -Wpedantic -Werror
     )
 endmacro()
+
+# 加载可复用的各层库；应用入口和最终固件目标仍由产品创建。
+function(aclass_add_libraries)
+    cmake_parse_arguments(LIB "" "CONFIG_FILE" "" ${ARGN})
+    if(LIB_UNPARSED_ARGUMENTS OR NOT LIB_CONFIG_FILE)
+        message(FATAL_ERROR "aclass_add_libraries requires CONFIG_FILE")
+    endif()
+    if(NOT TARGET aclass_project_options)
+        message(FATAL_ERROR
+            "Call aclass_initialize before aclass_add_libraries")
+    endif()
+
+    set(root "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/..")
+    include("${LIB_CONFIG_FILE}")
+    include("${root}/cmake/aclass_resolve.cmake")
+
+    add_subdirectory("${root}/platform"
+        "${CMAKE_CURRENT_BINARY_DIR}/aclass/platform")
+    add_subdirectory("${root}/device"
+        "${CMAKE_CURRENT_BINARY_DIR}/aclass/device")
+    add_subdirectory("${root}/func"
+        "${CMAKE_CURRENT_BINARY_DIR}/aclass/func")
+
+    # 将已校验的功能配置提供给调用目录，供产品应用选择源码和能力。
+    get_cmake_property(variables VARIABLES)
+    foreach(variable IN LISTS variables)
+        if(variable MATCHES
+           "^(ABUS_|AOS_|ASHELL_|ALOG_|ADATABASE_|AMODBUS_|ADEV_|ADRV_)")
+            set(${variable} "${${variable}}" PARENT_SCOPE)
+        endif()
+    endforeach()
+endfunction()
 
 # 为最终固件目标设置链接脚本，并生成 ELF、HEX、BIN 与 MAP。
 function(generate_firmware_images target)

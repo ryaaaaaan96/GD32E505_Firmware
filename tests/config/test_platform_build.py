@@ -25,7 +25,6 @@ aclass_select(NAME external VERSION 1.0 PLATFORM Embedded OS FreeRTOS
     MCU gd32e505 LINKER_SCRIPT GD32E505_flash.ld TOOLCHAIN GCC PRODUCT_DIR "{root}")
 project(external LANGUAGES C ASM)
 aclass_initialize()
-include("{root}/cmake/AclassLibraries.cmake")
 aclass_add_libraries(CONFIG_FILE "{root}/config/aclass_config.cmake")
 add_executable(external main.c)
 target_link_libraries(external PRIVATE aCore aDrv aOS aclass_project_options)

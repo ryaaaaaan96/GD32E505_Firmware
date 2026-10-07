@@ -168,7 +168,7 @@ docs 只维护以下四份现行说明，不保留旧方案和迁移过程：
 任务栈以字节配置（APP_*_STACK_BYTES / AOS_WORKER_STACK_BYTES），任务入口允许
 自然返回。Shell 每轮最多读取 64 字节，成功后继续处理，仅空读或错误时退避。
 OS 分配失败记录诊断后返回，应用决定 fatal 策略。当前 FreeRTOS 时基固定为
-32 位 tick / 1000 Hz。可复用库入口为 cmake/AclassLibraries.cmake，产品 app 单独创建。
+32 位 tick / 1000 Hz。统一构建入口为 cmake/Aclass.cmake，产品 app 单独创建。
 
 VS Code 的 clangd 通过根目录 `.clangd` 读取 `build/Debug/compile_commands.json`，
 头文件路径、功能宏和 ARM 参数均跟随真实构建。首次打开或修改构建配置后运行

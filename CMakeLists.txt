@@ -25,6 +25,5 @@ project(
 
 aclass_initialize()
 
-include(cmake/AclassLibraries.cmake)
 aclass_add_libraries(CONFIG_FILE "${ACLASS_CONFIG_FILE}")
 add_subdirectory(app)

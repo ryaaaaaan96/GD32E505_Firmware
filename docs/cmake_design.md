@@ -11,7 +11,7 @@
 | config/mcu_gd32e505.cmake | CPU/FPU、主频、厂商宏、startup variant、调试器件名 |
 | config/aclass_config.cmake | 产品功能、device 能力、driver 请求、worker 参数、数据库后端 |
 | config/freeRTOS_config.cmake | FreeRTOS port 与项目参数覆盖 |
-| cmake/Aclass.cmake | 工程选择、公共构建选项、产物与调试元数据 |
+| cmake/Aclass.cmake | 工程选择、公共构建选项、库加载、产物与调试元数据 |
 | cmake/aclass_resolve.cmake | 校验请求及跨层依赖，输出有效配置 |
 | cmake/toolchains/GCC.cmake | 编译器、CPU/FPU 参数和 binutils |
 | 各层 CMakeLists.txt | 消费有效配置，选择源码、生成头文件和声明 target 依赖 |
@@ -23,9 +23,12 @@
 
 1. include Aclass.cmake，调用 `aclass_select()`，在 project() 前选择工具链和 MCU。
 2. project() 启用编译器，aclass_initialize() 设置 C11、输出目录和选项 target。
-3. include AclassLibraries.cmake，调用 aclass_add_libraries(CONFIG_FILE ...)。
+3. 直接调用 aclass_add_libraries(CONFIG_FILE ...)，无需再加载其他构建入口。
 4. 库入口加载产品配置并执行 resolver，再加入 platform、device、func。
 5. 产品自行加入 app，由 app 创建 ELF。
+
+顶层只需 include 一次 `cmake/Aclass.cmake`。配置检查保留在
+`cmake/aclass_resolve.cmake`，由库加载入口内部执行，也可以独立运行配置测试。
 
 MCU gd32e505 映射到 config/mcu_gd32e505.cmake，TOOLCHAIN GCC 映射到
 cmake/toolchains/GCC.cmake。链接脚本相对工程根目录解析，也接受绝对路径。
@@ -122,7 +125,8 @@ MCU profile 和链接脚本从产品目录解析，工具链脚本从平台库�
 `ACLASS_FREERTOS_CONFIG_FILE` 可显式指定 OS 参数文件；默认产品的
 config/freeRTOS_config.cmake。平台库不再根据顶层 CMAKE_SOURCE_DIR 寻找产品配置。
 
-独立产品在 project() 前调用 aclass_select，之后调用 aclass_initialize 和
+独立产品只需加载 cmake/Aclass.cmake，在 project() 前调用 aclass_select，
+之后调用 aclass_initialize 和
 aclass_add_libraries(CONFIG_FILE <绝对路径>)，最后自行创建应用目标。
 库入口不创建 main 或固件目标，构建产物仍使用顶层统一 lib/bin 目录。
 当前只实现 Embedded/FreeRTOS，选择其他后端仍明确报错。
