@@ -22,7 +22,9 @@
 板级实例位于 app/devices/system/app_system_flash.c，句柄私有。
 aSystemInit 在 Shell 初始化之后调用 appSystemFlashInit，启动只探测，
 不执行编程或擦除。成功时打印 JEDEC ID、容量和擦除粒度；失败时返回错误。
-Flash 具体型号仍需通过实际板子核对，当前没有上板验证结论。
+已有用户反馈：探测到 JEDEC `C8 40 17`、8 MiB / 4 KiB，
+`flash test 0x7FF000` 的基础擦写回读通过。完整器件型号、SFDP、写保护和
+故障时序仍需按实际板卡验证，详见[验证状态](../../docs/spi_flash_design.md#验证状态与后续工作)。
 
 ## 使用
 

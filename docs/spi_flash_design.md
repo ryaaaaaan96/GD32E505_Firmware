@@ -1,42 +1,44 @@
-# Flash25Q / SFUD / SPI / QSPI 整体设计
+# Flash25Q、SFUD 与 SPI 存储链路
+
+[返回文档索引](README.md)
 
 ## 状态与范围
 
 沿用 `device/aDev_Flash25q` 和 `aDevFlash25q` 命名，不新增 a25q。
 当前已完成 SFUD 封装、同步 SPI 后端和 SPI1 板级初始化。
-QSPI 后端仍是后续设计，尚未接入；不能宣称全链路已上板验证。
+QSPI 后端尚未接入，后文单独列出其设计约束。
 SFUD 已下载到 `device/aDev_Flash25q/SFUD/`，上游提交为
 `6b4bef82e6c603b783a17968f1b75da89cc5e2f8`。
 
-本阶段实现以 SPI 板卡为准：封装 SFUD，并完善 SPI
-事务能力。不新增 aDevSpi、aDevQspi、aSerialMem 或 aMemory 模块。
-未来 func/aMemory 可以组合此设备接口，但分区、缓存、文件系统、磨损均衡
-和持久化策略不进入当前模块。
+当前 func/aMemory 已提供介质注册、分区和统一存储接口，aDataBase 封装
+FlashDB KV/TSDB，并通过 aMemory 访问本设备。分区、文件系统、磨损均衡
+和业务持久化策略不进入 Flash25Q。模块用法见
+[Flash25Q README](../device/aDev_Flash25q/README.md)。
 
 ## 整体链路与职责
 
 ```text
-应用业务（未来可接 aMemory / FlashDB）
-                    |
-          Read / Write / Erase / GetInfo
-                    |
-device/aDev_Flash25q：生命周期、请求检查、同步、超时、错误转换
-                    |
-               SFUD 官方核心
-          识别 / SFDP / 分页编程 / 擦除
-                    |
-             本项目 SFUD port
-           +--------+---------+
-           |                  |
-       SPI 事务适配        QSPI 命令适配
-           |                  |
-        aDrvSpi            aDrvQspi
-           |                  |
-        GD32 SPI           GD32 SQPI
+应用数据库操作 -> aDataBase / FlashDB -> aMemory 分区
+                                          |
+                               应用注册的介质回调
+                                          |
+应用直接操作 -> Read / Write / Erase / GetInfo
+                                          |
+                       aDevFlash25q 生命周期、同步、超时与错误
+                                          |
+                         SFUD 识别、SFDP、分页编程与擦除
+                                          |
+                         SFUD port -> SPI 事务适配 -> aDrvSpi
+                                          |
+                                      GD32 SPI
 ```
 
 应用设备初始化层知道控制器、引脚和接线，业务读写层只知道 Flash 句柄
 和字节地址。SFUD 类型不进入公共业务 API。
+
+aMemory 不依赖 Flash25Q 类型，具体介质回调由应用设备层注册。
+数据库的 KV 索引与恢复规则见 [aDataBase](../func/aDataBase/README.md)，
+存储注册和分区边界见 [aMemory](../func/aMemory/README.md)。
 
 aDrv 不依赖 SFUD、aOS、系统时间或堆分配；提供硬件配置、传输推进、
 完成查询和中止恢复。device 的 port 负责等待、总线互斥、deadline 和
@@ -53,8 +55,7 @@ device/aDev_Flash25q/
 ├── config/                        项目 SFUD 配置
 ├── port/                          项目移植实现
 │   ├── aDev_flash25q_sfud_port.c   SFUD 回调适配、芯片忙状态轮询
-│   ├── aDev_flash25q_spi_bus.c     SPI 总线事务、片选与字节收发
-│   └── aDev_flash25q_qspi.c        尚未实现
+│   └── aDev_flash25q_spi_bus.c     SPI 总线事务、片选与字节收发
 ├── SFUD/                          官方仓库，保持原样
 │   └── sfud/{inc,src,port}/
 └── CMakeLists.txt
@@ -91,64 +92,24 @@ SPI 事务。后者管理总线锁、片选和字节收发，不负责 Flash 命
 其静态存储布局放 instance 头文件。应用初始化层持有总线，负责先初始化总线、
 后初始化 Flash；先停止业务、销毁 Flash，再销毁总线。
 
-每个物理控制器只允许一个上下文。SPI 可以挂多个 CS；GD32 SQPI 首版
-仅允许一个受支持的器件连接，不假定其具有多个独立硬件片选。
+每个物理控制器只允许一个上下文。SPI 可以挂多个 CS；未来接入 GD32 SQPI
+时需单独确认片选能力，不能假定其具有多个独立硬件片选。
 其他模块共享 SPI 时必须使用同一控制器和同一总线锁，不得另建独立锁。
 总线对象记录借用计数，有 Flash 实例存活时拒绝销毁。
 
 控制器资源和 Flash 对象分开创建，避免初始化第二个器件时重置正在使用的
 控制器。跨实例生命周期操作由应用在初始化/关闭阶段串行编排。
 
-## 公共接口方案
+## 公共接口与所有权
 
-以下公共接口已实现，完整声明和约定以 aDev_flash25q.h 为准。
-
-```c
-typedef struct aDevFlash25qHandle aDevFlash25qHandle_t;
-typedef struct aDevFlash25qBus aDevFlash25qBus_t;
-
-typedef struct {
-    uint32_t address;
-    void *data;
-    size_t size;
-    aTimeout_t timeout;
-} aDevFlash25qReadRequest_t;
-
-typedef struct {
-    uint32_t address;
-    const void *data;
-    size_t size;
-    aTimeout_t timeout;
-} aDevFlash25qWriteRequest_t;
-
-typedef struct {
-    uint32_t address;
-    size_t size;
-    aTimeout_t timeout;
-} aDevFlash25qEraseRequest_t;
-
-aStatus_t aDevFlash25qInitStatic(
-    const aDevFlash25qConfig_t *config,
-    aDevFlash25qHandle_t *handle);
-aStatus_t aDevFlash25qCreate(
-    const aDevFlash25qConfig_t *config,
-    aDevFlash25qHandle_t **handle_out);
-aStatus_t aDevFlash25qRead(
-    aDevFlash25qHandle_t *handle,
-    const aDevFlash25qReadRequest_t *request);
-aStatus_t aDevFlash25qWrite(
-    aDevFlash25qHandle_t *handle,
-    const aDevFlash25qWriteRequest_t *request);
-aStatus_t aDevFlash25qErase(
-    aDevFlash25qHandle_t *handle,
-    const aDevFlash25qEraseRequest_t *request);
-aStatus_t aDevFlash25qGetInfo(
-    const aDevFlash25qHandle_t *handle,
-    aDevFlash25qInfo_t *info);
-```
+业务通过不透明 `aDevFlash25qHandle_t *` 访问设备，总线对象为
+`aDevFlash25qBus_t`。Read、Write、Erase 接收对应请求结构体，包含地址、
+缓冲区或长度，以及本次操作的总超时；GetInfo 返回探测信息。
+完整定义统一维护在
+[aDev_flash25q.h](../device/aDev_Flash25q/aDev_flash25q.h)，此处不复制函数声明。
 
 同时提供对应 StructInit、DeInitStatic、Destroy，以及总线配置和静态
-总线 Init/DeInit 接口。首版总线上下文由应用静态提供；Flash 对象支持
+总线 Init/DeInit 接口。当前总线上下文由应用静态提供；Flash 对象支持
 静态和动态两种创建。静态对象仍可能由 aOS 分配内部 mutex。
 
 配置包含：借用的 bus、CS、期望容量（0 表示采用探测结果）和初始化超时。
@@ -156,7 +117,7 @@ aStatus_t aDevFlash25qGetInfo(
 GetInfo 返回探测到的 JEDEC ID、容量和擦除粒度；不暴露
 SFUD 内部指针，不把应用配置容量伪装成探测结果。
 
-首版同步任务接口，不提供 ISR、异步提交或 flush。请求及数据仅在调用
+提供同步任务接口，不提供 ISR、异步提交或 flush。请求及数据仅在调用
 期间借用，返回后后端不得继续访问。状态使用 aStatus_t，不混用流式 errno。
 
 - Read：成功表示完整读取。
@@ -187,7 +148,7 @@ Read 尽量直接写入用户缓冲区；若后续 DMA 有对齐或可访问内�
 
 ## 同步策略
 
-当前 SFUD 的静态页缓冲区跨实例共享。首版采用一个模块级 SFUD mutex，
+当前 SFUD 的静态页缓冲区跨实例共享。封装采用一个模块级 SFUD mutex，
 覆盖每次完整 SFUD 调用，包括初始化、读、写、擦除。它同时承担设备操作
 串行保护，不再给每个 Flash 创建功能重复的操作锁。
 
@@ -203,7 +164,7 @@ SFUD 模块锁 → 控制器总线锁 → 硬件事务 → 释放总线锁
 ```
 
 等待 WIP 时不持有总线锁，因此其他非 SFUD 设备仍能访问共享控制器。
-SFUD 的 void lock/unlock 回调不能报告超时，首版不依赖这些回调获取锁；
+SFUD 的 void lock/unlock 回调不能报告超时，封装不依赖这些回调获取锁；
 由封装在调用 SFUD 前检查锁结果，避免失败后 SFUD 继续访问硬件。
 禁止绕过封装直接调用 SFUD，否则无法保证共享缓冲区和对象安全。
 
@@ -217,7 +178,7 @@ aDrv 只推进或查询硬件。port 根据剩余预算调用 aOS 等待，预�
 返回错误优先级：底层首错 → SFUD 错误映射 → 解锁错误。
 
 当前 SFUD wait_busy 在底层读状态失败时仍按 retry.times 重试。
-首版方案是把 RDSR 的 WIP 等待放入 port：
+当前把 RDSR 的 WIP 等待放入 port：
 
 1. 对 SFUD 的标准 RDSR 请求，在单次总线事务后检查 WIP。
 2. 忙时释放总线锁，按剩余预算让出 CPU，再发下一次 RDSR。
@@ -235,7 +196,7 @@ aDrv 只推进或查询硬件。port 根据剩余预算调用 aOS 等待，预�
 沿用 USART 的静态驱动句柄、厂商类型隔离与按配置裁剪。
 将控制器状态与每个从设备的 CS/配置区分开，避免共享控制器重复初始化。
 
-首版为 8 位主机、MSB、软件 CS、轮询传输；设备模式和分频在持有总线锁、
+当前为 8 位主机、MSB、软件 CS、轮询传输；设备模式和分频在持有总线锁、
 且总线空闲时配置。需要的底层能力为：
 
 - 配置初始化与参数能力检查。
@@ -251,7 +212,7 @@ port 在同一次 CS 下发送 SFUD 的整个 write_buf，再产生 read_size �
 最后一个 SPI 位已经发送。超时后先停止 DMA/控制器对缓冲区的访问再返回。
 恢复失败的总线进入 FAULT，后续操作返回 NOT_READY，显式重新初始化恢复。
 
-## QSPI aDrv 链路
+## QSPI 后续设计（未实现）
 
 QSPI 需要“结构化命令 + 数据 + 完成查询/中止”，与 SPI 字节串不同。
 wr 到 QSPI 的适配必须按当前支持的 SFUD 命令集合解析 opcode、地址字节、
@@ -277,7 +238,7 @@ qspi_read 直接转换官方格式，但需核对 alternate bytes、dummy cycles
 QSPI 路径的完整可用性属于实施验证项。不能因芯片提供 SQPI 外设就假定
 它等价于其他 MCU 的通用 QSPI 间接传输控制器。
 
-## 构建、应用和迁移
+## 构建与应用初始化
 
 保留 aFlash25q target 和 ADEV_FLASH25Q_ENABLE，后者目前依赖
 ADRV_MODULE_SPI_ENABLE。STATIC_ENABLE / DYNAMIC_ENABLE 已实现，
@@ -292,34 +253,26 @@ aclass_project_options。项目配置开启 SFUD 内部断言，关闭调试输�
 app/devices/system/app_system_flash.c 私有持有 bus 和 handle，使用
 ADRV_SPI_1 / PB13(SCK) / PB15(MOSI) / PB14(MISO) / PB12(CS)，
 Mode 0、64 分频。SPI 编号已改为 ADRV_SPI_0/1/2，与 GD32 完全一致。
-aSystemInit 在 Shell 后探测 Flash，打印探测信息，不自动擦写。
-FlashDB 后端已迁移到请求结构体，并从 GetInfo 获取真实擦除粒度。
-旧 Init/DeInit/GetSize/HandleIsValid/ChipErase 和指针式 IoCtl 已移除；
-整片擦除由显式全容量 Erase 请求表达，不保留兼容别名。
+aSystemInit 在 Shell 状态初始化后探测 Flash，启动信息先入队，不自动擦写。
+随后顶层依次注册 aMemory 分区、打开数据库及初始化其他服务，最后启动
+Shell 任务。Flash 设备初始化本身不初始化数据库。
+应用通过 GetInfo 获取真实容量和擦除粒度；整片擦除由显式全容量 Erase 请求表达。
 
-Linux 后端可在 port 层提供事务操作，公共设备读写语义保持一致；
+未来 Linux 后端可在 port 层提供事务操作，公共设备读写语义保持一致；
 不要求模拟 GD32 寄存器、GPIO 或中断模型。
 
-## 验收与后续工作
+## 验证状态与后续工作
 
-1. 项目 SFUD 配置及独立构建，核对上游 git diff 为空。
-2. 公共请求、静态/动态对象、生命周期与 SFUD port，使用真实 SFUD 核心
-   加模拟 Flash 总线测试，覆盖 JEDEC/SFDP 和参数表回退。
-3. SPI 事务实现，验证 CS 连续性、收发排空、错误恢复及共享控制器。
-4. QSPI 命令解析、模式映射与硬件可行性验证，通过后接入。
-5. FlashDB 调用方及文档迁移；构建 SPI-only、QSPI-only、双后端、关闭、
-   静态和动态配置，检查链接无缺失及无新增项目告警。
-6. 测试跨页写入、严格擦除范围、越界、锁失败、总超时、底层首错保留、
-   多实例静态缓冲区保护、初始化回滚、销毁所有权和超时后再次访问。
-7. 上板核对器件完整型号、控制器、引脚和安全测试区后，验证 ID、擦写回读、
-   CS 边界及恢复。普通读和快速读分别验证，不以编译通过替代硬件验证。
+主机测试使用真实 SFUD 核心和模拟 GPIO/SPI/aOS，覆盖分页、回读、严格擦除
+范围、越界、锁失败、总超时、首错保留、资源回滚与静动态对象；无 SFDP
+模型通过官方参数表回退。命令及构建矩阵见[验证指南](testing.md)。
 
-此设计不会自动解决 SQPI 的硬件限制。后续实现应先建立可靠的 SPI 路径，
-再按证据开放 QSPI 能力；官方 SFUD 源码默认保持不变。
+已有用户反馈的板上结果：SPI1 探测到 JEDEC `C8 40 17`，容量 8 MiB，
+擦除粒度 4 KiB；在 `0x7FF000` 执行一次 4 KiB 擦写回读，输出
+`Flash test PASS`。这证明该板该区域的基础 SPI 链路可用，不等于所有器件、
+SFDP 路径、写保护、故障恢复及掉电场景均已验证。
+操作步骤见[手动 Flash 测试](../app/flash_test/README.md)。
 
-### 本次验证范围
-
-Debug 固件以及 tests/flash25q 下的 host 与构建矩阵用于验证本实现。
-Host 使用真实 SFUD 核心、模拟 GPIO/SPI/aOS，执行静态、动态及两者同时
-启用的配置。它验证无 SFDP 器件的参数表回退，不替代真实型号的 SFDP、
-电气连接、CS 时序或上板擦写测试。
+后续先测量 SPI 吞吐、CPU 占用和 CS 时序，再决定块传输或 DMA 优化；
+QSPI 需完成前述命令映射与硬件可行性验证后才能接入。
+QSPI-only / 双后端配置属于未来验收范围，不是当前可用的构建模式。

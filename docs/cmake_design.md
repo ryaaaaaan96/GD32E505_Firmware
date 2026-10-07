@@ -1,15 +1,17 @@
 # CMake 构建与配置
 
+[返回文档索引](README.md)
+
 本文描述当前实现；后端为 `PLATFORM Embedded / OS FreeRTOS`，Linux/裸机尚未实现。
 构建、调试命令见[根 README](../README.md)。
 
 ## 配置归属
 
 | 位置 | 职责 |
-|---|---|
+| --- | --- |
 | 根 CMakeLists.txt | 固件名、版本、平台、OS、MCU、工具链、链接脚本和各层组织 |
 | config/mcu_gd32e505.cmake | CPU/FPU、主频、厂商宏、startup variant、调试器件名 |
-| config/aclass_config.cmake | 产品功能、device 能力、driver 请求、worker 参数、数据库后端 |
+| config/aclass_config.cmake | 产品功能、device/driver 能力、worker 参数及应用 Demo 开关 |
 | config/freeRTOS_config.cmake | FreeRTOS port 与项目参数覆盖 |
 | cmake/Aclass.cmake | 工程选择、公共构建选项、库加载、产物与调试元数据 |
 | cmake/aclass_resolve.cmake | 校验请求及跨层依赖，输出有效配置 |
@@ -26,6 +28,9 @@
 3. 直接调用 aclass_add_libraries(CONFIG_FILE ...)，无需再加载其他构建入口。
 4. 库入口加载产品配置并执行 resolver，再加入 platform、device、func。
 5. 产品自行加入 app，由 app 创建 ELF。
+
+库入口将模块配置及 `APP_*` 产品配置传回调用目录，应用据此选择源文件。
+应用开关的校验与依赖裁剪由应用 CMake 负责，不让通用 resolver 固定板级方案。
 
 顶层只需 include 一次 `cmake/Aclass.cmake`。配置检查保留在
 `cmake/aclass_resolve.cmake`，由库加载入口内部执行，也可以独立运行配置测试。
@@ -49,7 +54,7 @@ resolver 原地规范化布尔值，不维护请求与结果两套开关。
 USART 开关按职责区分，不把硬件 DMA 与业务异步 API 合并：
 
 | 公开 C 宏 | 含义 |
-|---|---|
+| --- | --- |
 | `ADRV_USART_DMA_ENABLE` | driver USART 的 DMA 启停、进度查询等硬件操作 |
 | `ADEV_USART_DIRECT_ENABLE` | 同步用户缓冲区直传 API，不规定是否使用 DMA |
 | `ADEV_USART_ASYNC_ENABLE` | device 异步请求、取消、超时及统一 ISR 回调 |
@@ -60,20 +65,22 @@ DIRECT 不依赖 DMA，默认可使用轮询直传。DMA 数据路径由底层 D
 统一在初始化 mode 的 TX/RX 字段中选择；不能用 DIRECT 开关控制 DMA ring。
 当前 ASYNC 需要底层 DMA/IRQ，但不依赖同步 DIRECT API。私有的
 `ADEV_USART_DMA_BACKEND_ENABLE` 仅从底层能力派生，不是产品配置或公开 API 开关。
-底层现有函数名中的 `Async` 仍表示非阻塞硬件启动，本次配置重命名不修改函数 ABI。
+底层函数名中的 `Async` 表示非阻塞硬件启动，与业务异步请求的语义不同。
 
 TX/RX 模式和 IDLE 在初始化时选择。主要依赖如下：
 
 | 请求 | 必需能力 |
-|---|---|
+| --- | --- |
 | device USART | driver USART |
 | device INTERRUPT | driver USART interrupt |
 | device DIRECT | device USART；后端在初始化选择 |
 | device ASYNC | driver USART DMA、interrupt，不依赖 device DIRECT |
 | device RS485 | driver GPIO、USART interrupt |
 | driver USART DMA | driver USART、通用 DMA 驱动 |
-| 数据库 FLASH25Q 后端 | device Flash25Q，继而依赖 SPI/GPIO |
-| 数据库 CUSTOM 后端 | 调用者注入存储操作，不依赖 Flash25Q |
+| aDataBase | aMemory；只读点表契约由 aBusTable 提供，无需启用 aBus 运行库 |
+| aModbus | aBus，以及至少一种实例分配接口和主/从角色 |
+| 本产品数据库演示 | aDataBase、Flash25Q；应用通过 aMemory 注册介质和分区 |
+| 本产品 Modbus 演示 | aModbus 相应角色、USART 中断收发和 RS485 能力 |
 
 完整依赖以 resolver 为准。当前 app 的 LED、Shell 中断串口要求由
 app/devices/system/CMakeLists.txt 校验，不强加给所有应用。
@@ -94,12 +101,16 @@ app 不创建 Shell 任务和 console 资源。启用时 Shell 也不创建任�
 - aDrv 私有依赖 vendor target，厂商头和宏不向上层传播。
 - aOS 只公开 public/；FreeRTOS 头、port 和生成配置均为私有。
 - FreeRTOS kernel 为独立 OBJECT target，OS 适配位于 backend/freertos/。
+- aBusTable 是仅依赖 aLib 的 INTERFACE target，提供只读点表定义；
+  ABUS_ENABLE 关闭后仍可使用，aBus 运行库按配置另行生成。
 - aMemory 提供存储设备与分区接口；aDataBase 依赖 aMemory，封装 KV 和 TSDB。
 - aLog 封装 EasyLogger，输出由应用注入，不依赖 Shell 或数据库。
 - ALOG_ENABLE、ALOG_OUTPUT_LEVEL、ALOG_LINE_BUFFER_SIZE 在产品 CMake 配置。
 - 官方日志核心继承项目参数，异步、缓冲、pthread 和插件不参与构建。
-- FlashDB 以 aDataBaseFlashDb OBJECT target 合入 aDataBase；仅存储接口打补丁，
-  不编译 FAL，继承项目完整编译参数。
+- FlashDB 以 aDataBaseFlashDb OBJECT target 合入 aDataBase；本地源码包含
+  aMemory 存储适配和 KV 索引修改，不编译 FAL，继承项目完整编译参数。
+- aDataBase、aModbus 仅启用动态实例时，FlashDB / nanoMODBUS 的头和配置
+  保持私有；启用静态实例时，按布局需要公开相关依赖。
 - aclass_build_options 提供优化/调试选项；aclass_project_options 增加项目告警策略。
   上游内核和厂商源码不直接继承项目的严格告警策略。
 
@@ -115,9 +126,8 @@ firmware-<配置>.json。debug.py 从 JSON 读取 ELF 和调试器件名，支�
 构建缓存保存 MCU/toolchain 身份，切换时要求新构建目录。ARM_GCC_ROOT 是本机
 工具路径，仍使用 CACHE；CPU/FPU 或编译器安装路径变化也应重新建立构建目录。
 
-`cmake -P tests/config/test_resolver.cmake` 验证依赖成功/失败路径；
-`python3 tests/config/build_matrix.py` 验证六种 USART 组合、两个数据库后端的
-编译、链接和符号裁剪。构建验证不代表硬件验证。
+依赖成功/失败路径、各模块构建矩阵和外部产品验证的入口统一列在
+[验证指南](testing.md)。组合数量以脚本为准，构建验证不代表硬件验证。
 
 ## 外部产品接入
 
@@ -137,7 +147,18 @@ aclass_add_libraries(CONFIG_FILE <绝对路径>)，最后自行创建应用目�
 本示例布局为 config/aMemory_layout.h；当前容量为 8 MiB，KV 和 TSDB
 分区分别为 128 KiB 和 512 KiB。不同产品注册各自的布局。
 ADATABASE_STATIC_ENABLE / DYNAMIC_ENABLE 控制实例创建接口；至少启用一种。
-当前产品开启数据库，应用在 Flash 后打开已有实例，首次格式化由 db init 显式触发。
+当前产品开启数据库，顶层先初始化 Flash，再注册 aMemory 分区，随后由
+appDatabaseInit 初始化数据库模块并打开已有实例，首次格式化由 db init 显式触发。
+
+### Modbus 应用开关
+
+`APP_MODBUS_DEMO_ENABLE` 控制本产品示例；`APP_MODBUS_MASTER_ENABLE`
+选择主站或从站，当前默认 OFF（从站），导出为同名 0/1 C 宏。
+示例经过依赖裁剪后的启用状态由 `APP_MODBUS_ENABLE` C 宏表示。
+库的 `AMODBUS_CLIENT_ENABLE` / `AMODBUS_SERVER_ENABLE` 控制协议能力，
+与应用实际运行角色分开。缺少示例所需能力时，应用 Demo 一同裁剪。
+引脚、站号、速率和寄存器映射仍由应用 C 代码配置，详见
+[Modbus Demo](../app/modbus/README.md)。
 
 ### Flash25Q / SFUD 构建
 

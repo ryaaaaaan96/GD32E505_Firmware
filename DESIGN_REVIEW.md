@@ -1,7 +1,7 @@
 # GD32E505_Firmware 架构与接口问题讨论稿
 
-> 2026-10-07 的当前复查与修改见
-> [架构与性能复查](docs/architecture_review.md)。以下保留历史讨论及用户决定，
+> 当前文档入口见[文档索引](docs/README.md)。2026-10-07 的复查与修改见
+> [架构与性能复查](docs/reviews/2026-10-07_architecture_review.md)。以下保留历史讨论及用户决定，
 > 涉及队列、Shell、数据库存储接口等描述应以当前模块文档与源码为准。
 
 ## 最新决定：USART 主线精简
@@ -134,7 +134,7 @@ payload 不复制；回调、取消、deadline、TX 独占与工作项仍属于 
 
 ### 1. aDevUsart 公共句柄暴露内部实现状态
 
-现状：[`aDev_usart.h`](device/aDev_usart/aDev_usart.h) 的 `aDevUsartHandle_t` 包含 RX/TX ring 索引和计数、DMA 接收累计值、互斥锁、等待对象、回调指针及内部错误状态等字段。
+现状：[`aDev_usart.h`](device/aDev_usart/include/aDev_usart.h) 的 `aDevUsartHandle_t` 包含 RX/TX ring 索引和计数、DMA 接收累计值、互斥锁、等待对象、回调指针及内部错误状态等字段。
 
 影响：调用方需要分配完整句柄，因此内部字段虽然意图私有，仍然出现在公共头文件中。后续修改缓冲管理或并发实现时，可能影响调用方编译、结构体大小和接口稳定性；也容易让应用直接依赖实现细节。
 
@@ -150,7 +150,7 @@ payload 不复制；回调、取消、deadline、TX 独占与工作项仍属于 
 
 ### 2. aMemory 通过全局索引查找 Flash 设备
 
-现状：[`fal_flash25q_port.c`](func/aMemory/src/fal_flash25q_port.c) 使用 `aDevFlash25qGetDevice(AMEMORY_FLASH_DEVICE_INDEX)` 获取设备；设备注册表和设备数量定义在 [`aDev_flash25q.h`](device/aDev_Flash25q/aDev_flash25q.h)。分区策略则来自 `config/aMemory_flash_layout.h`。
+现状：`func/aMemory/src/fal_flash25q_port.c`（历史路径，已移除）使用 `aDevFlash25qGetDevice(AMEMORY_FLASH_DEVICE_INDEX)` 获取设备；设备注册表和设备数量定义在 [`aDev_flash25q.h`](device/aDev_Flash25q/aDev_flash25q.h)。分区策略则来自 `config/aMemory_flash_layout.h`。
 
 影响：aMemory 与 Flash25Q 的关联不是通过初始化参数显式传入，而是依赖设备先注册到全局索引。设备实例、初始化顺序和存储适配器之间存在隐式约定，也使多个存储实例或测试替身不易注入。
 
@@ -180,7 +180,7 @@ payload 不复制；回调、取消、deadline、TX 独占与工作项仍属于 
 
 ### 4. aDevUsart 配置结构直接包含 aDrv 配置
 
-现状：[`aDev_usart.h`](device/aDev_usart/aDev_usart.h) 中 `aDevUsartConfig_t` 嵌入 `aDrvUsartConfig_t`，应用通过该字段配置逻辑实例、引脚和串口参数。
+现状：[`aDev_usart.h`](device/aDev_usart/include/aDev_usart.h) 中 `aDevUsartConfig_t` 嵌入 `aDrvUsartConfig_t`，应用通过该字段配置逻辑实例、引脚和串口参数。
 
 影响：device 接口直接使用 aDrv 配置类型，减少了一层字段映射，也让 app 能显式控制硬件资源；另一方面，device 公共接口与 aDrv 配置结构演进绑定，device 层没有完全形成独立的串口设备配置语义。
 

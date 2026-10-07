@@ -13,11 +13,12 @@ system、startup、完整标准外设库和驱动实现全部由 `aDrv` 管理�
 - PA8 通过 `aDevLed` 设备驱动，每 500 ms 翻转一次；
 - LED 暂按低电平点亮配置，实物极性不同时修改 `app/devices/system/app_system_device.c` 中的实例配置。
 
-app 包含 Shell、SPI Flash、KV/TSDB 和日志测试；日志当前接 Shell 输出队列，
-测试命令见 [日志演示](app/log/README.md)。QSPI 和 RS485 默认关闭；
-RS485 属于 aDevUsart 可选功能，详见 [USART / RS485 统一设计](docs/usart_design.md)。
-Modbus 库默认编译，提供 RTU/TCP 主从站及 aBus 映射；当前未绑定板级端口，
-使用方式和验证范围见 [aModbus](func/aModbus/README.md)。
+app 包含 Shell、SPI Flash、KV/TSDB、SIG、日志及 Modbus 测试；日志当前接
+Shell 输出队列，测试命令见 [日志演示](app/log/README.md)。QSPI 默认关闭，
+RS485 已启用，详见 [USART / RS485 设计](docs/usart_design.md)。
+Modbus 库提供 RTU/TCP 主从站及 aBus 映射；板级 Demo 使用 USART2 PC10/PC11、
+PA15 手动 DE，115200 8N1，默认从站 1。主从切换、寄存器和联调方式见
+[Modbus Demo](app/modbus/README.md)，协议接口见 [aModbus](func/aModbus/README.md)。
 
 ## 分层
 
@@ -43,8 +44,8 @@ app                 main()、项目配置、显式初始化和测试
 ## aDrv 配置
 
 产品功能、device 能力和直接 driver 请求统一写在
-`config/aclass_config.cmake` 的分区中。`cmake/aclass_resolve.cmake` 集中推导
-跨层依赖，输出的有效配置控制：
+`config/aclass_config.cmake` 的分区中。`cmake/aclass_resolve.cmake` 集中校验
+跨层依赖，经过校验的配置控制：
 
 - 构建目录中 `gd32e50x_libopt.h` 的内容；
 - 实际参与编译的 GD32 SPL 源文件；
@@ -139,8 +140,8 @@ GDB 路径及生成的命令。远程主机的防火墙应仅向可信网络开�
 ### 设备初始化与跨文件访问
 
 设备配置位于 app/devices，业务模块在 aDrv/aOS 就绪后按实例调用 Init(&handle)。
-业务通过 appSystemConsoleInit 获取控制台流（read/write/flush），通过
-appSystemStatusLedInit 获取 LED 句柄；底层静态设备由 app/devices 持有。
+appSystemConsoleInit 内部创建 USART、绑定 aStream 并初始化 Shell，返回状态；
+appSystemStatusLedInit 返回 LED 借用句柄。设备资源由 app/devices 私有持有。
 详见 [应用设备映射与分层](docs/architecture.md)。
 ## 构建与任务边界
 
@@ -155,19 +156,14 @@ PLATFORM Embedded / OS FreeRTOS 是当前唯一实现的后端组合，不表示
 
 ## 设计文档
 
-docs 只维护以下四份现行说明，不保留旧方案和迁移过程：
+统一入口为 **[docs/README.md](docs/README.md)**，包含当前设计、模块说明、
+应用演示、验证指南和评审记录。建议先读架构，再读公共接口规范和构建配置。
 
-| 文档 | 内容 |
-|---|---|
-| [架构](docs/architecture.md) | 分层、依赖、应用设备初始化与句柄归属 |
-| [接口规范](docs/interface_contract.md) | 类型、错误、超时、缓冲区和任务上下文契约 |
-| [CMake](docs/cmake_design.md) | 配置来源、依赖解析、能力裁剪和构建产物 |
-| [USART](docs/usart_design.md) | Read/Direct/Async、生命周期、RS485 和当前限制 |
+模块 README 维护本地用法，带日期的评审快照放在 docs/reviews；
+根 DESIGN_REVIEW.md 保留历史讨论及用户决定。修改接口时同步公共头注释及
+相应现行文档，历史记录不作为当前 API 的依据。
 
-模块 README 用于模块本地使用说明；根 DESIGN_REVIEW.md 保留评审讨论及用户回复，
-属于历史记录，不是当前设计依据。修改接口时须同步公共头注释及相应现行文档。
-
-任务栈以字节配置（APP_*_STACK_BYTES / AOS_WORKER_STACK_BYTES），任务入口允许
+任务栈以字节配置（aOSTaskConfig_t.stack_bytes / AOS_WORKER_STACK_BYTES），任务入口允许
 自然返回。Shell 每轮最多读取 64 字节，成功后继续处理，仅空读或错误时退避。
 OS 分配失败记录诊断后返回，应用决定 fatal 策略。当前 FreeRTOS 时基固定为
 32 位 tick / 1000 Hz。统一构建入口为 cmake/Aclass.cmake，产品 app 单独创建。
