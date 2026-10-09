@@ -602,6 +602,9 @@ static aStatus_t operation_end(aModbusHandle_t *handle, nmbs_error error,
         }
     }
     if (result != NULL) result->exception = handle->exception;
+    if (handle->config.transport.finish != NULL) {
+        handle->config.transport.finish(handle->config.transport.context);
+    }
     atomic_store(&handle->active, A_FALSE);
     return status;
 }

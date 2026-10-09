@@ -2,6 +2,7 @@
 add_library(aModbus STATIC
     aModbus.c
     aModbus_bus.c
+    aModbus_rtu.c
     nanoMODBUS/nanomodbus.c
 )
 target_include_directories(aModbus PUBLIC
@@ -36,3 +37,10 @@ target_compile_definitions(aModbus ${nanomodbus_visibility}
     NMBS_SERVER_READ_WRITE_REGISTERS_DISABLED
     NMBS_SERVER_READ_DEVICE_IDENTIFICATION_DISABLED
 )
+
+# USART 适配是可选目标；只链接核心的 TCP/其他平台不依赖 aDev 或 aDrv。
+if(ADEV_USART_ENABLE AND ADEV_USART_INTERRUPT_ENABLE)
+    add_library(aModbusUsart STATIC aModbus_rtu_usart.c)
+    target_link_libraries(aModbusUsart PUBLIC aModbus aDevUsart
+        PRIVATE aOS aDrv aclass_project_options)
+endif()

@@ -8,13 +8,17 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 sources = [
     "tests/modbus_demo/test_demo.c", "tests/modbus/os_mock.c",
-    "app/modbus/app_modbus.c", "app/devices/modbus/app_modbus_port.c",
-    "app/task/modbus/app_modbus_task.c", "app/sig/app_sig.c",
+    "app/data/modbus/modbus_master.c",
+    "app/data/modbus/modbus_slave.c",
+    "app/devices/rs485/rs485_config.c",
+    "app/task/modbus/modbus_task.c", "app/data/sig/sig_data.c",
     "func/aModbus/aModbus.c", "func/aModbus/aModbus_bus.c",
+    "func/aModbus/aModbus_rtu.c", "func/aModbus/aModbus_rtu_usart.c",
     "func/aModbus/nanoMODBUS/nanomodbus.c", "func/aBus/src/aBus.c",
 ]
 includes = [
-    "app/modbus", "app/devices/modbus", "app/task/modbus", "app/sig",
+    "app", "app/data/modbus", "app/devices/rs485", "app/task/modbus",
+    "app/data/sig",
     "func/aModbus", "func/aModbus/nanoMODBUS", "func/aBus/include",
     "platform/aLib/include", "platform/aOS/public", "platform/aDrv/include",
     "device/aDev_usart/include",

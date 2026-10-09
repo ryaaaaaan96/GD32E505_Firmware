@@ -48,7 +48,7 @@ GPIO_DE 由 aDev 在发送前置为有效电平，TC 后释放。芯片自动 UA
 | Modbus Demo | USART2，PC10/PC11，PA15 DE，115200 8N1 | ISR 字节回调收帧，TX 中断缓冲，当前默认从站 1 |
 
 USART2 的 PC10/PC11 重映射与 PA15 的 JTAG 引脚释放由 aDrv 完成，保留 SWD。
-Modbus 寄存器、帧间隔限制及联调步骤见[应用 Demo](../app/modbus/README.md)。
+Modbus 寄存器、帧间隔限制及联调步骤见[应用 Demo](../app/data/modbus/README.md)。
 USART IDLE 只表示硬件空闲事件，不等同于协议帧结束。
 
 相关主机和构建检查见[验证指南](testing.md)，不替代真实 DMA、TC、DE

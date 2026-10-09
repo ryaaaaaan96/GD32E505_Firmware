@@ -1,7 +1,7 @@
 #include "aLog.h"
 #include "aShell.h"
 #include "aShell_config.h"
-#include "app_log.h"
+#include "log_service.h"
 #include "os_mock.h"
 #include <assert.h>
 #include <stdio.h>

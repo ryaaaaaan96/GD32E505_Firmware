@@ -14,7 +14,9 @@ aLog 封装 EasyLogger，提供单例日志、等级过滤、十六进制输出�
 
 aLog 不依赖 Shell、Flash25q 或 aDataBase，也不创建业务任务。
 应用通过 `aLogConfig_t.output` 注入后端，`context` 可以关联后端状态。
-当前应用适配在 `app/log/`，这里只调用 Shell 原始字节入队接口。
+当前输出适配与配置在 `app/devices/system/log_config.c`，
+这里只调用 Shell 原始字节入队接口。
+初始化入口和调试命令在 `app/task/system/`。
 Flash 日志后端尚未实现；后续可由应用回调复制入队，再在任务中写 TSDB。
 
 回调在日志调用者任务中持日志锁执行，不能重入 aLog。
@@ -117,4 +119,4 @@ cmake --build build/Debug --parallel 4
 后端错误、四线程并发、关闭宏、实际 Shell 队列与命令处理。
 使用 256 / 512 字节两种行容量，512 字节场景检查超过 Shell printf 容量的
 日志仍可通过原始字节队列输出。Release 矩阵验证关闭、独立后端、等级裁剪和行容量。
-板端操作见 [app/log/README.md](../../app/log/README.md)。
+板端操作见 [系统任务与日志调试](../../app/task/system/README.md)。

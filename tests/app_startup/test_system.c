@@ -1,16 +1,21 @@
-/* 使用真实 system.c，验证依赖顺序与失败时不开放 Shell 命令。 */
-#include "system.h"
+/* 使用真实 system_init.c，验证依赖顺序与失败时不开放 Shell 命令。 */
+#include "system_init.h"
 #include "aOS.h"
-#include "app_system_device.h"
-#include "app_system_flash.h"
-#include "app_system_memory.h"
-#include "app_database.h"
-#include "app_log.h"
+#include "system_device.h"
+#include "flash_device.h"
+#include "memory_config.h"
+#include "database_service.h"
+#include "log_service.h"
 #include "aLog.h"
-#include "app_sig.h"
-#include "app_sig_task.h"
-#include "app_modbus.h"
-#include "app_modbus_task.h"
+#include "sig_data.h"
+#include "sig_task.h"
+#include "app_config.h"
+#if APP_MODBUS_MASTER_ENABLE
+#include "modbus_master.h"
+#else
+#include "modbus_slave.h"
+#endif
+#include "modbus_task.h"
 #include "aShell.h"
 #include "aDrv_basic.h"
 #include <assert.h>
@@ -61,9 +66,13 @@ aStatus_t appSystemMemoryInit(void)
     return step();
 }
 aStatus_t appDatabaseInit(void) { assert(stage == 6U); return step(); }
-aStatus_t appSigInit(void) { assert(stage == 7U); return step(); }
+aStatus_t sigDataInit(void) { assert(stage == 7U); return step(); }
 aStatus_t appSigTaskInit(void) { assert(stage == 8U); return step(); }
-aStatus_t appModbusInit(void) { assert(stage == 9U); return step(); }
+#if APP_MODBUS_MASTER_ENABLE
+aStatus_t modbusMasterInit(void) { assert(stage == 9U); return step(); }
+#else
+aStatus_t modbusSlaveInit(void) { assert(stage == 9U); return step(); }
+#endif
 aStatus_t appModbusTaskInit(void) { assert(stage == 10U); return step(); }
 aStatus_t aLogDeInit(void) { return A_STATUS_OK; }
 aStatus_t aShellDeInit(void) { return A_STATUS_OK; }

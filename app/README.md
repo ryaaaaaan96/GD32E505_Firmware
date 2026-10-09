@@ -1,19 +1,71 @@
 # 应用层组织
 
+## 文件命名
+
+应用源文件采用小写下划线命名，使用“功能 + 职责”，省略重复的 `app_`
+前缀；配套头文件与源文件同名。目录表达所属模块，文件名表达具体职责。
+
+| 职责 | 文件名示例 |
+| --- | --- |
+| 点表、实例及数据访问 | `sig_data.c` |
+| 系统服务配置与生命周期 | `database_service.c`、`log_service.c` |
+| 协议角色及数据映射 | `modbus_master.c`、`modbus_slave.c` |
+| 任务创建与运行循环 | `modbus_task.c`、`sig_task.c` |
+| 板级资源配置与注册 | `rs485_config.c`、`memory_config.c`、`log_config.c` |
+| 设备实例与访问入口 | `system_device.c`、`flash_device.c` |
+| Shell 命令 | `sig_command.c`、`database_command.c`、`log_command.c` |
+| 标识定义与协议装配声明 | `sig_ids.h`、`sig_modbus_bind.h` |
+| 系统启动编排 | `system_init.c` |
+
+`main.c` 和 `flash_test.c` 保留已有的职责名称。应用总配置使用
+`app_config.h`，与 `main.c` 同级；这是集中配置的固定名称。
+文件名不要求与接口前缀一致，头文件保护宏仍使用 `APP_` 命名空间。
+data 目录按实际职责命名：SIG 数据入口使用 `sig_data`，协议使用
+`modbus_master` / `modbus_slave` 区分角色；系统服务可使用 `_service` 后缀。
+SIG 数据接口统一使用 `sigData...`，协议绑定入口使用 `sigModbus...`。
+Modbus 主从服务各自持有实例，提供 `modbusMaster...` / `modbusSlave...` 接口，
+由 `app_config.h` 选择角色；其他模块的函数、类型和配置宏沿用现有名称。
+
+## 目录职责
+
+应用只保留三个一级目录，入口和调试配置仍与目录同级：
+
+```text
+app/
+├── devices/           # 板级设备、存储和输出配置
+├── task/              # 系统启动、运行任务和系统调试入口
+│   └── system/        # 日志、数据库和可选 Flash 测试
+├── data/              # aBus 数据定义、访问及协议映射
+│   ├── sig/           # 点表、读写接口及测点命令
+│   └── modbus/        # 主从通信服务及数据映射
+├── main.c
+└── app_config.h
+```
+
+`data` 集中管理围绕 aBus 的应用逻辑：`sig` 提供点表和数据访问，
+`modbus` 将协议寄存器与点表连接，完成采集和转发。通用协议实现仍在 func 层。
+
 - 系统 console 实例随 ASHELL_ENABLE 启用或裁剪，不再单独设置应用 USART 开关。
-- devices/system/app_system_device.h：系统设备的 LED 句柄、console 流专用初始化接口。
-- devices/system/app_system_device.c：统一管理系统设备的 LED 与 USART 配置结构、缓冲区和私有句柄；参数直接在本文件中配置。
-- task/system/system.c：统一管理 LED 状态任务和 Shell 任务，内部逐项初始化设备、服务并创建任务；对外仅提供 aSystemInit。
-- task/system/system.h：声明系统服务启动入口 aSystemInit。
-- log/：日志输出适配和 Shell 测试命令；后端当前接 Shell 字节队列。
-- modbus/：RTU 主从演示与 aBus 寄存器映射，默认从站 1；
-  端口在 devices/modbus，通信任务在 task/modbus。
+- devices/system/system_device.h：系统设备的 LED 句柄、console 流专用初始化接口。
+- devices/system/system_device.c：统一管理系统设备的 LED 与 USART 配置结构、缓冲区和私有句柄；参数直接在本文件中配置。
+- task/system/system_init.c：统一管理 LED 状态任务和 Shell 任务，内部逐项初始化设备、服务并创建任务；对外仅提供 aSystemInit。
+- task/system/system_init.h：声明系统服务启动入口 aSystemInit。
+- devices/system/log_config.c：日志输出适配与配置，当前接 Shell 字节队列。
+- task/system/log_service.c：日志服务初始化；log_command.c 提供调试命令。
+- devices/system/database_config.c：数据库分区选择、超时和记录容量配置。
+- task/system/database_service.c：数据库实例管理和读写；database_command.c 提供调试命令。
+- app_config.h：当前应用的调试角色和站号配置，默认 Modbus 从站 1。
+- devices/rs485/：提供板载串口、TX 缓冲区和 DE 引脚配置。
+- data/sig/：应用点表、私有 aBus 实例及通用读写接口。
+- data/modbus/：主从演示、实例装配和 aBus 寄存器映射，默认从站 1；
+  RTU 分帧及串口适配由 func/aModbus 提供，通信任务在 task/modbus。
+- task/system/flash_test.c：手动擦写测试，默认不加入 CMake 源码列表。
 - main.c：初始化驱动和 OS，创建 appInitTask 后启动调度器；初始化任务完成系统功能初始化后通过 aOSTaskExit 自退出。
 
 每个实例由应用保证只调用一次 Init，直接返回底层初始化结果，不缓存阶段或错误。
 运行阶段传递已取得的句柄；不通过重复 Init 获取句柄，也不提供重入保护。
 无独立 Open、统一设备初始化入口或分散注册。仅启动阶段单线程调用。
-设备参数在 devices 下对应 .c 文件的配置结构及缓冲区声明中直接设置；任务栈、优先级和单次使用的延时在使用处设置。重复使用的状态灯闪烁周期保留为 system.c 内的具名常量。各头文件的包含保护宏保留原位，平台功能裁剪由 config 下的 CMake 配置控制。
+设备参数在 devices 下对应 .c 文件的配置结构及缓冲区声明中直接设置；任务栈、优先级和单次使用的延时在使用处设置。重复使用的状态灯闪烁周期保留为 system_init.c 内的具名常量。平台功能裁剪由 config 下的 CMake 配置控制。
 
 详见 [设备按实例初始化](../docs/architecture.md) 和 [接口规范](../docs/interface_contract.md)。
 
@@ -21,16 +73,19 @@
 
 业务任务统一归 app/task 所有，func 不创建/删除任务，也不配置任务优先级和栈大小。
 
-日志在 Shell 初始化完成、Shell 任务启动前初始化，不创建单独日志任务。
+日志由 aSystemInit 在 Shell 初始化完成后单独调用 appLogInit，
+Shell 任务在全部服务就绪后启动，不创建单独日志任务。
 Flash 探测、aMemory 分区注册、数据库和 SIG 初始化由 aSystemInit 显式编排；
 全部成功后才启动 Shell 任务。appSystemFlashInit 不再启动存储或数据库服务，
 appDatabaseInit 负责 aDataBaseInit 及打开应用数据库。启动失败不开放命令输入。
-`log test`、`log level verbose` 和 `log info` 的用法见 [日志演示](log/README.md)。
+数据库配置和 `db` 命令用法见 [数据库演示](task/system/database.md)。
+`log test`、`log level verbose` 和 `log info` 的用法见
+[系统任务与日志调试](task/system/README.md)。
 func 提供 Init/Process/DeInit 或事件处理入口；app 决定调用线程、周期和停止顺序。
 
 SIG 就绪后启动 Modbus 演示，使用 USART2 PC10/PC11、PA15 手动 DE、
 115200 8N1。主从切换和寄存器、Shell 联调步骤见
-[Modbus 演示](modbus/README.md)。
+[Modbus 演示](data/modbus/README.md)。
 销毁 func 实例前必须停止其调用者并等待在途操作结束，禁止强行删除持有模块锁的任务。
 system 设备公开 appSystemStatusLedInit 与 appSystemConsoleInit，保留按实例初始化，不做统一重初始化。
 
@@ -46,24 +101,24 @@ aDevUsartDestroy 回收；产品必须开启 ADEV_USART_DYNAMIC_ENABLE。
 
 ## SIG 数据与测试任务
 
-`app/sig` 持有私有 aBus handle，由 aSystemInit 在 Shell 初始化后
-调用 appSigInit，再启动 app/task/sig 的测试任务。关闭 Shell 时
+`app/data/sig` 持有私有 aBus handle，由 aSystemInit 在 Shell 初始化后
+调用 sigDataInit，再启动 app/task/sig 的测试任务。关闭 Shell 时
 数据与测试任务仍初始化；关闭 aBus 时一并裁剪。
 
-业务统一通过 `appSigSet(request)`、`appSigGet(request)` 整组读写。
+业务统一通过 `sigDataSet(request)`、`sigDataGet(request)` 整组读写。
 请求使用 aBusSetIndexRequest_t / aBusGetIndexRequest_t，通过对应
 StructInit 初始化后填写 sigIndex、缓冲区、长度和锁等待时间。
-sigIndex 是 app_sig_ids.h 的枚举下标，不是稳定 sigKey。
+sigIndex 是 sig_ids.h 的枚举下标，不是稳定 sigKey。
 未初始化返回 NOT_READY，未知下标返回 NOT_FOUND，长度错误返回
 INVALID_PARAM。请求与缓冲区只在调用期间借用。
 
 motor 初始值为转速 100、温度 25，转速允许 0..6000。
-Counter 初值为 0，在 app/task/sig/app_sig_task.c 中定义为静态变量，
+Counter 初值为 0，在 app/task/sig/sig_task.c 中定义为静态变量，
 通过旁边的 APP_SIG_BIND 分散注册绑定。任务每次延时
 1000 ms 后直接 counter++，UINT32_MAX 后回绕到零。
 实际周期包含调度时间，不作为精确计时器。
 
-表和 handle 均由 app_sig.c 私有持有。
+表和 handle 均由 sig_data.c 私有持有。
 APP_SIG_BIND 使用统一的 APP_SIG_DEVICE_ID 与参数下标，直接交给
 ABUS_RAM_BIND_EXPORT 注册。aBus 按 instanceID + deviceID + sigIndex 匹配，
 只使用 .abus_bindings 收集；描述和收集指针均为 const，存放 Flash。
@@ -77,7 +132,7 @@ ABUS_RAM_BIND_EXPORT 注册。aBus 按 instanceID + deviceID + sigIndex 匹配�
 
 ### Shell 命令
 
-命令在 app/sig/app_sig_command.c 注册，按 deviceID + sigIndex 数值访问：
+命令在 app/data/sig/sig_command.c 注册，按 deviceID + sigIndex 数值访问：
 
 - `sig get 1 1`：读取 Counter（APP_BUS_COUNTER）。
 - `sig set 1 1 100`：设置 Counter 为 100，任务随后继续自增。
@@ -85,11 +140,11 @@ ABUS_RAM_BIND_EXPORT 注册。aBus 按 instanceID + deviceID + sigIndex 匹配�
 当前 Shell 支持标量、RAW 和 STRUCT，类型和参数描述均来自点表。
 ID 和整数值采用十进制，RAW 使用十六进制；非法输入不修改数据。
 命令默认不等待锁，忙时返回错误，用户可重试。
-已删除 app/protocol 和 bus_demo，业务命令归 sig 模块管理。
+测点命令归 data/sig 管理；data/modbus 完成通信服务与测点的装配。
 
 当前应用挂载一张表，通用读写请求的 deviceID 使用 APP_SIG_DEVICE_ID。
 aBus 支持一个 handle 挂载多表；应用后续扩展时可传入表数组与表数量，
-并按 deviceID 校验和路由请求。Shell 显式接收 deviceID 和 sigIndex，通过 appSigGetInfo 查询类型和长度，
+并按 deviceID 校验和路由请求。Shell 显式接收 deviceID 和 sigIndex，通过 sigDataGetInfo 查询类型和长度，
 不维护测点类型表，也不引用具体测点枚举。
 
 ### 通用 SIG 命令

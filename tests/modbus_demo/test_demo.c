@@ -1,7 +1,18 @@
 /* 真实应用端口 + aModbus/nanoMODBUS + aBus，模拟串口线路。 */
-#include "app_modbus.h"
-#include "app_modbus_task.h"
-#include "app_sig.h"
+#include "app_config.h"
+#if APP_MODBUS_MASTER_ENABLE
+#include "modbus_master.h"
+#define testModbusInit modbusMasterInit
+#define testModbusProcess modbusMasterProcess
+#define testModbusDeInit modbusMasterDeInit
+#else
+#include "modbus_slave.h"
+#define testModbusInit modbusSlaveInit
+#define testModbusProcess modbusSlaveProcess
+#define testModbusDeInit modbusSlaveDeInit
+#endif
+#include "modbus_task.h"
+#include "sig_data.h"
 #include "aDev_usart.h"
 #include "aOS.h"
 #include <assert.h>
@@ -10,6 +21,7 @@
 
 void testAdvanceTime(uint32_t ms);
 unsigned testAllocations(void);
+void testFailAllocation(aBool_t fail);
 static uint32_t counter;
 APP_SIG_BIND(counter_binding, APP_BUS_COUNTER, counter);
 static uint8_t input[600], output[600];
@@ -17,6 +29,7 @@ static size_t input_size, input_pos, output_size;
 static unsigned opened, closed, waits;
 static uint32_t input_at;
 static aBool_t overflow, fail_task, close_busy;
+static aBool_t fail_clock, fail_serial;
 static aDevUsartHandle_t *device;
 static char dynamic_device;
 static aDevUsartRxByteCallback_t rx_callback;
@@ -33,12 +46,17 @@ static void deliver(void)
             rx_callback(rx_context, input[input_pos++], A_STATUS_OK);
     }
 }
-aStatus_t aDrvCycleCounterEnable(void) { return A_STATUS_OK; }
+aStatus_t aDrvCycleCounterEnable(void)
+{ return fail_clock ? A_STATUS_UNSUPPORTED : A_STATUS_OK; }
 uint32_t aDrvGetCoreClockHz(void) { return 180000000U; }
 uint32_t aDrvCycleCounterRead(void)
 { return aOSGetUptimeMs() * 180000U + cycle_bias; }
 void aOSCriticalEnter(void) {}
 void aOSCriticalExit(void) {}
+void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
+{
+    memset(config, 0, sizeof(*config));
+}
 void aDevUsartClearRxError(aDevUsartHandle_t *handle) { (void)handle; }
 
 #if APP_MODBUS_MASTER_ENABLE
@@ -95,6 +113,7 @@ static void check_config(const aDevUsartConfig_t *config)
 aStatus_t aDevUsartCreate(const aDevUsartConfig_t *config,
                           aDevUsartHandle_t **out)
 {
+    if (fail_serial) return A_STATUS_ERROR;
     check_config(config);
     device = (aDevUsartHandle_t *)&dynamic_device;
     *out = device;
@@ -106,6 +125,7 @@ aStatus_t aDevUsartInitStatic(const aDevUsartConfig_t *config,
                               aDevUsartHandle_t *handle)
 {
     (void)dynamic_device;
+    if (fail_serial) return A_STATUS_ERROR;
     check_config(config);
     device = handle;
     return A_STATUS_OK;
@@ -202,7 +222,7 @@ static appBusMotor_t motor_get(void)
     get.sigIndex = APP_BUS_MOTOR;
     get.dst = &motor;
     get.size = sizeof(motor);
-    assert(appSigGet(&get) == A_STATUS_OK);
+    assert(sigDataGet(&get) == A_STATUS_OK);
     return motor;
 }
 
@@ -217,7 +237,7 @@ static void write_speed(uint8_t unit, uint32_t value)
 
 static void recover(void)
 {
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(output_size == 0U);
 }
 
@@ -226,51 +246,51 @@ static void server_tests(void)
     const uint8_t read[] = {1, 3, 0, 0, 0, 6};
     counter = 0x12345678U;
     feed(read, sizeof(read));
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(output_size == 17U && crc(output, output_size) == 0U);
     assert(memcmp(output, (uint8_t[]){1, 3, 12, 0x12, 0x34,
            0x56, 0x78, 0, 0, 0, 100, 0, 0, 0, 25}, 15U) == 0);
     assert(waits == 2U); /* 发送前检查和发送后 TC 确认。 */
     write_speed(1U, 4321U);
-    assert(appModbusProcess() == A_STATUS_OK && output_size == 8U);
+    assert(testModbusProcess() == A_STATUS_OK && output_size == 8U);
     assert(motor_get().speed == 4321U);
     assert(motor_get().temperature == 25);
     write_speed(1U, 6001U);
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(output_size == 5U && output[1] == 0x90 && output[2] == 3U);
     assert(motor_get().speed == 4321U);
     feed((uint8_t[]){1, 6, 0, 2, 0, 1}, 6U);
-    assert(appModbusProcess() == A_STATUS_OK && output[2] == 2U);
+    assert(testModbusProcess() == A_STATUS_OK && output[2] == 2U);
     assert(motor_get().speed == 4321U);
     feed((uint8_t[]){1, 16, 0, 4, 0, 2, 4, 255, 255, 255, 236}, 11U);
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().temperature == -20);
     write_speed(0U, 456U);
-    assert(appModbusProcess() == A_STATUS_OK && output_size == 0U);
+    assert(testModbusProcess() == A_STATUS_OK && output_size == 0U);
     assert(motor_get().speed == 456U);
     write_speed(2U, 789U);
-    assert(appModbusProcess() == A_STATUS_OK && output_size == 0U);
+    assert(testModbusProcess() == A_STATUS_OK && output_size == 0U);
     assert(motor_get().speed == 456U);
     write_speed(1U, 789U);
     input[input_size - 1U] ^= 1U;
-    assert(appModbusProcess() != A_STATUS_OK && output_size == 0U);
+    assert(testModbusProcess() != A_STATUS_OK && output_size == 0U);
     assert(motor_get().speed == 456U);
     recover();
     write_speed(1U, 789U);
     input[input_size++] = 0U;
-    assert(appModbusProcess() != A_STATUS_OK && output_size == 0U);
+    assert(testModbusProcess() != A_STATUS_OK && output_size == 0U);
     assert(motor_get().speed == 456U);
     recover();
     write_speed(1U, 789U);
     input_size = 3U;
-    assert(appModbusProcess() != A_STATUS_OK && output_size == 0U);
+    assert(testModbusProcess() != A_STATUS_OK && output_size == 0U);
     recover();
     write_speed(1U, 789U);
     overflow = A_TRUE;
-    assert(appModbusProcess() == A_STATUS_OK && output_size == 0U);
+    assert(testModbusProcess() == A_STATUS_OK && output_size == 0U);
     recover();
     write_speed(1U, 789U);
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 789U);
     /* 消费任务暂停，两帧之间只有 2 ms，不能合并成一个 ADU。 */
     testAdvanceTime(3U);
@@ -280,9 +300,9 @@ static void server_tests(void)
     write_speed(0U, 222U);
     deliver();
     testAdvanceTime(2U);
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 111U);
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 222U);
     /* 完成时间差 800 us，扣除字符时间后仍小于 t1.5。 */
     testAdvanceTime(3U);
@@ -292,7 +312,7 @@ static void server_tests(void)
         rx_callback(rx_context, input[i], A_STATUS_OK);
     }
     input_pos = input_size;
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 444U);
     /* DWT 在两帧间回绕，仍须保持帧边界和顺序。 */
     testAdvanceTime(30U);
@@ -303,9 +323,9 @@ static void server_tests(void)
     write_speed(0U, 666U);
     deliver();
     testAdvanceTime(2U);
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 555U);
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 666U);
     /* 三槽满后丢弃新帧，不能覆盖未消费的写入。 */
     for (uint32_t value = 1U; value <= 4U; value++) {
@@ -315,10 +335,10 @@ static void server_tests(void)
     }
     testAdvanceTime(3U);
     for (uint32_t value = 1U; value <= 3U; value++) {
-        assert(appModbusProcess() == A_STATUS_OK);
+        assert(testModbusProcess() == A_STATUS_OK);
         assert(motor_get().speed == value);
     }
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 3U);
     /* 帧内 1 ms 间隔超过 t1.5，不能执行写入。 */
     testAdvanceTime(3U);
@@ -328,28 +348,28 @@ static void server_tests(void)
         rx_callback(rx_context, input[i], A_STATUS_OK);
     }
     input_pos = input_size;
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 3U);
 }
 #else
 static void master_tests(void)
 {
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 4321U);
     assert(motor_get().temperature == 25);
     response_value = 6001U;
-    assert(appModbusProcess() != A_STATUS_OK);
+    assert(testModbusProcess() != A_STATUS_OK);
     assert(motor_get().speed == 4321U);
     response_enabled = A_FALSE;
-    assert(appModbusProcess() == A_STATUS_TIMEOUT);
+    assert(testModbusProcess() == A_STATUS_TIMEOUT);
     assert(motor_get().speed == 4321U);
     response_enabled = A_TRUE;
     response_value = 321U;
     response_extra = A_TRUE;
-    assert(appModbusProcess() != A_STATUS_OK);
+    assert(testModbusProcess() != A_STATUS_OK);
     assert(motor_get().speed == 4321U);
     response_extra = A_FALSE;
-    assert(appModbusProcess() == A_STATUS_OK);
+    assert(testModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 321U);
 }
 #endif
@@ -357,19 +377,31 @@ static void master_tests(void)
 int main(void)
 {
     unsigned baseline;
-    assert(appModbusProcess() == A_STATUS_NOT_READY);
-    assert(appModbusInit() == A_STATUS_NOT_READY);
+    assert(testModbusProcess() == A_STATUS_NOT_READY);
+    assert(testModbusInit() == A_STATUS_NOT_READY);
     assert(opened == closed);
-    assert(appSigInit() == A_STATUS_OK);
+    assert(sigDataInit() == A_STATUS_OK);
     baseline = testAllocations();
-    assert(appModbusInit() == A_STATUS_OK);
-    assert(appModbusInit() == A_STATUS_BUSY);
+    fail_clock = A_TRUE;
+    assert(testModbusInit() == A_STATUS_UNSUPPORTED);
+    fail_clock = A_FALSE;
+    fail_serial = A_TRUE;
+    assert(testModbusInit() == A_STATUS_ERROR);
+    fail_serial = A_FALSE;
+#if AMODBUS_DYNAMIC_ENABLE
+    testFailAllocation(A_TRUE);
+    assert(testModbusInit() == A_STATUS_NO_MEMORY);
+    testFailAllocation(A_FALSE);
+#endif
+    assert(opened == closed && testAllocations() == baseline);
+    assert(testModbusInit() == A_STATUS_OK);
+    assert(testModbusInit() == A_STATUS_BUSY);
     fail_task = A_TRUE;
     assert(appModbusTaskInit() == A_STATUS_NO_MEMORY);
-    assert(appModbusProcess() == A_STATUS_NOT_READY);
+    assert(testModbusProcess() == A_STATUS_NOT_READY);
     assert(opened == closed && testAllocations() == baseline);
     fail_task = A_FALSE;
-    assert(appModbusInit() == A_STATUS_OK);
+    assert(testModbusInit() == A_STATUS_OK);
     assert(appModbusTaskInit() == A_STATUS_OK);
 #if APP_MODBUS_MASTER_ENABLE
     master_tests();
@@ -377,10 +409,13 @@ int main(void)
     server_tests();
 #endif
     close_busy = A_TRUE;
-    assert(appModbusDeInit() == A_STATUS_BUSY);
-    assert(appModbusProcess() == A_STATUS_NOT_READY);
+    assert(testModbusDeInit() == A_STATUS_BUSY);
+    assert(testModbusProcess() == A_STATUS_NOT_READY);
+    assert(testModbusInit() == A_STATUS_BUSY);
+    /* 关闭未完成时 RX 仍可能到来，适配实例不能提前释放。 */
+    rx_callback(rx_context, 0U, A_STATUS_ERROR);
     close_busy = A_FALSE;
-    assert(appModbusDeInit() == A_STATUS_OK);
+    assert(testModbusDeInit() == A_STATUS_OK);
     assert(opened == closed && testAllocations() == baseline);
     puts("Modbus demo application/transport/data/lifecycle passed");
     return 0;

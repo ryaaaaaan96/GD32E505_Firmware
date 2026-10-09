@@ -137,9 +137,13 @@ aModbus 在模块内部提供地址段、SIG 映射及编码转换，不设置�
 主站从远端采集后发布 aBus，从站根据地址映射读写 aBus。
 详见 [aModbus](../func/aModbus/README.md)。
 
-当前板级[Modbus Demo](../app/modbus/README.md)使用 USART2 和 PA15 手动 DE，
-默认 RTU 从站 1，可通过应用宏切换为主站。协议配置、硬件端口和通信任务
-分别位于 app/modbus、app/devices/modbus、app/task/modbus。
+当前板级[Modbus Demo](../app/data/modbus/README.md)使用 USART2 和 PA15 手动 DE，
+默认 RTU 从站 1，可通过应用宏切换为主站。应用协议配置位于
+app/data/modbus，串口参数位于 app/devices/rs485，通信任务位于
+app/task/modbus。func/aModbus 的通用 RTU 实例负责分帧、时序与事务收尾；
+可选 aModbusUsart 目标负责串口生命周期、ISR 回调和周期计数适配。
+通用 RTU 通过回调使用时基、同步及收发，不依赖设备或具体芯片。
+仅链接 aModbus 的 TCP/其他平台不会引入 aDevUsart 和 aDrv 依赖。
 SIG 模块通过内部装配接口借用私有 aBus handle，不向业务公开全局 handle。
 
 工程不设置集中式 board 目录。引脚、外部器件型号、总线参数和设备句柄由使用它
@@ -154,24 +158,30 @@ SIG 模块通过内部装配接口借用私有 aBus handle，不向业务公开�
 
 ## 应用设备初始化与句柄访问
 
-当前 app/devices/system/app_system_device.c 持有 console 与 LED 的配置、缓冲区和
+当前 app/devices/system/system_device.c 持有 console 与 LED 的配置、缓冲区和
 私有句柄。LED 对象静态存储，console 通过 Create 动态创建；用途及类型明确的
-接口放在同目录 app_system_device.h。
+接口放在同目录 system_device.h。
 通用 device 层仍分别提供 aDevUsart 和 aDevLed，不因为应用组合而合并设备类型。
 
 启动顺序为 main → aDrvInit → aOSInit → 创建 appInit 任务 → aOSRun。
 调度器启动后，由 main.c 内的 appInitTask 调用 aSystemInit。状态灯任务可先运行；
-控制台及 Shell 先完成状态初始化，启动文字仅入队。随后按顺序初始化 Flash、
+控制台及 Shell 先完成状态初始化，启动文字仅入队。随后单独初始化日志、Flash、
 aMemory 分区、数据库、SIG 服务及测试任务，再初始化 Modbus 和通信任务，
 最后创建 Shell 任务，开放命令输入。对应功能关闭时跳过该步骤。
 数据库模块初始化由 appDatabaseInit 管理，Flash 初始化只负责设备探测。
+产品数据库配置位于 app/devices/system/database_config.c；KV/TSDB 实例管理
+与调试命令位于 app/task/system/database_service.c、database_command.c。
 初始化任务优先级为 HIGH，阻塞期间允许已就绪的状态灯任务运行；Shell 命令
 不会与服务初始化交错。初始化成功后自删除，不复用为 workqueue。
 初始化任务通过 aOSTaskExit() 自退出，无需保存全局任务句柄；
 aOSDeleteTask(handle) 仍用于删除指定任务，传入 NULL 保持空操作语义。
-system.c 内部的静态函数 statusInit 调用 appSystemStatusLedInit 并创建状态任务；
-同文件内 shellInit 初始化控制台、Shell 和日志；shellTaskStart 在服务就绪后
-创建调用 Process 的任务。中途失败向 main 返回错误，不启动 Shell，不自动重试；
+system_init.c 内部的静态函数 statusInit 调用 appSystemStatusLedInit 并创建状态任务；
+同文件内 shellInit 初始化控制台和 Shell，aSystemInit 随后单独调用 appLogInit；
+日志输出适配及配置位于 app/devices/system/log_config.c，初始化入口和
+调试命令位于 app/task/system/log_service.c、log_command.c。
+shellTaskStart 在服务就绪后创建调用 Process 的任务。日志初始化或 Shell 任务
+创建失败时，由 aSystemInit 清理对应的日志、Shell 资源。
+中途失败向 main 返回错误，不启动 Shell，不自动重试；
 已成功初始化的其他服务保留，仍按启动失败停机策略处理。
 不存在集中初始化全部实例的注册表、链接段或分散加载。
 

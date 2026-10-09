@@ -1,7 +1,7 @@
 #define main database_fixture_main
 #include "test_database.c"
 #undef main
-#include "app_database.h"
+#include "database_service.h"
 #include <stdarg.h>
 
 int test_database_command(int argc, char **argv);

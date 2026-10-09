@@ -19,7 +19,7 @@
 | 分频 | 64，基于控制器输入时钟 |
 | 容量 | JEDEC ID / SFDP / SFUD 参数表探测 |
 
-板级实例位于 app/devices/system/app_system_flash.c，句柄私有。
+板级实例位于 app/devices/system/flash_device.c，句柄私有。
 aSystemInit 在 Shell 初始化之后调用 appSystemFlashInit，启动只探测，
 不执行编程或擦除。成功时打印 JEDEC ID、容量和擦除粒度；失败时返回错误。
 已有用户反馈：探测到 JEDEC `C8 40 17`、8 MiB / 4 KiB，
@@ -40,8 +40,9 @@ aSystemInit 在 Shell 初始化之后调用 appSystemFlashInit，启动只探测
   先关闭借用实例，再重新初始化 bus。
 
 应用可以使用 appSystemFlashRead/Write/Erase/GetInfo，业务代码不接触 SPI。
-擦写测试由独立的 [app/flash_test](../../app/flash_test/README.md) 提供，
-通过 Shell 的 flash test 命令手动触发，不在启动时自动执行。
+擦写测试位于系统调试入口，见 [Flash 手动测试](../../app/task/system/flash_test.md)。
+默认不编译；在 app/task/system/CMakeLists.txt 中加入 flash_test.c 后，
+通过 Shell 的 flash test 命令手动触发。
 
 ## 同步与官方源码
 

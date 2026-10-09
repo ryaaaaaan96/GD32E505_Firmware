@@ -59,9 +59,11 @@ int test_shell_print(const char *format, ...);
             subprocess.run([executable], check=True, timeout=20)
         executable = str(Path(directory) / f"command-{static}-{dynamic}")
         subprocess.run(command + ["-DASHELL_ENABLE=1", "-I", directory,
-                       "-I", str(root / "app/database"),
+                       "-I", str(root / "app/devices/system"),
+                       "-I", str(root / "app/task/system"),
                        str(root / "tests/database/test_command.c"),
-                       str(root / "app/database/app_database.c"),
-                       str(root / "app/database/app_database_command.c")]
+                       str(root / "app/devices/system/database_config.c"),
+                       str(root / "app/task/system/database_service.c"),
+                       str(root / "app/task/system/database_command.c")]
                        + objects + ["-o", executable], check=True)
         subprocess.run([executable], check=True, timeout=20)

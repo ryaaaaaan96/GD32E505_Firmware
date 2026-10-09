@@ -5,7 +5,7 @@ endif()
 target_sources(
     ${APP_TARGET}
     PRIVATE
-        app_system_device.c
+        system_device.c
 )
 
 target_link_libraries(
@@ -32,6 +32,18 @@ if(ASHELL_ENABLE)
     target_link_libraries(${APP_TARGET} PRIVATE aShell)
 endif()
 
+if(app_log_enable)
+    target_sources(${APP_TARGET} PRIVATE log_config.c)
+    target_link_libraries(${APP_TARGET} PRIVATE aLog)
+endif()
+
+if(app_database_enable)
+    target_sources(${APP_TARGET} PRIVATE database_config.c)
+    target_include_directories(${APP_TARGET} PRIVATE
+        "${ACLASS_PRODUCT_DIR}/config")
+    target_link_libraries(${APP_TARGET} PRIVATE aDataBase)
+endif()
+
 if(ASHELL_ENABLE AND NOT ADEV_USART_DYNAMIC_ENABLE)
     message(FATAL_ERROR "Console requires ADEV_USART_DYNAMIC_ENABLE=ON")
 endif()
@@ -41,12 +53,12 @@ target_compile_definitions(${APP_TARGET} PRIVATE
     AMEMORY_ENABLE=$<BOOL:${AMEMORY_ENABLE}>
 )
 if(ADEV_FLASH25Q_ENABLE)
-    target_sources(${APP_TARGET} PRIVATE app_system_flash.c)
+    target_sources(${APP_TARGET} PRIVATE flash_device.c)
     target_link_libraries(${APP_TARGET} PRIVATE aFlash25q)
 endif()
 
 if(AMEMORY_ENABLE AND ADEV_FLASH25Q_ENABLE)
-    target_sources(${APP_TARGET} PRIVATE app_system_memory.c)
+    target_sources(${APP_TARGET} PRIVATE memory_config.c)
     target_include_directories(${APP_TARGET} PRIVATE
         "${ACLASS_PRODUCT_DIR}/config")
     target_link_libraries(${APP_TARGET} PRIVATE aMemory)

@@ -252,7 +252,7 @@ aclass_project_options。项目配置开启 SFUD 内部断言，关闭调试输�
 不引入上游静态日志缓冲区。配置宏涉及 sfud_flash 布局，所有使用方使用
 同一配置。公开业务头文件没有 SFUD 类型，静态实例头文件包含其内部布局。
 
-app/devices/system/app_system_flash.c 私有持有 bus 和 handle，使用
+app/devices/system/flash_device.c 私有持有 bus 和 handle，使用
 ADRV_SPI_1 / PB13(SCK) / PB15(MOSI) / PB14(MISO) / PB12(CS)，
 Mode 0、64 分频。SPI 编号已改为 ADRV_SPI_0/1/2，与 GD32 完全一致。
 aSystemInit 在 Shell 状态初始化后探测 Flash，启动信息先入队，不自动擦写。
@@ -273,7 +273,7 @@ Shell 任务。Flash 设备初始化本身不初始化数据库。
 擦除粒度 4 KiB；在 `0x7FF000` 执行一次 4 KiB 擦写回读，输出
 `Flash test PASS`。这证明该板该区域的基础 SPI 链路可用，不等于所有器件、
 SFDP 路径、写保护、故障恢复及掉电场景均已验证。
-操作步骤见[手动 Flash 测试](../app/flash_test/README.md)。
+操作步骤见[手动 Flash 测试](../app/task/system/flash_test.md)。
 
 后续先测量 SPI 吞吐、CPU 占用和 CS 时序，再决定块传输或 DMA 优化；
 QSPI 需完成前述命令映射与硬件可行性验证后才能接入。

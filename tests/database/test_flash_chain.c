@@ -2,7 +2,7 @@
 #define main flash_model_existing_main
 #include "../flash25q/test_flash25q.c"
 #undef main
-#include "app_system_memory.h"
+#include "memory_config.h"
 #include "aDataBase_instance.h"
 #include <assert.h>
 

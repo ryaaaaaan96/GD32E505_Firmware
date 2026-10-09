@@ -298,7 +298,7 @@ Key 找到后调用 Index 入口，范围校验、锁和复制
 
 `aBusSetParam` / `aBusGetParam` 使用独立请求结构体，包含 deviceID、sigIndex、
 paramIndex、src/dst、size、timeout；各有 StructInit，默认 NO_WAIT。
-应用通过 appSigSetParam/appSigGetParam 转发，不公开 handle。
+应用通过 sigDataSetParam/sigDataGetParam 转发，不公开 handle。
 
 字段读写使用父 SIG 的锁配置；写入在锁内校验受影响字段的范围，然后只复制
 目标字节。不会先读取整个结构体再写回，因此不覆盖其他字段的新值。

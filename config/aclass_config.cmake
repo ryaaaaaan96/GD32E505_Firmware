@@ -24,15 +24,14 @@ set(ADATABASE_ENABLE ON)
 set(ADATABASE_STATIC_ENABLE ON)
 set(ADATABASE_DYNAMIC_ENABLE ON)
 set(AMODBUS_ENABLE ON)
-# 协议核心默认依赖 aBus；板级端口、站号和任务由应用显式提供。
+# 协议核心依赖 aBus；USART 适配为可选目标，设备参数、映射和任务归应用。
 set(AMODBUS_STATIC_ENABLE ON)
 set(AMODBUS_DYNAMIC_ENABLE ON)
 set(AMODBUS_CLIENT_ENABLE ON)
 set(AMODBUS_SERVER_ENABLE ON)
-# 应用 RTU 从站演示：USART2 PC10/PC11，PA15 高电平发送。
+# 应用 RTU 演示：USART2 PC10/PC11，PA15 高电平发送。
+# 主从角色和站号在 app/app_config.h 配置。
 set(APP_MODBUS_DEMO_ENABLE ON)
-# OFF：从站 1；ON：主站每秒采集远端从站 1 的 motor.speed。
-set(APP_MODBUS_MASTER_ENABLE OFF)
 
 # Board
 set(BOARD_HXTAL_HZ 20000000)

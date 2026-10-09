@@ -1,5 +1,5 @@
 /* 通用命令仅从这些测试点表查询；不链接任何产品点表。 */
-#include "app_sig.h"
+#include "sig_data.h"
 #include "aBus_instance.h"
 #include "aOS.h"
 #include <assert.h>
@@ -75,23 +75,23 @@ static const aBusTable_t table = {
 static aBusHandle_t handle;
 static aBusSigState_t states[6];
 
-aStatus_t appSigGetInfo(const aBusSigQuery_t *q, aBusSigInfo_t *info)
+aStatus_t sigDataGetInfo(const aBusSigQuery_t *q, aBusSigInfo_t *info)
 {
     return aBusGetSigInfo(&handle, q, info);
 }
-aStatus_t appSigSet(const aBusSetIndexRequest_t *r)
+aStatus_t sigDataSet(const aBusSetIndexRequest_t *r)
 {
     return aBusSetByIndex(&handle, r);
 }
-aStatus_t appSigGet(const aBusGetIndexRequest_t *r)
+aStatus_t sigDataGet(const aBusGetIndexRequest_t *r)
 {
     return aBusGetByIndex(&handle, r);
 }
-aStatus_t appSigSetParam(const aBusSetParamRequest_t *r)
+aStatus_t sigDataSetParam(const aBusSetParamRequest_t *r)
 {
     return aBusSetParam(&handle, r);
 }
-aStatus_t appSigGetParam(const aBusGetParamRequest_t *r)
+aStatus_t sigDataGetParam(const aBusGetParamRequest_t *r)
 {
     return aBusGetParam(&handle, r);
 }

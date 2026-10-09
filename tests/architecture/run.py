@@ -11,6 +11,8 @@ vendors = tuple(root / path for path in (
     "func/aModbus/nanoMODBUS", "func/aShell/nr_micro_shell",
     "device/aDev_Flash25q/SFUD",
 ))
+# 应用头按实际文件识别，去掉 app_ 文件名前缀后仍禁止底层反向依赖。
+app_headers = {path.name for path in (root / "app").rglob("*.h")}
 for folder in ("app", "device", "func", "platform/aLib"):
     for path in (root / folder).rglob("*"):
         if path.suffix not in (".c", ".h") or any(
@@ -27,6 +29,9 @@ for folder in ("app", "device", "func", "platform/aLib"):
         if folder != "app":
             assert not re.search(
                 r'#\s*include\s*[<"](?:app/|app_)', text), path
+            for header in re.findall(r'#\s*include\s*[<"]([^>"]+)[>"]',
+                                     text):
+                assert Path(header).name not in app_headers, (path, header)
         if folder == "platform/aLib":
             assert not re.search(
                 r'#\s*include\s*[<"](?:aOS|aDrv|aDev|aBus|aMemory|'
@@ -40,7 +45,8 @@ includes = ["platform/aLib/include", "platform/aOS/public",
             "func/aModbus"]
 headers = ("aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
            "aBus.h", "aMemory.h", "aDataBase.h", "aShell.h", "aLog.h",
-           "aModbus.h")
+           "aModbus.h", "aModbus_rtu.h", "aModbus_rtu_instance.h",
+           "aModbus_rtu_usart.h", "aModbus_rtu_usart_instance.h")
 command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
            "-fsyntax-only", *["-I" + path for path in includes],
            "-x", "c", "-"]

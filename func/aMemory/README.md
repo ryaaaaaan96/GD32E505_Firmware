@@ -40,7 +40,7 @@ AMEMORY_PARTITION_DEFINE(parameters, "parameters", external_flash,
 检查全部通过后才发布句柄，失败不会留下部分注册状态。同一物理设备
 只能注册一个设备对象，多个逻辑区域用分区表示。
 
-当前产品示例在 `app/devices/system/app_system_memory.c`，布局位于
+当前产品示例在 `app/devices/system/memory_config.c`，布局位于
 `config/aMemory_layout.h`。增加设备只需提供回调、描述及分区，加入表中。
 配置也可由应用在启动时填写，前提是成功注册后一直保持稳定。
 

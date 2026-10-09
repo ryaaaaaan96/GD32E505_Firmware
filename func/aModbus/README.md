@@ -150,7 +150,7 @@ static const aModbusAddressRange_t ranges[] = {
 };
 
 /* 示例放在持有私有 sig_handle 的应用模块内，不暴露 aBus handle。 */
-aStatus_t appSigModbusServerInit(const aModbusTransport_t *transport,
+aStatus_t sigModbusServerInit(const aModbusTransport_t *transport,
                                aModbusHandle_t *instance)
 {
     aModbusConfig_t config;
@@ -164,8 +164,8 @@ aStatus_t appSigModbusServerInit(const aModbusTransport_t *transport,
 ```
 
 此片段说明绑定方式。当前板级实例见
-[应用主从演示](../../app/modbus/README.md)：USART2 PC10/PC11、PA15 DE，
-使用 appSigModbusCreate / appSigModbusInitStatic 绑定私有 SIG 实例。
+[应用主从演示](../../app/data/modbus/README.md)：USART2 PC10/PC11、PA15 DE，
+使用 sigModbusCreate / sigModbusInitStatic 绑定私有 SIG 实例。
 
 ## 两级回调与并发
 
@@ -199,13 +199,15 @@ RTU 三个辅助回调必须提供：
 - `prepare_frame`：确认可以开始新帧，处理帧间静默和前次发送恢复。
 - `wait_transmit_complete`：确认最后一个停止位发送完毕及 DE 已释放。
 
-串口适配可使用 aDevUsartRead/Write 和 aDevUsartWaitTransmitComplete。
-仅 USART IDLE 或毫秒超时不足以保证严格 RTU 接收时序；具体帧边界、
-字符间隔与微秒定时由应用提供的传输适配负责。
+模块提供通用 RTU 分帧实例及可选 USART 适配，也允许自定义 transport。
+仅 USART IDLE 或毫秒超时不足以保证严格 RTU 接收时序。
 不要将 Shell 与 Modbus 绑定到同一条接收流。
 TCP 可将三个辅助回调设为 NULL，不应在每次请求前清理 socket 中的合法数据。
 现有 aStream 没有 context，固定端口可通过适配函数接入；动态多连接使用本模块
 自带 context 的 transport，无需修改 aStream。
+
+可选 `finish` 回调在每笔操作结束、释放实例使用权之前调用，成功和失败
+路径均执行。它只释放当前接收帧，禁止清空后续排队帧；TCP 一般设为 NULL。
 
 RTU 发生错误后通过 discard_input 恢复；操作可能已有部分字节发送，
 不自动重试，业务决定是否重新发送控制命令。
@@ -213,6 +215,56 @@ TCP 半帧、传输或协议错误后锁定为故障状态，后续调用返回 
 应用须关闭旧连接并重建连接/协议实例，避免把余下半帧当成新帧解析。
 封装对官方固定帧缓冲区做接收前保护，并额外验证 TCP 功能码对应的 PDU 长度，
 避免畸形短帧使用上一帧残留的数据。
+
+## RTU 传输实例
+
+每条链路独立保存帧队列、时间戳及读取位置，不使用全局单例。
+协议实例和传输实例一一绑定；角色和从站地址须配置一致。
+接收固定为 3 个 256 字节槽位及一个当前帧快照，运行时不分配内存。
+队列满时丢弃新帧；硬件错误、帧内间隔超限或超长帧被整体丢弃。
+逐字节路径只采样一次时钟并比较整数差，时间阈值在初始化时计算。
+
+| 接口 | 用途 |
+| --- | --- |
+| `aModbusRtuConfigStructInit` | 填充通用 RTU 默认配置 |
+| `aModbusRtuInitStatic` / `aModbusRtuCreate` | 初始化独立 RTU 状态 |
+| `aModbusRtuReceive` | ISR 或受同步保护的单生产者输入字节与错误 |
+| `aModbusRtuGetTransport` | 取得供协议实例借用的传输接口 |
+| `aModbusRtuDeInitStatic` / `aModbusRtuDestroy` | 接收和协议调用停止后释放 |
+
+通用接口由 `aModbus_rtu.h` 声明；静态布局见 `aModbus_rtu_instance.h`。
+调用者通过 `aModbusRtuIo_t` 提供计数器、同步、发送和线路完成操作。
+消费任务通过 enter/exit 排除生产者；线程生产者必须使用同一同步机制。
+计数器须以固定频率运行，支持 32 位回绕；aOS 毫秒时基用于判断长空闲。
+Linux 适配可以使用通用 RTU 或自定义 transport，但普通串口批量读取的
+返回时间不能还原逐字节到达时间，不能直接补送字节来声称严格的 RTU 定时。
+
+当前 MCU 应用直接使用 `aModbus_rtu_usart.h` 的现成适配：
+
+| 接口 | 用途 |
+| --- | --- |
+| `aModbusRtuUsartConfigStructInit` | 初始化配置，再填写串口、角色和站号 |
+| `aModbusRtuUsartInitStatic` / `aModbusRtuUsartCreate` | 创建 RTU 与串口 |
+| `aModbusRtuUsartGetTransport` | 装配到 `aModbusConfig_t.transport` |
+| `aModbusRtuUsartDeInitStatic` / `aModbusRtuUsartDestroy` | 关闭串口后释放状态 |
+
+静态布局见 `aModbus_rtu_usart_instance.h`。USART 配置的 RX 模式必须为
+INTERRUPT_CALLBACK，回调及 context 留空，由模块在开启 IRQ 前统一注册。
+时序按波特率、校验和停止位计算；DE 由 aDevUsart 管理。模块先准备 RTU
+再打开串口；销毁时顺序相反，关闭失败会保留状态供重试。
+适配实例遵循 AMODBUS 分配开关，串口实例遵循 ADEV_USART 分配开关；
+两层都关闭动态分配时，全链路使用显式静态实例。
+
+应用只提供串口参数和缓冲区、协议角色和映射，编排 Init/Process/DeInit。
+底层串口和传输状态由适配实例持有；应用不编写 ISR 收帧、TC 等待或帧重置。
+动态模式下 RTU 与适配状态在初始化时一次分配；固定 heap 中的这部分空间
+仍要计入运行 RAM，不能把 BSS 减少误认为总 RAM 用量降低。
+
+CMake 的 `aModbus` 目标只依赖 aBus/aOS；`aModbusUsart` 是可选独立目标，
+在启用 aDev USART 及其中断能力时提供，使用方显式链接。
+因此 TCP/自定义传输可只链接核心，不引入 USART、DWT 或板级依赖。
+当前 USART 适配使用内核周期计数，要求固定内核时钟；休眠、调试暂停及
+最坏 ISR 响应延迟仍需在板端确认。
 
 ## 功能和验证范围
 
@@ -228,7 +280,8 @@ AMODBUS_ENABLE、AMODBUS_STATIC_ENABLE、AMODBUS_DYNAMIC_ENABLE、
 AMODBUS_CLIENT_ENABLE、AMODBUS_SERVER_ENABLE。
 至少开启一种角色和一种分配接口；启用协议必须显式开启 ABUS_ENABLE。
 当前产品通过 APP_MODBUS_DEMO_ENABLE 接入 USART2 / RS485 及通信任务；
-模块本身不创建任务，板级配置和限制见 [应用演示](../../app/modbus/README.md)。
+主从角色和站号在 app/app_config.h 选择，应用分别提供主站和从站实现。
+模块本身不创建任务，板级配置和限制见 [应用演示](../../app/data/modbus/README.md)。
 
 ```sh
 SANITIZE=1 python3 tests/modbus/run.py

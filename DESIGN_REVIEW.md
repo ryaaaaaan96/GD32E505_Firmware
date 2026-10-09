@@ -17,7 +17,7 @@ TX_QUEUE 状态；不把同一套模块搬到 app。业务有排队需求时自�
 ## 2026-09-26：当前修复结果（以下历史章节不覆盖本节）
 
 1. **任务所有权**：func 不再创建/删除业务任务。aShellInit 只建立状态，
-   aShellProcess 每次最多处理一个输入字符；app/task/system/system.c 创建 Shell 任务并
+   aShellProcess 每次最多处理一个输入字符；app/task/system/system_init.c 创建 Shell 任务并
    配置栈、优先级和调用周期。删除 aShellConfig_t 的任务配置字段。禁用模块保留空实现。
    aOS 的延迟工作服务和 FreeRTOS idle/timer task 仍属于平台/内核，不迁移到应用。
 2. **Direct 等待**：RX 使用有限 DMA 完成/错误回调通知 aOS 等待对象；TX 使用 TC

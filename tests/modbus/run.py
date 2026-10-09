@@ -62,3 +62,12 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-") as directory:
             assert " U aOSAlloc" not in symbols
             assert " U aOSFree" not in symbols
         print(f"{name}: protocol/data/feature checks passed")
+    executable = str(Path(directory) / "rtu")
+    subprocess.run(common + [
+        "-DAMODBUS_CLIENT_ENABLE=1", "-DAMODBUS_SERVER_ENABLE=1",
+        "-DAMODBUS_STATIC_ENABLE=1", "-DAMODBUS_DYNAMIC_ENABLE=1",
+        str(module / "aModbus.c"), str(module / "aModbus_rtu.c"),
+        str(root / "tests/modbus/os_mock.c"),
+        str(root / "tests/modbus/test_rtu.c"), "-o", executable,
+    ], check=True)
+    subprocess.run([executable], check=True, timeout=20)

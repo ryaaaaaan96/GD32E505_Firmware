@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix="database-spi-") as directory:
     sources = [root / "tests/database/test_flash_chain.c",
                database / "aDataBase.c", database / "aDataBase_index.c",
                database / "port/memory_port.c",
-               root / "app/devices/system/app_system_memory.c",
+               root / "app/devices/system/memory_config.c",
                root / "func/aMemory/aMemory.c"]
     sources += [database / "FlashDB/src" / name for name in
                 ("fdb.c", "fdb_kvdb.c", "fdb_tsdb.c", "fdb_utils.c")]

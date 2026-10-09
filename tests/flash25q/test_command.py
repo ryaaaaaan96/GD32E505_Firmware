@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory() as tmp:
     int test_command(int argc, char **argv) { return f(argc, argv); }
 ''')
     (path / "test.c").write_text(r'''
-#include "app_system_flash.h"
+#include "flash_device.h"
 #include <assert.h>
 #include <string.h>
 static unsigned char memory[8192];
@@ -74,6 +74,6 @@ int main(void) {
         command += ["-I", str(directory)]
     exe = path / "test"
     subprocess.run(command + [str(path / "test.c"),
-                   str(root / "app/flash_test/flash_test.c"),
+                   str(root / "app/task/system/flash_test.c"),
                    "-o", str(exe)], check=True)
     subprocess.run([str(exe)], check=True)

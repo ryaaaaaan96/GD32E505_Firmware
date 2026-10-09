@@ -17,6 +17,7 @@ profiles = {
     "static_server": (1, 1, 0, 0, 1),
     "dynamic_server": (1, 0, 1, 0, 1),
     "disabled": (0, 0, 0, 0, 0),
+    "core_no_usart": (1, 1, 1, 1, 1),
 }
 
 with tempfile.TemporaryDirectory(prefix="aclass-modbus-build-") as directory:
@@ -24,6 +25,11 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-build-") as directory:
     hook = base / "force_modbus.cmake"
     hook.write_text('''
 function(force_modbus)
+    # 仅矩阵通过编译宏覆盖应用头默认值，产品不增加 CMake 角色开关。
+    if(TEST_MODBUS_MASTER_ENABLE)
+        target_compile_definitions("${PROJECT_NAME}" PRIVATE
+            APP_MODBUS_MASTER_ENABLE=1)
+    endif()
     if(TARGET aModbus)
         file(WRITE "${CMAKE_BINARY_DIR}/modbus_api_probe.c"
             "#include <aModbus.h>\\n"
@@ -58,8 +64,12 @@ cmake_language(DEFER CALL force_modbus)
         enabled, static, dynamic, client, server = values
         config = base / f"{name}.cmake"
         lines = [f'include("{root}/config/aclass_config.cmake")']
-        lines += [f"set(APP_MODBUS_MASTER_ENABLE "
-                  f"{'ON' if name.endswith('client') else 'OFF'})"]
+        if name == "core_no_usart":
+            lines += ["set(ASHELL_ENABLE OFF)",
+                      "set(ADEV_USART_ENABLE OFF)"]
+            for feature in ("INTERRUPT", "DIRECT", "ASYNC", "RS485",
+                            "STATIC", "DYNAMIC"):
+                lines += [f"set(ADEV_USART_{feature}_ENABLE OFF)"]
         if name.startswith("static_"):
             lines += ["set(ASHELL_ENABLE OFF)",
                       "set(ADEV_USART_STATIC_ENABLE ON)",
@@ -72,6 +82,8 @@ cmake_language(DEFER CALL force_modbus)
         commands = (
             ["cmake", "-S", str(root), "-B", str(build), "-G", "Ninja",
              "-DCMAKE_BUILD_TYPE=Release", f"-DARM_GCC_ROOT={toolchain}",
+             "-DTEST_MODBUS_MASTER_ENABLE=" +
+             ("ON" if name.endswith("client") else "OFF"),
              f"-DACLASS_CONFIG_FILE={config}",
              f"-DCMAKE_PROJECT_INCLUDE={hook}"],
             ["cmake", "--build", str(build), "--parallel", "4"],
@@ -83,19 +95,33 @@ cmake_language(DEFER CALL force_modbus)
         archive = build / "lib/libaModbus.a"
         assert archive.exists() == bool(enabled)
         database = json.loads((build / "compile_commands.json").read_text())
-        demo = [item for item in database
-                if item["file"].endswith("app_modbus.c")]
-        assert bool(demo) == bool(enabled), name
-        if demo:
-            macro = "-DAPP_MODBUS_MASTER_ENABLE="
-            assert macro + ("1" if name.endswith("client") else "0") in \
-                demo[0]["command"], demo
+        demo_enabled = bool(enabled) and name != "core_no_usart"
+        for role in ("master", "slave"):
+            present = any(Path(item["file"]).name == f"modbus_{role}.c"
+                          for item in database)
+            assert present == demo_enabled, (name, role)
+        for source in ("rs485_config.c",
+                       "modbus_task.c"):
+            present = any(Path(item["file"]).name == source
+                          for item in database)
+            assert present == demo_enabled, (name, source)
+        assert (build / "lib/libaModbusUsart.a").exists() == demo_enabled
+        assert not any(Path(item["file"]).name == "app_modbus_port.c"
+                       for item in database)
+        nm = str(Path(toolchain) / "bin/arm-none-eabi-nm")
+        firmware = next((build / "bin").glob("*.elf"))
+        symbols = subprocess.check_output([nm, str(firmware)], text=True)
+        exported = {line.split()[-1] for line in symbols.splitlines()
+                    if " T " in line}
+        for role in ("Master", "Slave"):
+            expected = demo_enabled and (
+                (role == "Master") == name.endswith("client"))
+            assert (f"modbus{role}Process" in exported) == expected, name
         if enabled:
             probe = next(item["command"] for item in database
                          if item["file"].endswith("modbus_api_probe.c"))
             assert ("/nanoMODBUS" in probe) == bool(static), probe
             assert ("-DNMBS_" in probe) == bool(static), probe
-            nm = str(Path(toolchain) / "bin/arm-none-eabi-nm")
             symbols = subprocess.check_output([nm, str(archive)], text=True)
             exported = {line.split()[-1] for line in symbols.splitlines()
                         if " T " in line}

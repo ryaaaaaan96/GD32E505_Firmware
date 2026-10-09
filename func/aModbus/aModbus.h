@@ -83,6 +83,9 @@ typedef struct {
     aStatus_t (*discard_input)(void *context, aTimeout_t timeout);
     aStatus_t (*prepare_frame)(void *context, aTimeout_t timeout);
     aStatus_t (*wait_transmit_complete)(void *context, aTimeout_t timeout);
+    /** 可选：每笔协议操作结束时释放当前接收帧，不丢弃后续帧。
+     * 在任务上下文调用，禁止阻塞、重入；由模块统一调用。 */
+    void (*finish)(void *context);
 } aModbusTransport_t;
 
 /** 寄存器区 data 为 uint16_t 数组；位区为低位在前的紧凑位数组。

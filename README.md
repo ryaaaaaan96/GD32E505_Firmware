@@ -11,14 +11,15 @@ system、startup、完整标准外设库和驱动实现全部由 `aDrv` 管理�
 - HXTAL_IN 接入 20 MHz 外部有源时钟，使用 bypass 模式，系统时钟为 180 MHz；
 - USART0 使用 PA9(TX)/PA10(RX)，115200-8-N-1，作为 Shell 控制台；
 - PA8 通过 `aDevLed` 设备驱动，每 500 ms 翻转一次；
-- LED 暂按低电平点亮配置，实物极性不同时修改 `app/devices/system/app_system_device.c` 中的实例配置。
+- LED 暂按低电平点亮配置，实物极性不同时修改 `app/devices/system/system_device.c` 中的实例配置。
 
 app 包含 Shell、SPI Flash、KV/TSDB、SIG、日志及 Modbus 测试；日志当前接
-Shell 输出队列，测试命令见 [日志演示](app/log/README.md)。QSPI 默认关闭，
+Shell 输出队列，测试命令见
+[系统任务与日志调试](app/task/system/README.md)。QSPI 默认关闭，
 RS485 已启用，详见 [USART / RS485 设计](docs/usart_design.md)。
 Modbus 库提供 RTU/TCP 主从站及 aBus 映射；板级 Demo 使用 USART2 PC10/PC11、
 PA15 手动 DE，115200 8N1，默认从站 1。主从切换、寄存器和联调方式见
-[Modbus Demo](app/modbus/README.md)，协议接口见 [aModbus](func/aModbus/README.md)。
+[Modbus Demo](app/data/modbus/README.md)，协议接口见 [aModbus](func/aModbus/README.md)。
 
 ## 分层
 

@@ -11,12 +11,25 @@ if(ADEV_USART_ENABLE)
     target_link_libraries(${APP_TARGET} PRIVATE aDevUsart)
 endif()
 
-add_subdirectory(sig)
+# 当前产品的日志输出使用 Shell，设备配置与系统服务共用此启用条件。
+set(app_log_enable OFF)
+if(ALOG_ENABLE AND ASHELL_ENABLE)
+    set(app_log_enable ON)
+endif()
+target_compile_definitions(${APP_TARGET} PRIVATE
+    APP_LOG_ENABLE=$<BOOL:${app_log_enable}>)
+
+# 本产品数据库使用板载 Flash，配置与服务按同一条件裁剪。
+set(app_database_enable OFF)
+if(ADATABASE_ENABLE AND ADEV_FLASH25Q_ENABLE)
+    set(app_database_enable ON)
+endif()
+target_compile_definitions(${APP_TARGET} PRIVATE
+    APP_DATABASE_ENABLE=$<BOOL:${app_database_enable}>)
+
+# 先装配 aBus 数据及其协议映射，确定设备和任务所需的资源。
+add_subdirectory(data)
 add_subdirectory(devices)
-add_subdirectory(flash_test)
-add_subdirectory(database)
-add_subdirectory(log)
-add_subdirectory(modbus)
 add_subdirectory(task)
 
 target_link_libraries(

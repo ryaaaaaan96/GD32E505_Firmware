@@ -43,14 +43,16 @@ with tempfile.TemporaryDirectory(prefix="aclass-log-") as directory:
              "-Wl,--fatal-warnings",
              f"-Wl,-T,{shell}/port/gcc/aShell_sections_host.ld"]
     for path in (shell, shell / "include", shell / "port",
-                 shell / "nr_micro_shell/inc", root / "app/log"):
+                 shell / "nr_micro_shell/inc", root / "app/devices/system",
+                 root / "app/task/system"):
         flags += ["-I", str(path)]
     shell_sources = [shell / "src" / name for name in
                      ("aShell.c", "aShell_config.c", "aShell_output.c",
                       "aShell_nr.c")]
     shell_sources += [shell / "nr_micro_shell/src/nr_micro_shell_core.c",
-                      root / "app/log/app_log.c",
-                      root / "app/log/app_log_command.c",
+                      root / "app/devices/system/log_config.c",
+                      root / "app/task/system/log_service.c",
+                      root / "app/task/system/log_command.c",
                       root / "tests/log/test_shell.c"]
     for capacity in (256, 512):
         subprocess.run(common + flags

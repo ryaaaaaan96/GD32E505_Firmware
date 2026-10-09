@@ -150,15 +150,24 @@ ADATABASE_STATIC_ENABLE / DYNAMIC_ENABLE 控制实例创建接口；至少启用
 当前产品开启数据库，顶层先初始化 Flash，再注册 aMemory 分区，随后由
 appDatabaseInit 初始化数据库模块并打开已有实例，首次格式化由 db init 显式触发。
 
+### Flash 手动测试源码
+
+`app/task/system/flash_test.c` 默认不加入构建。需要复测时，在同目录
+`CMakeLists.txt` 取消 `target_sources` 对应行的注释，再重新编译。
+测试依赖 `ADEV_FLASH25Q_ENABLE` 和 `ASHELL_ENABLE`，参与编译后注册
+`flash` 命令；Flash 初始化及数据库的存储链路由各自的配置控制。
+
 ### Modbus 应用开关
 
-`APP_MODBUS_DEMO_ENABLE` 控制本产品示例；`APP_MODBUS_MASTER_ENABLE`
-选择主站或从站，当前默认 OFF（从站），导出为同名 0/1 C 宏。
+`APP_MODBUS_DEMO_ENABLE` 控制本产品示例；角色和站号在 `app/app_config.h`
+配置，`APP_MODBUS_MASTER_ENABLE` 为 0 时运行从站、1 时运行主站，默认 0。
+CMake 注册主从两份源码，预处理时保留所选角色；不再从 CMake 定义角色宏。
 示例经过依赖裁剪后的启用状态由 `APP_MODBUS_ENABLE` C 宏表示。
 库的 `AMODBUS_CLIENT_ENABLE` / `AMODBUS_SERVER_ENABLE` 控制协议能力，
-与应用实际运行角色分开。缺少示例所需能力时，应用 Demo 一同裁剪。
+与应用实际运行角色分开。关闭协议库或串口依赖时，应用 Demo 一同裁剪；
+所选角色与库的 CLIENT/SERVER 能力不匹配时，编译阶段明确报错。
 引脚、站号、速率和寄存器映射仍由应用 C 代码配置，详见
-[Modbus Demo](../app/modbus/README.md)。
+[Modbus Demo](../app/data/modbus/README.md)。
 
 ### Flash25Q / SFUD 构建
 

@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-app-devices-") as directory:
             "-Iplatform/aDrv/include", "-Iplatform/aLib/include",
             "-Iapp", "-Iapp/devices", "-Iapp/devices/system",
             "-Iapp/task/system", "-Ifunc/aShell/include",
-            "app/devices/system/app_system_device.c", "tests/app_devices/test_devices.c",
+            "app/devices/system/system_device.c", "tests/app_devices/test_devices.c",
             "-o", executable,
         ]
         if os.environ.get("SANITIZE"):

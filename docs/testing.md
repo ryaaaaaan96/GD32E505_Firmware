@@ -32,7 +32,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | Flash25Q / 真实 SFUD 核心 | `python3 tests/flash25q/run.py` |
 | Flash 测试命令 | `python3 tests/flash25q/test_command.py` |
 | 数据库与完整 Flash 适配链 | `python3 tests/database/run.py`、`python3 tests/database/test_flash_chain.py` |
-| Modbus 协议与 aBus 映射 | `python3 tests/modbus/run.py` |
+| Modbus 协议、aBus 映射与通用 RTU 多实例/时序 | `python3 tests/modbus/run.py` |
 | Modbus 板级端口、主从与生命周期 | `python3 tests/modbus_demo/run.py` |
 | Shell / 日志 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
 | 应用设备与启动编排 | `python3 tests/app_devices/run.py`、`python3 tests/app_startup/run.py` |
@@ -78,6 +78,8 @@ ELF 的静态 RAM 统计包含预留区，不等同于运行时堆使用量或�
 | 数据库 | 目标介质上的恢复时间、GC、实际掉电与写入失败 |
 | Shell / 日志 | 交互延迟、后台输出并发及队列满时行为 |
 
-板上操作步骤见[应用联调入口](README.md#应用与联调)。Flash 测试会改变指定
-区域，数据库首次格式化也由应用命令显式触发；按各演示文档选择测试区域。
+板上操作步骤见[应用联调入口](README.md#应用与联调)。Flash 测试默认不编译，
+需先在 app/task/system/CMakeLists.txt 中取消 flash_test.c 对应行的注释，
+再重新编译和烧录。Flash 测试会改变指定区域，数据库首次格式化也由应用
+命令显式触发；按各演示文档选择测试区域。
 当前 Modbus Demo 使用 ISR 周期时间戳分帧，硬件边界精度与使用限制见其应用说明。

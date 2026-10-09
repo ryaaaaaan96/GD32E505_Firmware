@@ -67,7 +67,7 @@ aOS 故障记录，本次未增加另一个初始化阶段的命令执行线程�
 - 架构边界、公共头独立编译、aBus 定义独立于分配和锁配置。
 - aBus 36 种锁、定义检查、NDEBUG、静态/动态组合及空注册段。
 - USART 环形回绕、非 2 的幂容量、复制窗口内中断、满缓冲丢弃、DMA 和 Async 回归。
-- 实际 system.c 的成功及各阶段失败路径，验证 Shell 任务仅在最后创建。
+- 实际 system_init.c 的成功及各阶段失败路径，验证 Shell 任务仅在最后创建。
 - Shell、aOS、aMemory、日志、Modbus、Flash25Q、应用设备与 SIG 主机回归。
 - 真实 FlashDB KV/TSDB、SIG 索引、GC、重开、故障注入及完整 Flash 适配链测试。
 - Debug 固件与 USART、数据库、Modbus 构建矩阵，含无 aBus 运行库的数据库构建。
