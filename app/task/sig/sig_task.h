@@ -3,7 +3,7 @@
 
 #include "aStatus.h"
 
-/* sigDataInit 成功后调用一次，创建每秒自增的测试任务。 */
+/* 全部点表挂载成功后调用一次，创建每秒自增的测试任务。 */
 aStatus_t appSigTaskInit(void);
 
 #endif

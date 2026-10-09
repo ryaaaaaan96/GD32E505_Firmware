@@ -14,6 +14,7 @@
 
 | 文档 | 范围 |
 | --- | --- |
+| [aDrv 与 aDevice 设计](driver_device_design.md) | 外设分类、配置与运行状态、通用 DMA 和移植边界 |
 | [USART、RS485 与中断](usart_design.md) | 收发路径、ISR 回调、DE 控制和应用适配 |
 | [Flash25Q / SPI 存储链路](spi_flash_design.md) | SFUD、总线与锁、超时，以及未实现的 QSPI 路径 |
 | [验证指南](testing.md) | 主机测试、构建矩阵与上板验证的边界 |
@@ -36,8 +37,9 @@
 | 需求 | 入口 |
 | --- | --- |
 | 查看应用目录、任务和初始化 | [app](../app/README.md) |
-| SIG 表、静态绑定与 Shell 读写 | [SIG 演示](../app/data/sig/README.md) |
-| RS485 主从切换、寄存器与双板联调 | [Modbus 演示](../app/data/modbus/README.md) |
+| SIG 与 Shell 读写 | [通用 SIG 命令](../app/README.md#通用-sig-命令) |
+| RS485 主从切换与点表关系 | [产品协议](../app/protocol/README.md) |
+| 后续 CSV/JSON 点表与协议配置 | [配置目录](../app/protocol/config/README.md) |
 | Flash 探测和手动擦写 | [Flash 测试](../app/task/system/flash_test.md) |
 | KV 参数与 TSDB 记录 | [数据库演示](../app/task/system/database.md) |
 | 日志等级、输出与测试命令 | [系统任务与日志调试](../app/task/system/README.md) |

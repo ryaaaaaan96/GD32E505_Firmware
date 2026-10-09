@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-spi-") as tmp:
         "-fsanitize=undefined", "-fno-sanitize-recover=all",
         "-Itests/spi/mocks", "-Iplatform/aDrv/src",
         "-Iplatform/aDrv/include", "-Iplatform/aLib/include",
-        "tests/spi/test_spi.c", "platform/aDrv/src/aDrv_spi.c",
-        "platform/aDrv/src/aDrv_gpio.c", "-o", binary,
+        "tests/spi/test_spi.c", "platform/aDrv/src/spi/aDrv_spi.c",
+        "platform/aDrv/src/gpio/aDrv_gpio.c", "-o", binary,
     ], cwd=root, check=True)
     subprocess.run([binary], check=True)

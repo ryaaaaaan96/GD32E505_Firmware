@@ -1,29 +1,27 @@
 /* 真实应用端口 + aModbus/nanoMODBUS + aBus，模拟串口线路。 */
 #include "app_config.h"
-#if APP_MODBUS_MASTER_ENABLE
-#include "modbus_master.h"
-#define testModbusInit modbusMasterInit
-#define testModbusProcess modbusMasterProcess
-#define testModbusDeInit modbusMasterDeInit
-#else
-#include "modbus_slave.h"
-#define testModbusInit modbusSlaveInit
-#define testModbusProcess modbusSlaveProcess
-#define testModbusDeInit modbusSlaveDeInit
+#include "../../app/protocol/protocol.c"
+#define testModbusInit modbusInit
+#define testModbusProcess modbusProcess
+#define testModbusDeInit modbusDeInit
+#include "IDU_sig_table.h"
+#include "data_bus_service.h"
+#include "rs485_device.h"
+#if !AMODBUS_DYNAMIC_ENABLE
+#include "aModbus_instance.h"
 #endif
-#include "modbus_task.h"
-#include "sig_data.h"
 #include "aDev_usart.h"
 #include "aOS.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <setjmp.h>
 
 void testAdvanceTime(uint32_t ms);
 unsigned testAllocations(void);
 void testFailAllocation(aBool_t fail);
 static uint32_t counter;
-APP_SIG_BIND(counter_binding, APP_BUS_COUNTER, counter);
+IDU_SIG_BIND(counter_binding, IDU_SIG_COUNTER, counter);
 static uint8_t input[600], output[600];
 static size_t input_size, input_pos, output_size;
 static unsigned opened, closed, waits;
@@ -35,6 +33,56 @@ static char dynamic_device;
 static aDevUsartRxByteCallback_t rx_callback;
 static void *rx_context;
 static uint32_t cycle_bias;
+static aOSTaskConfig_t created_task;
+static aBool_t task_test, run_immediately;
+static void task_tests(void);
+static jmp_buf task_done;
+static size_t process_count, delay_count;
+#if APP_MODBUS_MASTER_ENABLE
+static size_t expected_poll;
+#endif
+static uint32_t task_delays[5];
+static const aStatus_t task_results[] = {
+    A_STATUS_OK, A_STATUS_OK, A_STATUS_TIMEOUT, A_STATUS_TIMEOUT, A_STATUS_OK
+};
+
+aStatus_t __real_aModbusClientReadSig(aModbusHandle_t *handle,
+    const aModbusClientSigRequest_t *request);
+aStatus_t __real_aModbusServerProcess(aModbusHandle_t *handle,
+    const aModbusServerProcessRequest_t *request);
+
+static aStatus_t nextResult(void)
+{
+    if (process_count == 5U) longjmp(task_done, 1);
+    return task_results[process_count++];
+}
+
+aStatus_t __wrap_aModbusClientReadSig(aModbusHandle_t *handle,
+    const aModbusClientSigRequest_t *request)
+{
+    aStatus_t status;
+
+#if APP_MODBUS_MASTER_ENABLE
+    assert(request == &FAN_modbus_master_config.polls[expected_poll]);
+#endif
+    status = task_test ? nextResult() :
+                        __real_aModbusClientReadSig(handle, request);
+#if APP_MODBUS_MASTER_ENABLE
+    if (status != A_STATUS_BUSY) {
+        expected_poll++;
+        if (expected_poll == FAN_modbus_master_config.poll_count) expected_poll = 0U;
+    }
+#endif
+    return status;
+}
+
+aStatus_t __wrap_aModbusServerProcess(aModbusHandle_t *handle,
+    const aModbusServerProcessRequest_t *request)
+{
+    if (task_test) return nextResult();
+    return __real_aModbusServerProcess(handle, request);
+}
+
 static void deliver(void)
 {
     if (overflow) {
@@ -62,6 +110,8 @@ void aDevUsartClearRxError(aDevUsartHandle_t *handle) { (void)handle; }
 #if APP_MODBUS_MASTER_ENABLE
 static uint32_t response_value = 4321U;
 static aBool_t response_enabled = A_TRUE, response_extra;
+static uint8_t last_function;
+static aBool_t check_reentry;
 #endif
 
 static uint16_t crc(const uint8_t *data, size_t size)
@@ -169,15 +219,23 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
     assert(handle == device && timeout.milliseconds > 0U);
     assert(output_size + size <= sizeof(output));
 #if APP_MODBUS_MASTER_ENABLE
-    assert(size == 8U);
-    assert(memcmp(data, (uint8_t[]){1, 3, 0, 2, 0, 2}, 6U) == 0);
+    const uint8_t *frame = data;
+    last_function = frame[1];
+    assert(last_function == 3U || last_function == 16U);
+    assert(size == (last_function == 3U ? 8U : 13U));
+    assert(frame[0] == 1U);
+    assert(memcmp(frame + 2, (uint8_t[]){0, 2, 0, 2}, 4U) == 0);
     assert(crc(data, size) == 0U);
+    if (check_reentry) {
+        assert(testModbusProcess() == A_STATUS_BUSY);
+    }
     if (response_enabled) {
         uint8_t response[] = {1, 3, 4,
             (uint8_t)(response_value >> 24U),
             (uint8_t)(response_value >> 16U),
             (uint8_t)(response_value >> 8U), (uint8_t)response_value};
-        feed(response, sizeof(response));
+        if (last_function == 3U) feed(response, sizeof(response));
+        else feed(frame, 6U); /* FC10 响应只回显地址和寄存器数量。 */
         if (response_extra) input[input_size++] = 0U;
         input_at = aOSGetUptimeMs() + 3U;
     }
@@ -204,25 +262,44 @@ void aDevUsartClearRxOverflow(aDevUsartHandle_t *handle)
     assert(handle == device);
     overflow = A_FALSE;
 }
-void aOSDelayMs(uint32_t ms) { testAdvanceTime(ms); deliver(); }
+aStatus_t appSigTaskInit(void) { return A_STATUS_OK; }
+
+void aOSDelayMs(uint32_t ms)
+{
+    if (task_test) {
+        assert(delay_count < 5U);
+        task_delays[delay_count++] = ms;
+        return;
+    }
+    testAdvanceTime(ms);
+    deliver();
+}
 aStatus_t aOSCreateTask(const aOSTaskConfig_t *task, aOSTaskHandle_t *out)
 {
     assert(out == NULL && task->function != NULL);
     assert(strcmp(task->name, "modbus") == 0);
     assert(task->stack_bytes >= 3072U);
-    return fail_task ? A_STATUS_NO_MEMORY : A_STATUS_OK;
+    /* 创建任务前串口与接收者必须已就绪。 */
+    assert(device != NULL && rx_callback != NULL && rx_context != NULL);
+    created_task = *task;
+#if APP_MODBUS_MASTER_ENABLE
+    expected_poll = 0U;
+#endif
+    if (fail_task) return A_STATUS_NO_MEMORY;
+    if (run_immediately) task_tests();
+    return A_STATUS_OK;
 }
 
-static appBusMotor_t motor_get(void)
+static FANMotor_t motor_get(void)
 {
-    appBusMotor_t motor;
+    FANMotor_t motor;
     aBusGetIndexRequest_t get;
     aBusGetIndexRequestStructInit(&get);
-    get.deviceID = APP_SIG_DEVICE_ID;
-    get.sigIndex = APP_BUS_MOTOR;
+    get.deviceID = FAN_SIG_DEVICE_ID;
+    get.sigIndex = FAN_SIG_MOTOR;
     get.dst = &motor;
     get.size = sizeof(motor);
-    assert(sigDataGet(&get) == A_STATUS_OK);
+    assert(dataBusGet(&get) == A_STATUS_OK);
     return motor;
 }
 
@@ -374,13 +451,88 @@ static void master_tests(void)
 }
 #endif
 
-int main(void)
+static void portReceive(void *context, uint8_t byte, aStatus_t status)
+{
+    (void)context;
+    (void)byte;
+    (void)status;
+}
+
+/* 物理端口不创建协议实例，也可以交给其他逐字节接收协议使用。 */
+static void port_tests(void)
+{
+    rs485Port_t port;
+    unsigned baseline = testAllocations();
+    const uint8_t byte = 0U;
+
+    assert(rs485PortPrepare(NULL) == A_STATUS_INVALID_PARAM);
+    assert(rs485PortClose() == A_STATUS_NOT_READY);
+    assert(rs485PortPrepare(&port) == A_STATUS_OK);
+    assert(port.output.read == NULL && port.output.write != NULL);
+    assert(port.output.flush == NULL);
+    assert(port.baud_rate == 115200U && port.character_bits == 10U);
+    assert(port.ticks_per_second == 180000000U);
+    assert(port.output.write(&byte, 1U, A_TIMEOUT_NO_WAIT) == -1);
+    assert(rs485PortOpen(NULL, NULL) == A_STATUS_INVALID_PARAM);
+    assert(rs485PortOpen(portReceive, NULL) == A_STATUS_OK);
+    assert(rs485PortOpen(portReceive, NULL) == A_STATUS_BUSY);
+    assert(rs485PortPrepare(&port) == A_STATUS_BUSY);
+    close_busy = A_TRUE;
+    assert(rs485PortClose() == A_STATUS_BUSY);
+    rx_callback(rx_context, 0U, A_STATUS_ERROR);
+    close_busy = A_FALSE;
+    assert(rs485PortClose() == A_STATUS_OK);
+    assert(opened == closed && testAllocations() == baseline);
+}
+
+static void task_tests(void)
+{
+    process_count = 0U;
+    delay_count = 0U;
+    task_test = A_TRUE;
+    if (setjmp(task_done) == 0) {
+        created_task.function(created_task.argument);
+    }
+    assert(process_count == 5U);
+#if APP_MODBUS_MASTER_ENABLE
+    assert(delay_count == 5U);
+    for (size_t i = 0U; i < delay_count; i++) {
+        assert(task_delays[i] == 1000U);
+    }
+#else
+    assert(delay_count == 2U);
+    assert(task_delays[0] == 5U && task_delays[1] == 5U);
+#endif
+    task_test = A_FALSE;
+}
+
+int main(int argc, char **argv)
 {
     unsigned baseline;
+
+    if (argc == 2) {
+        aStatus_t expected = A_STATUS_OK;
+        if (strcmp(argv[1], "clock") == 0) {
+            fail_clock = A_TRUE;
+            expected = A_STATUS_UNSUPPORTED;
+        } else if (strcmp(argv[1], "task") == 0) {
+            fail_task = A_TRUE;
+            expected = A_STATUS_NO_MEMORY;
+        } else {
+            assert(strcmp(argv[1], "startup") == 0);
+            run_immediately = A_TRUE;
+        }
+        assert(protocolInit() == expected);
+        assert(protocolInit() == A_STATUS_BUSY);
+        assert(motor_get().speed == 100U);
+        if (expected == A_STATUS_OK) assert(modbusDeInit() == A_STATUS_OK);
+        assert(opened == closed);
+        return 0;
+    }
     assert(testModbusProcess() == A_STATUS_NOT_READY);
     assert(testModbusInit() == A_STATUS_NOT_READY);
     assert(opened == closed);
-    assert(sigDataInit() == A_STATUS_OK);
+    assert(tablesInit() == A_STATUS_OK);
     baseline = testAllocations();
     fail_clock = A_TRUE;
     assert(testModbusInit() == A_STATUS_UNSUPPORTED);
@@ -396,18 +548,23 @@ int main(void)
     assert(opened == closed && testAllocations() == baseline);
     assert(testModbusInit() == A_STATUS_OK);
     assert(testModbusInit() == A_STATUS_BUSY);
+    assert(testModbusDeInit() == A_STATUS_OK);
     fail_task = A_TRUE;
-    assert(appModbusTaskInit() == A_STATUS_NO_MEMORY);
+    assert(modbusInit() == A_STATUS_NO_MEMORY);
     assert(testModbusProcess() == A_STATUS_NOT_READY);
     assert(opened == closed && testAllocations() == baseline);
     fail_task = A_FALSE;
-    assert(testModbusInit() == A_STATUS_OK);
-    assert(appModbusTaskInit() == A_STATUS_OK);
+    run_immediately = A_TRUE;
+    assert(modbusInit() == A_STATUS_OK);
+    run_immediately = A_FALSE;
 #if APP_MODBUS_MASTER_ENABLE
+    check_reentry = A_TRUE;
     master_tests();
+    check_reentry = A_FALSE;
 #else
     server_tests();
 #endif
+    task_tests();
     close_busy = A_TRUE;
     assert(testModbusDeInit() == A_STATUS_BUSY);
     assert(testModbusProcess() == A_STATUS_NOT_READY);
@@ -417,6 +574,7 @@ int main(void)
     close_busy = A_FALSE;
     assert(testModbusDeInit() == A_STATUS_OK);
     assert(opened == closed && testAllocations() == baseline);
+    port_tests();
     puts("Modbus demo application/transport/data/lifecycle passed");
     return 0;
 }

@@ -30,54 +30,70 @@ typedef enum {
     ADEV_USART_RX_ASYNC,
 } aDevUsartRxState_t;
 
-struct aDevUsartHandle {
-    aDrvUsartHandle_t drv_handle;
+/** @brief 初始化时复制的设备配置；就绪后不修改，不借用调用栈。 */
+typedef struct {
     aDevUsartRS485Config_t rs485;
-    aDrvGpioHandle_t de_gpio;
-    volatile aBool_t rs485_transmitting;
     aDevUsartMode_t mode;
     uint8_t interrupt_priority;
     uint8_t *rx_buffer;
     size_t rx_buffer_size;
     aDevUsartRxByteCallback_t rx_byte_callback;
     void *rx_byte_context;
-    volatile size_t rx_head;
-    volatile size_t rx_tail;
-    volatile size_t rx_count;
-    volatile size_t rx_dma_produced;
-    volatile size_t rx_dma_consumed;
-    volatile aBool_t rx_dma_active;
     uint8_t *tx_buffer;
     size_t tx_buffer_size;
-    volatile size_t tx_head;
-    volatile size_t tx_tail;
-    volatile size_t tx_count;
-    volatile size_t tx_dma_active;
-    volatile aDevUsartTxState_t tx_state;
-    volatile aDevUsartRxState_t rx_state;
-    void *rx_mutex;
-    void *tx_mutex;
-    void *rx_wait_object;
-    void *tx_wait_object;
-    aBool_t tx_draining;
-    aTimepoint_t tx_deadline;
-    aOSTimer_t tx_deadline_timer;
-    atomic_bool tx_completion_claimed;
-    aDevUsartTxEvent_t tx_completion_event;
-    aDevUsartTxCallback_t tx_callback;
-    void *tx_callback_argument;
-    const void *tx_async_buffer;
-    size_t tx_async_size;
-    aStatus_t tx_async_status;
-    uint8_t *rx_snapshot;
-    aDevUsartRxCallback_t rx_callback;
-    void *rx_callback_argument;
-    volatile aBool_t rx_dispatching;
-    volatile aBool_t rx_cancel_pending;
+} aDevUsartSettings_t;
+
+/** @brief 发送方向运行状态，缓冲进度、等待和异步事务。 */
+typedef struct {
+    volatile size_t head;
+    volatile size_t tail;
+    volatile size_t count;
+    volatile size_t dma_active;
+    volatile aDevUsartTxState_t state;
+    void *mutex;
+    void *wait_object;
+    aBool_t draining;
+    aTimepoint_t deadline;
+    aOSTimer_t deadline_timer;
+    atomic_bool completion_claimed;
+    aDevUsartTxEvent_t completion_event;
+    aDevUsartTxCallback_t callback;
+    void *callback_argument;
+    const void *async_buffer;
+    size_t async_size;
+    aStatus_t async_status;
+    volatile aStatus_t error;
+} aDevUsartTxData_t;
+
+/** @brief 接收方向运行状态，缓冲进度、订阅和错误。 */
+typedef struct {
+    volatile size_t head;
+    volatile size_t tail;
+    volatile size_t count;
+    volatile size_t dma_produced;
+    volatile size_t dma_consumed;
+    volatile aBool_t dma_active;
+    volatile aDevUsartRxState_t state;
+    void *mutex;
+    void *wait_object;
+    uint8_t *snapshot;
+    aDevUsartRxCallback_t callback;
+    void *callback_argument;
+    volatile aBool_t dispatching;
+    volatile aBool_t cancel_pending;
     volatile uint32_t idle_event_count;
-    volatile aBool_t rx_overflow;
-    volatile aStatus_t rx_error;
-    volatile aStatus_t tx_error;
+    volatile aBool_t overflow;
+    volatile aStatus_t error;
+} aDevUsartRxData_t;
+
+/* 强类型实例：硬件句柄、配置、收发状态分别存放，无额外堆对象。 */
+struct aDevUsartHandle {
+    aDrvUsartHandle_t drv_handle;
+    aDevUsartSettings_t settings;
+    aDevUsartTxData_t tx;
+    aDevUsartRxData_t rx;
+    aDrvGpioHandle_t de_gpio;
+    volatile aBool_t rs485_transmitting;
     aBool_t dynamic_storage;
 };
 

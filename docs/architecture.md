@@ -56,25 +56,28 @@ platform/aDrv/
 ├── src/
 │   ├── aDrv.c
 │   ├── aDrv_basic.c
-│   ├── aDrv_gpio.c
+│   ├── gpio/aDrv_gpio.c
 │   ├── usart/
 │   │   ├── aDrv_usart.c
 │   │   ├── aDrv_usart_irq.c (按配置选择)
-│   │   ├── aDrv_usart_async.c (按配置选择)
+│   │   ├── aDrv_usart_dma.c (按配置选择)
 │   │   └── aDrv_usart_internal.h
-│   ├── aDrv_dma.c
-│   ├── aDrv_spi.c
-│   ├── aDrv_qspi.c
+│   ├── dma/aDrv_dma.c
+│   ├── spi/aDrv_spi.c
+│   ├── qspi/aDrv_qspi.c
 │   └── aDrv_internal.h                   仅模块间必要的私有声明
 ├── CMSIS/Device/GD/GD32E50x/             Device、system、startup
 ├── GD32E50x_standard_peripheral/         完整官方 SPL
-├── config/                               驱动默认值与 libopt 模板
+├── templates/                            libopt 模板
 └── CMakeLists.txt
 ```
 
-普通外设保持一个独立 `.c`。USART 按基础轮询、可选中断、可选异步 DMA 收发拆分，
+外设统一放入对应子目录，普通外设保持一个独立 `.c`。USART 按基础轮询、可选中断、
+可选 DMA 收发拆分，
 避免基础 USART 对 DMA 形成硬依赖；私有共享状态只通过
 `usart/aDrv_usart_internal.h` 连接。公共头文件不出现 GD32 寄存器类型或 DMA 通道映射。
+通用 DMA 驱动持有 DMA 中断入口，提供事件通知和一致的搬运进度；USART 通过
+该接口复用 DMA 服务。配置与状态布局见 [aDrv 与 aDevice 设计](driver_device_design.md)。
 
 `cmake/aclass_resolve.cmake` 集中校验产品、aDev 与 aDrv 之间的依赖。各层
 CMakeLists 只消费有效配置：aDev 选择是否加入设备 target，aDrv 选择生成的
@@ -137,13 +140,17 @@ aModbus 在模块内部提供地址段、SIG 映射及编码转换，不设置�
 主站从远端采集后发布 aBus，从站根据地址映射读写 aBus。
 详见 [aModbus](../func/aModbus/README.md)。
 
-当前板级[Modbus Demo](../app/data/modbus/README.md)使用 USART2 和 PA15 手动 DE，
+当前板级[产品协议](../app/protocol/README.md)使用 USART2 和 PA15 手动 DE，
 默认 RTU 从站 1，可通过应用宏切换为主站。应用协议配置位于
-app/data/modbus，串口参数位于 app/devices/rs485，通信任务位于
-app/task/modbus。func/aModbus 的通用 RTU 实例负责分帧、时序与事务收尾；
-可选 aModbusUsart 目标负责串口生命周期、ISR 回调和周期计数适配。
+app/protocol 根目录，点表分别位于 IDU_sig_table.c 和 FAN_sig_table.c，端口配置和初始化位于
+app/devices/rs485。system 只调用 protocolInit，由 protocol.c 统一挂载
+IDU/FAN 两张表、初始化协议并创建任务；主从文件仅提供只读业务配置。
+func/aModbus 通过 aStream 收发，通用 RTU 实例负责分帧、时序与事务收尾；
+app/devices/rs485/rs485_device.c 只持有串口，提供 ISR、DWT 和线路完成操作，
+不依赖 aModbus。app/protocol/protocol.c 统一持有协议和 RTU 实例，
+根据主从配置装配资源并创建通信任务，不设置通用任务注册框架。
 通用 RTU 通过回调使用时基、同步及收发，不依赖设备或具体芯片。
-仅链接 aModbus 的 TCP/其他平台不会引入 aDevUsart 和 aDrv 依赖。
+aModbus 库不引入 aDevUsart 和 aDrv 依赖，RTU/TCP 均由应用选择端口。
 SIG 模块通过内部装配接口借用私有 aBus handle，不向业务公开全局 handle。
 
 工程不设置集中式 board 目录。引脚、外部器件型号、总线参数和设备句柄由使用它

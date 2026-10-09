@@ -369,7 +369,7 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
  * @param[in,out] handle 正在循环 RX 的句柄。
  * @param[out] received 累计计数，允许 size_t 自然回绕；通过无符号差值计算增量。
  * @retval A_STATUS_OK 得到一致快照。
- * @retval A_STATUS_BUSY 多次采样仍跨重装，输出仅供参考，应重试。
+ * @retval A_STATUS_BUSY 多次采样仍跨重装，输出不变，应重试。
  * @retval A_STATUS_ERROR DMA 错误锁存。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。

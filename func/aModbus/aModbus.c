@@ -25,6 +25,20 @@ void aModbusConfigStructInit(aModbusConfig_t *config)
     }
 }
 
+void aModbusServiceConfigStructInit(aModbusServiceConfig_t *config)
+{
+    if (config != NULL) {
+        const aModbusServiceConfig_t defaults = {
+            .error_delay_ms = 5U
+        };
+        *config = defaults;
+        aModbusConfigStructInit(&config->modbus);
+        aModbusServerProcessRequestStructInit(&config->server);
+        aOSTaskConfigStructInit(&config->task);
+        config->task.name = "modbus";
+    }
+}
+
 void aModbusSigTargetStructInit(aModbusSigTarget_t *target)
 {
     if (target != NULL) {
@@ -224,8 +238,8 @@ static int32_t transport_read(uint8_t *data, uint16_t size,
         return -1;
     }
     while (done < size) {
-        aSSize_t count = handle->config.transport.read(
-            handle->config.transport.context, data + done, size - done,
+        aSSize_t count = handle->config.transport.stream.read(
+            data + done, size - done,
             io_timeout(handle, &limit));
         if (count < 0) {
             aErrno_t error = aOSGetErrno();
@@ -281,8 +295,10 @@ static int32_t transport_write(const uint8_t *data, uint16_t size,
         }
     }
     limit = aTimepointCalc(byte, aOSGetUptimeMs());
+    /* 缓冲流写入失败后可能残留半帧；只有完整提交成功才允许继续复用。 */
+    if (transport->stream.flush != NULL) handle->fault = A_TRUE;
     while (done < size) {
-        aSSize_t count = transport->write(transport->context,
+        aSSize_t count = transport->stream.write(
             data + done, size - done, io_timeout(handle, &limit));
         if (count < 0) {
             aErrno_t error = aOSGetErrno();
@@ -297,6 +313,14 @@ static int32_t transport_write(const uint8_t *data, uint16_t size,
         if (count == 0) break;
         done += (size_t)count;
         limit = aTimepointCalc(byte, aOSGetUptimeMs());
+    }
+    if (done == size && transport->stream.flush != NULL) {
+        status = transport->stream.flush(aModbusRemaining(handle));
+        if (status != A_STATUS_OK) {
+            io_fail(handle, status);
+            return -1;
+        }
+        handle->fault = A_FALSE;
     }
     if (done == size && transport->wait_transmit_complete != NULL) {
         status = transport->wait_transmit_complete(transport->context,
@@ -434,7 +458,8 @@ static nmbs_error write_registers(uint16_t address, uint16_t quantity,
 static aStatus_t config_check(const aModbusConfig_t *config)
 {
     if (config == NULL || config->bus == NULL ||
-        config->transport.read == NULL || config->transport.write == NULL ||
+        config->transport.stream.read == NULL ||
+        config->transport.stream.write == NULL ||
         !aTimeoutIsValid(config->byte_timeout)) return A_STATUS_INVALID_PARAM;
     if (config->role != AMODBUS_ROLE_CLIENT &&
         config->role != AMODBUS_ROLE_SERVER) return A_STATUS_INVALID_PARAM;

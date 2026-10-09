@@ -8,6 +8,8 @@
 #define A_MODBUS_H
 
 #include "aBus.h"
+#include "aOS.h"
+#include "aStream.h"
 
 #ifndef AMODBUS_STATIC_ENABLE
 #define AMODBUS_STATIC_ENABLE 1
@@ -66,25 +68,23 @@ typedef enum {
     AMODBUS_WORD_LOW_FIRST
 } aModbusWordOrder_t;
 
-/** 同步传输适配；配置复制，context 借用至销毁。
- * read/write 使用项目 errno 和 aTimeout_t，允许部分进度；0 表示无进展。
- * socket EOF 必须返回 -1/A_EIO，不能作为暂时无数据处理。
- * 回调返回后不得持有缓冲区；TCP 写入必须消费/复制，RTU 还须确认线路完成。
- * RTU 必须提供三个辅助操作：清理残留输入并恢复帧边界、发送前保证帧间隔、
- * 等待线路发送完成。具体微秒时序、接收帧边界及 DE 控制属于传输/设备层。
- * TCP 辅助操作可为 NULL；discard_input 不得丢弃下一条合法 TCP 请求。
+/** 协议借用的传输，不创建或关闭端口。
+ * stream 负责同步字节收发，允许部分进度；回调返回后不得持有缓冲区。
+ * TCP 端口须将 EOF 转成 -1/A_EIO，0 仅表示本次没有数据。
+ * flush 可为 NULL；非空时在完整报文提交后调用，再等待 RTU 线路完成。
+ * 带 flush 的流写入/提交失败后，后续操作返回 NOT_READY，须清理端口
+ * 输出缓冲并重建实例；库无法撤回端口已接收的部分报文。
+ * RTU 还必须提供输入恢复、帧间隔和发送完成操作；context 只供这些
+ * 辅助操作及 finish 使用，不改变 aStream 的无 context 约定。
+ * TCP 的辅助操作通常为空；不得随意清空后续合法 TCP 报文。
  */
 typedef struct {
+    aStream_t stream;
     void *context;
-    aSSize_t (*read)(void *context, void *data, size_t size,
-                    aTimeout_t timeout);
-    aSSize_t (*write)(void *context, const void *data, size_t size,
-                     aTimeout_t timeout);
     aStatus_t (*discard_input)(void *context, aTimeout_t timeout);
     aStatus_t (*prepare_frame)(void *context, aTimeout_t timeout);
     aStatus_t (*wait_transmit_complete)(void *context, aTimeout_t timeout);
-    /** 可选：每笔协议操作结束时释放当前接收帧，不丢弃后续帧。
-     * 在任务上下文调用，禁止阻塞、重入；由模块统一调用。 */
+    /** 每笔操作结束释放当前帧，不丢弃后续帧；任务上下文，禁止重入。 */
     void (*finish)(void *context);
 } aModbusTransport_t;
 
@@ -174,6 +174,10 @@ typedef struct {
     void *context;
 } aModbusAddressRange_t;
 
+/** 协议实例配置，不包含应用任务和轮询调度参数。
+ * StructInit 设置默认值；直接静态初始化不会自动应用这些默认值。
+ * 应用可先定义 const 模板，再复制到局部变量并装配 bus 和 transport。
+ */
 typedef struct {
     aModbusRole_t role;
     aModbusTransportType_t transport_type;
@@ -226,8 +230,31 @@ typedef struct {
     aModbusResult_t *result;
 } aModbusClientSigRequest_t;
 
+/** 通用服务配置，组合协议、请求及任务调度参数，供应用统一装配。
+ * 本结构体仅描述配置，不创建任务、端口或协议实例。
+ * 应用持有模板及其引用的映射、采集项和结果对象，使用期间须持续有效。
+ */
+typedef struct {
+    /** 协议配置；使用前由应用装配 bus 和 transport。 */
+    aModbusConfig_t modbus;
+    /** 主站采集列表；顺序和执行周期由应用管理。 */
+    const aModbusClientSigRequest_t *polls;
+    size_t poll_count;
+    /** 从站每次处理请求，传给 aModbusServerProcess。 */
+    aModbusServerProcessRequest_t server;
+    /** 任务配置；入口和参数由应用提供，库不创建或持有任务。 */
+    aOSTaskConfig_t task;
+    /** 每次成功或失败后等待的毫秒数，不属于协议事务超时。 */
+    uint32_t interval_ms;
+    uint32_t error_delay_ms;
+} aModbusServiceConfig_t;
+
 void aModbusTransportStructInit(aModbusTransport_t *transport);
 void aModbusConfigStructInit(aModbusConfig_t *config);
+/** 重置协议、请求及任务默认值；NULL 不操作，不分配资源。
+ * 默认成功等待 0 ms，失败等待 5 ms；调用方须设置任务入口及业务配置。
+ */
+void aModbusServiceConfigStructInit(aModbusServiceConfig_t *config);
 void aModbusSigTargetStructInit(aModbusSigTarget_t *target);
 void aModbusAddressReadRequestStructInit(aModbusAddressReadRequest_t *request);
 void aModbusAddressWriteRequestStructInit(

@@ -25,6 +25,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | --- | --- |
 | OS 通知、定时器与工作队列 | `python3 tests/aos/run.py` |
 | SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |
+| DMA 通道、IRQ/查询交错与真实 USART DMA 适配 | `python3 tests/dma/run.py` |
 | USART、RS485、FIFO 与 IRQ | `python3 tests/usart/run.py` |
 | aBus 定义、绑定、锁与分配 | `python3 tests/bus/run.py` |
 | SIG 应用与 Shell 类型解析 | `python3 tests/bus/test_app_sig.py`、`python3 tests/bus/test_shell_types.py` |
@@ -33,7 +34,8 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | Flash 测试命令 | `python3 tests/flash25q/test_command.py` |
 | 数据库与完整 Flash 适配链 | `python3 tests/database/run.py`、`python3 tests/database/test_flash_chain.py` |
 | Modbus 协议、aBus 映射与通用 RTU 多实例/时序 | `python3 tests/modbus/run.py` |
-| Modbus 板级端口、主从与生命周期 | `python3 tests/modbus_demo/run.py` |
+| 协议统一入口、启动顺序与功能关闭 | `python3 tests/protocol_tasks/run.py` |
+| Modbus 板级端口、主从、任务调度与生命周期 | `python3 tests/modbus_demo/run.py` |
 | Shell / 日志 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
 | 应用设备与启动编排 | `python3 tests/app_devices/run.py`、`python3 tests/app_startup/run.py` |
 | 调试脚本 | `python3 tests/scripts/test_debug.py` |

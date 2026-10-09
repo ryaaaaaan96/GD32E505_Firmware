@@ -22,9 +22,9 @@ with tempfile.TemporaryDirectory(prefix="aclass-system-") as directory:
                 "platform/aLib/include", "device/aDev_LED",
                 "device/aDev_Flash25q", "app", "app/task/system",
                 "app/devices/system",
-                "app/data/sig", "app/task/sig", "func/aShell/include",
+                "app/protocol/inc", "app/task/sig", "func/aShell/include",
                 "func/aMemory", "func/aDataBase", "func/aLog",
-                "func/aBus/include", "app/data/modbus", "app/task/modbus")
+                "func/aBus/include")
     command = [
         "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
         *["-I" + path for path in includes],

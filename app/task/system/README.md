@@ -1,7 +1,7 @@
-# 系统任务与日志调试
+# 系统服务与调试
 
 `system_init.c` 负责系统服务的启动编排，以及状态灯和 Shell 任务。
-本目录也管理数据库实例及其调试命令，详见 [数据库演示](database.md)。
+本目录也管理通用数据总线和数据库实例及其调试命令，详见 [数据库演示](database.md)。
 `flash_test.c` 保留手动擦写测试，默认不编译；启用步骤见
 [Flash 手动测试](flash_test.md)。
 产品输出适配和存储配置统一由 `app/devices/system` 提供。
@@ -60,3 +60,33 @@ I/flash           [1234 ms] Flash backend can be added later
 - 多后端：应用分发到 Shell 和 Flash，并明确部分成功策略。
 
 Flash 后端须在回调返回前复制数据，不能保存上游静态缓冲区的指针。
+
+## 数据总线服务
+
+- `data_bus_service.c/h`：私有 aBus handle、初始化、键解析及通用数据访问。
+- `data_bus_command.c`：注册 `sig` 命令，只依赖服务和 aBus 元信息。
+- `data_bus_modbus.h`：应用协议装配入口，供主从示例借用私有总线实例。
+
+产品点表分别在 IDU_sig_table.c 和 FAN_sig_table.c，各自填充表描述。
+protocol.c 用 dataBusConfig_t 统一挂载，不增加独立总线任务。
+命令以 deviceID + sigKey 定位，内部按解析后的 sigIndex 访问：
+
+```text
+sig get 1
+sig get 1 42
+sig set 1 42 100
+sig get 2 1001
+sig set 2 1001 0 200
+```
+
+全部类型和范围来自点表，点表增减或调序无需改命令实现。
+字段仍按 paramIndex 定位，字段描述调序时须更新字段命令。
+点表挂载与设备关系见 [产品协议](../../protocol/README.md)。
+
+## 协议启动
+
+system 只包含 `protocol.h` 并调用 `protocolInit()`，不读取协议配置或判断角色。
+点表注册和各功能初始化由 `app/protocol/protocol.c` 编排，通信实例与任务也由该文件管理，
+板载端口初始化在 `app/devices/rs485`。
+成功后 system 才启动 Shell 消费任务；失败进入已有启动失败流程。
+任务和扩展步骤见 [协议说明](../../protocol/README.md)。

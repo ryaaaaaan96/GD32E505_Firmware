@@ -28,7 +28,7 @@ target_compile_definitions(${APP_TARGET} PRIVATE
     APP_DATABASE_ENABLE=$<BOOL:${app_database_enable}>)
 
 # 先装配 aBus 数据及其协议映射，确定设备和任务所需的资源。
-add_subdirectory(data)
+add_subdirectory(protocol)
 add_subdirectory(devices)
 add_subdirectory(task)
 

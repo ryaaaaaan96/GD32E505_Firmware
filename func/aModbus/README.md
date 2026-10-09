@@ -65,7 +65,7 @@ request.unit_id = 2U;
 request.area = AMODBUS_AREA_INPUT_REGISTERS;
 request.address = 100U;
 request.target.deviceID = 1U;
-request.target.sigIndex = APP_BUS_COUNTER;
+request.target.sigIndex = IDU_SIG_COUNTER;
 request.timeout = A_TIMEOUT_MS(500U);
 status = aModbusClientReadSig(client, &request);
 ```
@@ -123,7 +123,7 @@ static const aModbusBusMap_t maps[] = {
         .flags = AMODBUS_ACCESS_READ | AMODBUS_ACCESS_WRITE,
         .target = {
             .deviceID = 1U,
-            .sigIndex = APP_BUS_COUNTER,
+            .sigIndex = IDU_SIG_COUNTER,
             .paramIndex = AMODBUS_SIG_WHOLE
         },
         .word_order = AMODBUS_WORD_HIGH_FIRST
@@ -132,8 +132,8 @@ static const aModbusBusMap_t maps[] = {
         .address = 2U,
         .flags = AMODBUS_ACCESS_READ | AMODBUS_ACCESS_WRITE,
         .target = {
-            .deviceID = 1U,
-            .sigIndex = APP_BUS_MOTOR,
+            .deviceID = FAN_SIG_DEVICE_ID,
+            .sigIndex = FAN_SIG_MOTOR,
             .paramIndex = 0U
         }
     }
@@ -164,8 +164,8 @@ aStatus_t sigModbusServerInit(const aModbusTransport_t *transport,
 ```
 
 此片段说明绑定方式。当前板级实例见
-[应用主从演示](../../app/data/modbus/README.md)：USART2 PC10/PC11、PA15 DE，
-使用 sigModbusCreate / sigModbusInitStatic 绑定私有 SIG 实例。
+[产品协议](../../app/protocol/README.md)：USART2 PC10/PC11、PA15 DE，
+使用 dataBusModbusCreate / dataBusModbusInitStatic 绑定私有 aBus 实例。
 
 ## 两级回调与并发
 
@@ -199,12 +199,15 @@ RTU 三个辅助回调必须提供：
 - `prepare_frame`：确认可以开始新帧，处理帧间静默和前次发送恢复。
 - `wait_transmit_complete`：确认最后一个停止位发送完毕及 DE 已释放。
 
-模块提供通用 RTU 分帧实例及可选 USART 适配，也允许自定义 transport。
+模块提供通用 RTU 分帧实例，也允许应用提供自定义 transport。
+字节收发统一使用 `aModbusTransport_t.stream`（`aStream_t`）。
 仅 USART IDLE 或毫秒超时不足以保证严格 RTU 接收时序。
 不要将 Shell 与 Modbus 绑定到同一条接收流。
 TCP 可将三个辅助回调设为 NULL，不应在每次请求前清理 socket 中的合法数据。
-现有 aStream 没有 context，固定端口可通过适配函数接入；动态多连接使用本模块
-自带 context 的 transport，无需修改 aStream。
+aStream 不携带 context，每个端口提供自己的适配函数并绑定私有实例。
+transport.context 只供 RTU 辅助操作使用，不能用它区分 Stream 读写实例。
+当前接口适合固定端口；运行时任意数量的动态 socket 连接需要额外设计端口管理，
+本次不宣称支持动态连接池。
 
 可选 `finish` 回调在每笔操作结束、释放实例使用权之前调用，成功和失败
 路径均执行。它只释放当前接收帧，禁止清空后续排队帧；TCP 一般设为 NULL。
@@ -229,42 +232,72 @@ TCP 半帧、传输或协议错误后锁定为故障状态，后续调用返回 
 | `aModbusRtuConfigStructInit` | 填充通用 RTU 默认配置 |
 | `aModbusRtuInitStatic` / `aModbusRtuCreate` | 初始化独立 RTU 状态 |
 | `aModbusRtuReceive` | ISR 或受同步保护的单生产者输入字节与错误 |
-| `aModbusRtuGetTransport` | 取得供协议实例借用的传输接口 |
+| `aModbusRtuRead` / `aModbusRtuWrite` | 供应用薄适配函数转成 Stream 回调 |
+| `aModbusRtuBindTransport` | 给应用 Stream 补充帧间隔、发送完成及收尾操作 |
 | `aModbusRtuDeInitStatic` / `aModbusRtuDestroy` | 接收和协议调用停止后释放 |
 
 通用接口由 `aModbus_rtu.h` 声明；静态布局见 `aModbus_rtu_instance.h`。
-调用者通过 `aModbusRtuIo_t` 提供计数器、同步、发送和线路完成操作。
+调用者通过 `aModbusRtuIo_t` 提供计数器、同步及线路完成操作，
+通过 `aModbusRtuConfig_t.output` 提供物理输出 Stream；其 read 不使用。
 消费任务通过 enter/exit 排除生产者；线程生产者必须使用同一同步机制。
 计数器须以固定频率运行，支持 32 位回绕；aOS 毫秒时基用于判断长空闲。
 Linux 适配可以使用通用 RTU 或自定义 transport，但普通串口批量读取的
 返回时间不能还原逐字节到达时间，不能直接补送字节来声称严格的 RTU 定时。
 
-当前 MCU 应用直接使用 `aModbus_rtu_usart.h` 的现成适配：
+## 应用端口与协议装配
 
-| 接口 | 用途 |
-| --- | --- |
-| `aModbusRtuUsartConfigStructInit` | 初始化配置，再填写串口、角色和站号 |
-| `aModbusRtuUsartInitStatic` / `aModbusRtuUsartCreate` | 创建 RTU 与串口 |
-| `aModbusRtuUsartGetTransport` | 装配到 `aModbusConfig_t.transport` |
-| `aModbusRtuUsartDeInitStatic` / `aModbusRtuUsartDestroy` | 关闭串口后释放状态 |
+`aModbus` 不包含 aDevUsart、GPIO 或 DWT，不创建/关闭具体设备或 TCP 连接。
+CMake 只有 `aModbus` 目标，依赖 aBus/aOS/aLib，不再提供 `aModbusUsart`。
+此前直接拥有 USART 的组合接口已移除，应用通过公开接口编排生命周期。
+接口迁移：原 transport.read/write 改为 transport.stream.read/write，
+移除读写回调的 context 参数；原 aModbusRtuGetTransport 改为
+aModbusRtuBindTransport，并由应用先提供帧读写的 Stream 适配。
 
-静态布局见 `aModbus_rtu_usart_instance.h`。USART 配置的 RX 模式必须为
-INTERRUPT_CALLBACK，回调及 context 留空，由模块在开启 IRQ 前统一注册。
-时序按波特率、校验和停止位计算；DE 由 aDevUsart 管理。模块先准备 RTU
-再打开串口；销毁时顺序相反，关闭失败会保留状态供重试。
-适配实例遵循 AMODBUS 分配开关，串口实例遵循 ADEV_USART 分配开关；
-两层都关闭动态分配时，全链路使用显式静态实例。
+当前应用由 [protocol.c](../../app/protocol/protocol.c)
+装配协议，物理端口在 [rs485_device.c](../../app/devices/rs485/rs485_device.c)：
 
-应用只提供串口参数和缓冲区、协议角色和映射，编排 Init/Process/DeInit。
-底层串口和传输状态由适配实例持有；应用不编写 ISR 收帧、TC 等待或帧重置。
-动态模式下 RTU 与适配状态在初始化时一次分配；固定 heap 中的这部分空间
-仍要计入运行 RAM，不能把 BSS 减少误认为总 RAM 用量降低。
+1. rs485PortPrepare 提供串口参数、物理输出流和时基操作，不创建 RTU。
+2. 协议服务创建 RTU，适配帧 Stream，再创建 aModbus 并校验 aBus 映射。
+3. rs485PortOpen 将接收回调绑定到已就绪的 RTU，最后打开 USART。
+4. 服务创建自己的通信任务；system 只调用 protocolInit。
+5. 停止所有调用者后，先销毁协议，再关闭串口，最后释放 RTU。
+   串口关闭 BUSY 时保留 RTU，后续允许重试关闭。
 
-CMake 的 `aModbus` 目标只依赖 aBus/aOS；`aModbusUsart` 是可选独立目标，
-在启用 aDev USART 及其中断能力时提供，使用方显式链接。
-因此 TCP/自定义传输可只链接核心，不引入 USART、DWT 或板级依赖。
-当前 USART 适配使用内核周期计数，要求固定内核时钟；休眠、调试暂停及
-最坏 ISR 响应延迟仍需在板端确认。
+`aModbus.h` 提供 aModbusServiceConfig_t，统一组合 aModbusConfig_t、
+主站采集列表、从站处理请求、aOSTaskConfig_t 及成功/失败后的等待时间。
+该类型只描述配置，库不自动创建任务、不执行轮询调度，也不持有应用任务。
+具体设备的配置实例由 app 定义，库中没有 IDU/FAN 等设备声明。
+装配时复制协议模板，填入具体 transport 并绑定私有 aBus；模板及点表保持只读。
+静态模板须明确字节等待策略，当前应用为 20 ms；局部配置可调用
+aModbusServiceConfigStructInit 获取整组默认值：协议按 aModbusConfigStructInit，
+从站处理超时为 100 ms，任务名为 modbus、普通优先级、栈使用 aOS 默认容量，
+成功等待 0 ms、失败等待 5 ms。应用须补齐端口、总线、任务入口和采集或映射配置。
+初始化函数仅填写结构体，不申请资源；只配置协议实例时仍用 aModbusConfig_t。
+
+应用 Stream 的 read/write 分别转调 `aModbusRtuRead/Write`。RTU Read 消费
+已经确定边界的帧，Write 经 output.write 提交物理字节并记录发送时序。
+`aModbusRtuBindTransport` 保留应用填写的 Stream，只补充 RTU 辅助操作。
+当前串口 write 直接提交，因此 output.flush 和协议 stream.flush 均为 NULL。
+如果端口使用缓冲输出，这两个 flush 须使用同一回调。
+
+协议和 RTU 分帧实例遵循 AMODBUS 分配开关；串口遵循 ADEV_USART 分配开关。
+静态方式使用各自 `_instance.h` 中的显式存储。运行期不申请协议内存。
+当前板端依赖固定内核频率，休眠、调试暂停和 ISR 延迟仍需实测。
+
+TCP 使用已经建立连接的 Stream：只设置 transport.stream 的 read/write，
+可选 flush，RTU 辅助操作全部留空。连接建立、断线后的重连及资源释放
+由应用负责。库保留 RTU/TCP 主从能力，ASCII 暂未实现。
+
+### Stream 提交与发送完成
+
+`write` 可返回部分长度，库在剩余预算内补齐整帧；随后调用可选的 flush，
+最后调用 RTU wait_transmit_complete。flush 只提交输出，不清空输入、不代表
+最后一个停止位已经发完。nanoMODBUS 的输入 flush 继续适配到 discard_input，
+与 aStream.flush 分开。
+
+缓冲流的 write 或 flush 失败可能留下半帧，因此 RTU/TCP 实例都会进入故障状态，
+后续操作返回 NOT_READY；应用清理端口输出并重建实例后才能继续。
+flush 为 NULL 的 RTU 继续使用原有的帧间隔等待和输入恢复策略。
 
 ## 功能和验证范围
 
@@ -281,7 +314,7 @@ AMODBUS_CLIENT_ENABLE、AMODBUS_SERVER_ENABLE。
 至少开启一种角色和一种分配接口；启用协议必须显式开启 ABUS_ENABLE。
 当前产品通过 APP_MODBUS_DEMO_ENABLE 接入 USART2 / RS485 及通信任务；
 主从角色和站号在 app/app_config.h 选择，应用分别提供主站和从站实现。
-模块本身不创建任务，板级配置和限制见 [应用演示](../../app/data/modbus/README.md)。
+模块本身不创建任务，板级配置和限制见 [产品协议](../../app/protocol/README.md)。
 
 ```sh
 SANITIZE=1 python3 tests/modbus/run.py

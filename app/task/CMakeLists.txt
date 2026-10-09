@@ -1,5 +1,2 @@
 add_subdirectory(system)
 add_subdirectory(sig)
-if(app_modbus_enable)
-    add_subdirectory(modbus)
-endif()

@@ -11,9 +11,6 @@
 #ifndef ADEV_LED_H
 #define ADEV_LED_H
 
-/* Typed LED operations intentionally remain distinct from stream Read/Write.
- * Common API rules: docs/interface_contract.md. */
-
 #include "aDrv_gpio.h"
 #include "aLib.h"
 
@@ -30,11 +27,8 @@ typedef struct {
     aBool_t initially_on; /**< 初始化完成时是否点亮。 */
 } aDevLedConfig_t;
 
-/** @brief aDevLedHandle_t 驱动/设备状态；调用方提供存储，字段仅由所属模块维护。 */
-typedef struct {
-    aDrvGpioHandle_t gpio; /**< 底层 GPIO 状态，不重复保存 initialized。 */
-    aDevLedActiveLevel_t active_level; /**< 从配置保存的有效电平。 */
-} aDevLedHandle_t;
+/** @brief 不透明设备句柄；静态分配方包含 aDev_led_instance.h。 */
+typedef struct aDevLedHandle aDevLedHandle_t;
 
 /**
  * @brief 设置默认 LED 配置。

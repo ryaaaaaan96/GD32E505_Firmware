@@ -18,8 +18,8 @@ Shell 输出队列，测试命令见
 [系统任务与日志调试](app/task/system/README.md)。QSPI 默认关闭，
 RS485 已启用，详见 [USART / RS485 设计](docs/usart_design.md)。
 Modbus 库提供 RTU/TCP 主从站及 aBus 映射；板级 Demo 使用 USART2 PC10/PC11、
-PA15 手动 DE，115200 8N1，默认从站 1。主从切换、寄存器和联调方式见
-[Modbus Demo](app/data/modbus/README.md)，协议接口见 [aModbus](func/aModbus/README.md)。
+PA15 手动 DE，115200 8N1，默认从站 1。主从切换与点表关系见
+[产品协议](app/protocol/README.md)，协议接口见 [aModbus](func/aModbus/README.md)。
 
 ## 分层
 

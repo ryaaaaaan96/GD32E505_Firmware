@@ -399,6 +399,24 @@ static size_t sig_find(const aBusTable_t *table, uint16_t sigKey)
     return SIZE_MAX;
 }
 
+aStatus_t aBusResolveKey(aBusHandle_t *handle,
+    const aBusSigKeyQuery_t *query, size_t *sigIndex)
+{
+    const aBusTable_t *table;
+    size_t offset;
+    size_t index;
+
+    assert(handle != NULL && query != NULL && sigIndex != NULL);
+    if (handle->tables == NULL) return A_STATUS_NOT_READY;
+    table = table_find(handle->tables, handle->table_count,
+                       query->deviceID, &offset);
+    if (table == NULL) return A_STATUS_NOT_FOUND;
+    index = sig_find(table, query->sigKey);
+    if (index == SIZE_MAX) return A_STATUS_NOT_FOUND;
+    *sigIndex = index;
+    return A_STATUS_OK;
+}
+
 #ifndef NDEBUG
 static aBool_t buffer_is_valid(aBusSigState_t *entry, const aBusSig_t *sig,
                                const void *buffer,

@@ -290,6 +290,8 @@ status = aBusGetByIndex(handle, &request);
 ```
 
 先按 deviceID 查找表 O(T)，表内 Index 定位 O(1)；Key 查找 O(N)。
+`aBusResolveKey` 可将 deviceID + sigKey 解析为当前实例的 sigIndex；
+不加锁、不分配内存，失败不修改输出，结果不跨实例或版本保存。
 Key 找到后调用 Index 入口，范围校验、锁和复制
 语义完全相同。越界下标和未知键返回 NOT_FOUND，未初始化实例返回 NOT_READY。
 两类请求不混用定位字段。旧的 aBusSetSig / aBusGetSig 接口已移除。
@@ -298,7 +300,7 @@ Key 找到后调用 Index 入口，范围校验、锁和复制
 
 `aBusSetParam` / `aBusGetParam` 使用独立请求结构体，包含 deviceID、sigIndex、
 paramIndex、src/dst、size、timeout；各有 StructInit，默认 NO_WAIT。
-应用通过 sigDataSetParam/sigDataGetParam 转发，不公开 handle。
+应用通过 dataBusSetParam/dataBusGetParam 转发，不公开 handle。
 
 字段读写使用父 SIG 的锁配置；写入在锁内校验受影响字段的范围，然后只复制
 目标字节。不会先读取整个结构体再写回，因此不覆盖其他字段的新值。
@@ -306,11 +308,12 @@ paramIndex、src/dst、size、timeout；各有 StructInit，默认 NO_WAIT。
 未知参数返回 NOT_FOUND，非 STRUCT 返回 UNSUPPORTED，长度错误返回
 INVALID_PARAM。无锁或应用直接访问绑定变量时，同步仍由应用决定。
 
-Shell 不维护独立的类型表，全部根据查询到的定义进行解析：
+应用的 `task/system/data_bus_command.c` 不维护独立类型表，先解析稳定键，
+再根据查询到的定义进行解析：
 
 ```text
-sig get <deviceID> [sigIndex [paramIndex]]
-sig set <deviceID> <sigIndex> [paramIndex] <value>
+sig get <deviceID> [sigKey [paramIndex]]
+sig set <deviceID> <sigKey> [paramIndex] <value>
 ```
 
 - 标量使用十进制，先检查类型表示范围，再由 aBus 检查可选业务范围。
@@ -325,7 +328,8 @@ RAW 是平台内存字节序，包含应用定义的填充字节，不是通信�
 
 额外运行 `python3 tests/bus/test_app_sig.py` 和
 `python3 tests/bus/test_shell_types.py`，分别检查真实产品绑定/任务和独立点表的
-标量、RAW、STRUCT 命令，覆盖非法输入、范围拒绝及内存失败。
+标量、RAW、STRUCT 命令，覆盖不同表顺序、跨设备同键、非法输入、
+范围拒绝及内存失败。Shell 使用 sigKey，STRUCT 字段仍使用 paramIndex。
 
 ### 读取整个设备
 
@@ -333,9 +337,9 @@ RAW 是平台内存字节序，包含应用定义的填充字节，不是通信�
 sig get 1
 ```
 
-省略 sigIndex 时按下标顺序显示设备 1 的全部 SIG，STRUCT 展开登记字段，
-RAW 显示十六进制。保留 `sig get 1 0`（整个 Motor）和
-`sig get 1 0 0`（Motor.speed）的用法。
+省略 sigKey 时按下标顺序显示设备 1 的全部 SIG，STRUCT 展开登记字段，
+RAW 显示十六进制。保留 `sig get 2 1001`（整个 Motor）和
+`sig get 2 1001 0`（Motor.speed）的用法。
 每个 SIG 单独读取快照，整张表不保证来自同一时刻；读取失败时停止并报告错误。
 
 ## 实例归属与链接段

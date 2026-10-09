@@ -15,8 +15,8 @@ if(AMODBUS_STATIC_ENABLE)
 endif()
 target_include_directories(aModbus ${nanomodbus_visibility}
     "${CMAKE_CURRENT_SOURCE_DIR}/nanoMODBUS")
-target_link_libraries(aModbus PUBLIC aBus
-    PRIVATE aOS aclass_project_options)
+target_link_libraries(aModbus PUBLIC aBus aOS
+    PRIVATE aclass_project_options)
 foreach(feature STATIC DYNAMIC CLIENT SERVER)
     target_compile_definitions(aModbus PUBLIC
         AMODBUS_${feature}_ENABLE=$<BOOL:${AMODBUS_${feature}_ENABLE}>
@@ -37,10 +37,3 @@ target_compile_definitions(aModbus ${nanomodbus_visibility}
     NMBS_SERVER_READ_WRITE_REGISTERS_DISABLED
     NMBS_SERVER_READ_DEVICE_IDENTIFICATION_DISABLED
 )
-
-# USART 适配是可选目标；只链接核心的 TCP/其他平台不依赖 aDev 或 aDrv。
-if(ADEV_USART_ENABLE AND ADEV_USART_INTERRUPT_ENABLE)
-    add_library(aModbusUsart STATIC aModbus_rtu_usart.c)
-    target_link_libraries(aModbusUsart PUBLIC aModbus aDevUsart
-        PRIVATE aOS aDrv aclass_project_options)
-endif()

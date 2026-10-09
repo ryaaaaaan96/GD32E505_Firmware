@@ -88,6 +88,20 @@ typedef struct {
     size_t sigIndex;
 } aBusSigQuery_t;
 
+/** @brief 稳定键定位；sigKey 仅在同一设备的表内唯一。 */
+typedef struct {
+    uint16_t deviceID;
+    uint16_t sigKey;
+} aBusSigKeyQuery_t;
+
+/** 将稳定键解析为当前表内下标；失败不修改 sigIndex。
+ * 定义不可变，查询无需加锁；结果仅在当前实例生命周期内有效。
+ * 设备查找 O(T)，键查找 O(N)，不额外分配 RAM 索引。
+ * 未就绪返回 NOT_READY，未知设备或键返回 NOT_FOUND。
+ */
+aStatus_t aBusResolveKey(aBusHandle_t *handle,
+    const aBusSigKeyQuery_t *query, size_t *sigIndex);
+
 /** @brief 复制出的只读元信息，不暴露内部表或数据地址。 */
 typedef struct {
     uint16_t sigKey;

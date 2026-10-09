@@ -167,7 +167,8 @@ CMake 注册主从两份源码，预处理时保留所选角色；不再从 CMak
 与应用实际运行角色分开。关闭协议库或串口依赖时，应用 Demo 一同裁剪；
 所选角色与库的 CLIENT/SERVER 能力不匹配时，编译阶段明确报错。
 引脚、站号、速率和寄存器映射仍由应用 C 代码配置，详见
-[Modbus Demo](../app/data/modbus/README.md)。
+[产品协议](../app/protocol/README.md)。后续 CSV/JSON 生成输入位于
+[protocol/config](../app/protocol/config/README.md)，当前尚未接入代码生成。
 
 ### Flash25Q / SFUD 构建
 

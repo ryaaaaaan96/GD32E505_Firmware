@@ -20,7 +20,7 @@ aStatus_t aDevUsartRS485Init(aDevUsartHandle_t *handle,
                             const aDevUsartRS485Config_t *config)
 {
     aStatus_t status;
-    handle->rs485 = *config;
+    handle->settings.rs485 = *config;
     if (config->mode == ADEV_USART_RS485_NONE) {
         return A_STATUS_OK;
     }
@@ -44,11 +44,12 @@ aStatus_t aDevUsartRS485Init(aDevUsartHandle_t *handle,
 aStatus_t aDevUsartRS485Begin(aDevUsartHandle_t *handle)
 {
     aStatus_t status;
-    if ((handle->rs485.mode == ADEV_USART_RS485_NONE) ||
+    if ((handle->settings.rs485.mode == ADEV_USART_RS485_NONE) ||
         handle->rs485_transmitting) {
         return A_STATUS_OK;
     }
-    status = aDrvGpioWrite(&handle->de_gpio, handle->rs485.de_active_level);
+    status = aDrvGpioWrite(&handle->de_gpio,
+        handle->settings.rs485.de_active_level);
     if (status == A_STATUS_OK) {
         handle->rs485_transmitting = A_TRUE;
     }
@@ -58,12 +59,12 @@ aStatus_t aDevUsartRS485Begin(aDevUsartHandle_t *handle)
 aStatus_t aDevUsartRS485Complete(aDevUsartHandle_t *handle)
 {
     aStatus_t status;
-    if ((handle->rs485.mode == ADEV_USART_RS485_NONE) ||
+    if ((handle->settings.rs485.mode == ADEV_USART_RS485_NONE) ||
         !handle->rs485_transmitting) {
         return A_STATUS_OK;
     }
     status = aDrvGpioWrite(&handle->de_gpio,
-                           inactive(handle->rs485.de_active_level));
+                           inactive(handle->settings.rs485.de_active_level));
     if (status != A_STATUS_OK) {
         return status;
     }

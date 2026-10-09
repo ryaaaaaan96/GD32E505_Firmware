@@ -96,27 +96,36 @@ cmake_language(DEFER CALL force_modbus)
         assert archive.exists() == bool(enabled)
         database = json.loads((build / "compile_commands.json").read_text())
         demo_enabled = bool(enabled) and name != "core_no_usart"
-        for role in ("master", "slave"):
-            present = any(Path(item["file"]).name == f"modbus_{role}.c"
+        for role, device in (("master", "FAN"), ("slave", "IDU")):
+            present = any(Path(item["file"]).name == f"{device}_modbus_{role}.c"
                           for item in database)
             assert present == demo_enabled, (name, role)
-        for source in ("rs485_config.c",
-                       "modbus_task.c"):
+        for source in ("rs485_device.c",):
             present = any(Path(item["file"]).name == source
                           for item in database)
             assert present == demo_enabled, (name, source)
-        assert (build / "lib/libaModbusUsart.a").exists() == demo_enabled
-        assert not any(Path(item["file"]).name == "app_modbus_port.c"
+        for source in ("protocol.c",):
+            assert any(Path(item["file"]).name == source
+                       for item in database), (name, source)
+        assert not any(Path(item["file"]).name == "modbus_task.c"
                        for item in database)
+        assert not (build / "lib/libaModbusUsart.a").exists()
+        for item in database:
+            if "/func/aModbus/" in item["file"]:
+                assert "/device/" not in item["command"], item["command"]
+                assert "/aDrv/" not in item["command"], item["command"]
         nm = str(Path(toolchain) / "bin/arm-none-eabi-nm")
         firmware = next((build / "bin").glob("*.elf"))
         symbols = subprocess.check_output([nm, str(firmware)], text=True)
         exported = {line.split()[-1] for line in symbols.splitlines()
                     if " T " in line}
-        for role in ("Master", "Slave"):
+        all_symbols = {line.split()[-1] for line in symbols.splitlines()
+                       if len(line.split()) >= 3}
+        for role, device in (("master", "FAN"), ("slave", "IDU")):
             expected = demo_enabled and (
-                (role == "Master") == name.endswith("client"))
-            assert (f"modbus{role}Process" in exported) == expected, name
+                (role == "master") == name.endswith("client"))
+            assert (f"{device}_modbus_{role}_config" in all_symbols) == expected, name
+        assert "protocolInit" in exported, name
         if enabled:
             probe = next(item["command"] for item in database
                          if item["file"].endswith("modbus_api_probe.c"))

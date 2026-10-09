@@ -1,0 +1,128 @@
+# aDrv 与 aDevice 设计
+
+[返回文档索引](README.md)
+
+本文记录当前重构后的实现。代码目录仍使用 `device/`，公共接口使用 `aDev`
+前缀。参考 Zephyr 的按外设分类、配置与运行状态分离、DMA 服务复用方式，
+保留本工程的显式初始化和 aOS 移植边界。
+
+## 分层与接口
+
+| 层 | 拥有的内容 | 对外行为 |
+| --- | --- | --- |
+| aDrv | 寄存器适配、固定路由、IRQ、DMA 通道 | 非阻塞硬件操作和 ISR 通知 |
+| aDevice | 缓冲、事务、等待、互斥、器件协议 | 按设备类别提供强类型接口 |
+| app/devices | 引脚、设备实例、缓冲区、产品配置 | 显式编排初始化，业务借用实例 |
+
+依赖保持 `device -> aDrv + aOS`。aDrv 不使用 aOS、堆、任务、软件超时，
+短临界区只保护驱动与 ISR 共用的状态。aDevice 不包含芯片厂商头文件。
+
+USART 保留 Read/Write，Flash 保留 Read/Write/Erase，LED 保留 Set/Toggle。
+函数在编译时绑定当前实现，不增加所有设备共用的 void 指针操作表。SPI 和
+QSPI 也不合并成串口字节流：SPI 包含双向事务和片选，QSPI 包含指令、地址、
+线宽等控制阶段。
+
+## 配置、运行状态与存储
+
+Zephyr 将只读配置、实例运行数据和设备类别 API 分开。本工程采用相同的职责
+划分，同时保留现有初始化函数允许局部配置对象的契约。
+
+- 固定寄存器、时钟、IRQ、路由映射保留在 aDrv 的静态只读表或芯片实现中。
+- 输入配置只在初始化/注册期间读取，需要长期使用的字段由实例复制保存。
+  不把应用栈上的 `config` 指针长期留在句柄中。
+- 缓冲区和回调参数仍是借用对象，必须存活到对应传输、回调或实例生命周期结束。
+- 业务头声明不透明设备句柄；实际静态布局在 `*_instance.h` 中，创建层才包含。
+- 静态创建和动态创建使用相同的真实实例类型；动态标记只决定 Destroy 的所有权。
+  静态句柄仍可能创建动态 OS 对象，不等同于系统完全无堆。
+
+USART 的 RAM 实例现在按下面的结构组织，各部分直接内嵌，不额外分配：
+
+```text
+aDevUsartHandle
+├── drv_handle                 硬件实例状态
+├── settings                   初始化后固定的模式、缓冲区、字节钩子、DE 配置
+├── tx                         TX 缓冲进度、锁、等待、超时和异步事务
+├── rx                         RX 缓冲进度、锁、等待、订阅和错误
+├── de_gpio / rs485_transmitting
+└── dynamic_storage            对象分配的所有权
+```
+
+`settings` 是句柄内的配置快照，实际位于 RAM；并未宣称它已移入 Flash。
+可运行时修改的波特率等信息由 aDrv 的运行状态维护。
+LED 已统一为业务头中的不透明句柄和独立的实例头；无需为两个字段再套一层结构。
+Flash25Q 已区分共享 Bus 和各 Flash 实例，继续保留现有结构和 SFUD 移植边界。
+
+## 驱动文件组织
+
+```text
+platform/aDrv/
+├── include/                   公共硬件接口
+├── src/
+│   ├── aDrv.c / aDrv_basic.c / aDrv_internal.h
+│   ├── gpio/aDrv_gpio.c
+│   ├── dma/aDrv_dma.c
+│   ├── spi/aDrv_spi.c
+│   ├── qspi/aDrv_qspi.c
+│   └── usart/
+│       ├── aDrv_usart.c
+│       ├── aDrv_usart_irq.c
+│       ├── aDrv_usart_dma.c
+│       └── aDrv_usart_internal.h
+└── CMakeLists.txt
+```
+
+由一个 CMakeLists 消费顶层配置，USART 的 IRQ/DMA 实现按能力开关编译。
+文件按职责和规模拆分，不要求所有外设具有相同文件数量。当前 SPI 仍是基础
+非阻塞实现，尚未新增 SPI DMA；QSPI 尚未接入 Flash25Q。
+
+## DMA 作为可复用驱动
+
+通用 DMA 驱动负责通道占用、硬件中断入口、事件采集、循环计数和进度快照。
+当前 GD32E505 支持 DMA0 七个通道、DMA1 五个通道，非法逻辑通道初始化失败。
+
+新增接口：
+
+- `aDrvDmaConfigureInterrupt(handle, config)`：复制事件位、优先级、回调及参数；
+  `config == NULL` 注销。回调只在 DMA ISR 执行，事件是 HALF、COMPLETE、ERROR。
+- `aDrvDmaGetProgress(handle, progress)`：查询本次启动的累计搬运数量和当前块
+  剩余数量；错误保持到下一次启动。数量单位是配置的数据宽度，USART 使用字节。
+
+查询与 ISR 共用标志消费入口。查询若先消费到硬件事件，会记录待派发事件并
+挂起 DMA IRQ，避免任务查询清除标志后漏掉 ISR 通知。事件是可合并的状态提醒，
+不是每次边沿独立排队；累计数量通过进度接口查询。
+
+进度查询使用有界的短临界区采样；跨越重装时最多重试八次，仍不一致返回 BUSY，
+输出不变。临界区保持调用前的中断屏蔽状态。硬件 DMA 持续运行，若完成标志
+超过一整圈都没有被服务，无法仅从单个硬件标志恢复真实圈数。
+
+USART DMA 适配只负责固定请求路由、USART DMA 请求开关、方向占用和通知转接。
+只有 USART0、UART3、USART5 有当前实现支持的 DMA 路由，只为它们保留状态。
+UART3 与 USART5 的同向共享冲突由通用 DMA 通道所有权阻止。
+
+DMA COMPLETE 表示数据搬运结束，串口线路完成仍以 USART TC 为准。
+RS485 的 DE 释放和业务 Async 回调契约沿用原设计；RX 快照检查仍由 aDev 负责。
+停止 DMA 后注销通知；销毁实例前调用方必须停止访问，并确保在途回调退出。
+
+## 移植与扩展
+
+新增 MCU 时替换 aDrv 芯片实现和固定映射；板级引脚由应用重新配置。
+未来 Linux 可在设备 API 边界提供 POSIX 实现，或为实际使用的驱动接口实现
+适配；不需要模拟 MCU 的每个寄存器和 DMA 通道。Linux 实现仍未接入。
+
+后续新增 SPI DMA 时复用本次的 DMA 中断与进度接口。事务片选、同时收发、
+最终外设空闲判定仍由 SPI 链路处理，不把它们塞进通用 DMA。
+多个 Flash 继续借用共享总线对象，锁和片选的作用范围按 Flash25Q 文档执行。
+
+## 验证与参考
+
+`tests/dma/run.py` 使用真实 DMA 和 USART DMA 实现、模拟硬件寄存器，覆盖通道
+争用、ISR 与查询交错、重装、错误保持、即时完成和停止后通知清理。
+原 USART/RS485、SPI、Flash、Modbus 和启动回归继续验证上层契约。
+功能裁剪通过 `tests/config/build_matrix.py` 检查；具体命令见[验证指南](testing.md)。
+主机测试和交叉编译不代替实际 DMA、TC、DE 波形与最坏中断延迟测试。
+
+参考资料：
+
+- [Zephyr Device Driver Model](https://docs.zephyrproject.org/latest/kernel/drivers/index.html)
+- [Zephyr DMA 接口](https://docs.zephyrproject.org/latest/hardware/peripherals/dma.html)
+- [Zephyr GD32 SPI 对通用 DMA 的使用](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/spi/spi_gd32.c)

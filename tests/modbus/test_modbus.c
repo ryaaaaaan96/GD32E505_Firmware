@@ -235,6 +235,9 @@ struct link {
     uint32_t delay;
     unsigned completed;
     unsigned prepared;
+    aBool_t buffered, fail_flush, fail_write, eof;
+    size_t pending[2];
+    unsigned flushes[2], writes[2];
 };
 
 static aBool_t port_wait(link_t *link, aTimeout_t timeout)
@@ -275,6 +278,10 @@ static aSSize_t port_read(void *context, void *data, size_t size,
     uint8_t *buffer;
     size_t *position;
     size_t available;
+    if (!endpoint->server && link->eof) {
+        return aOSFailWithStatus(A_STATUS_ERROR);
+    }
+    if (link->buffered) assert(link->pending[0] == 0U);
     if (!port_wait(link, timeout)) return aOSFailWithStatus(A_STATUS_TIMEOUT);
 #if AMODBUS_SERVER_ENABLE
     if (!endpoint->server && !link->processed && link->request_size != 0U) {
@@ -301,11 +308,16 @@ static aSSize_t port_write(void *context, const void *data, size_t size,
     uint8_t *buffer = endpoint->server ? link->response : link->request;
     size_t *used = endpoint->server ? &link->response_size :
                                      &link->request_size;
+    if (!endpoint->server && link->fail_write && link->writes[0] != 0U) {
+        return aOSFailWithStatus(A_STATUS_ERROR);
+    }
     if (!port_wait(link, timeout)) return aOSFailWithStatus(A_STATUS_TIMEOUT);
     if (size > 3U) size = 3U;
     assert(*used + size <= sizeof(link->request));
     memcpy(buffer + *used, data, size);
     *used += size;
+    link->writes[endpoint->server ? 1 : 0]++;
+    if (link->buffered) link->pending[endpoint->server ? 1 : 0] += size;
     return (aSSize_t)size;
 }
 
@@ -337,6 +349,9 @@ static aStatus_t port_complete(void *context, aTimeout_t timeout)
 {
     endpoint_t *endpoint = context;
     (void)timeout;
+    if (endpoint->link->buffered) {
+        assert(endpoint->link->pending[endpoint->server ? 1 : 0] == 0U);
+    }
     endpoint->link->completed++;
 #if AMODBUS_SERVER_ENABLE
     if (!endpoint->server &&
@@ -345,6 +360,36 @@ static aStatus_t port_complete(void *context, aTimeout_t timeout)
 #endif
     return A_STATUS_OK;
 }
+
+/* 无 context Stream 使用每个端口各自的回调，不借用辅助操作的 context。 */
+static endpoint_t *stream_ports[2];
+static aSSize_t client_read(void *data, size_t size, aTimeout_t timeout)
+{ return port_read(stream_ports[0], data, size, timeout); }
+static aSSize_t server_read(void *data, size_t size, aTimeout_t timeout)
+{ return port_read(stream_ports[1], data, size, timeout); }
+static aSSize_t client_write(const void *data, size_t size, aTimeout_t timeout)
+{ return port_write(stream_ports[0], data, size, timeout); }
+static aSSize_t server_write(const void *data, size_t size, aTimeout_t timeout)
+{ return port_write(stream_ports[1], data, size, timeout); }
+
+#if AMODBUS_CLIENT_ENABLE && AMODBUS_SERVER_ENABLE
+static aStatus_t stream_flush(size_t index, aTimeout_t timeout)
+{
+    link_t *link = stream_ports[index]->link;
+
+    assert(aTimeoutIsValid(timeout));
+    assert(link->pending[index] > 0U);
+    assert(link->writes[index] > 1U); /* 部分 write 补齐后只 flush 一次。 */
+    link->flushes[index]++;
+    if (index == 0U && link->fail_flush) return A_STATUS_ERROR;
+    link->pending[index] = 0U;
+    return A_STATUS_OK;
+}
+static aStatus_t client_flush(aTimeout_t timeout)
+{ return stream_flush(0U, timeout); }
+static aStatus_t server_flush(aTimeout_t timeout)
+{ return stream_flush(1U, timeout); }
+#endif
 
 static aModbusConfig_t configuration(endpoint_t *endpoint,
                                      aModbusRole_t role)
@@ -355,8 +400,9 @@ static aModbusConfig_t configuration(endpoint_t *endpoint,
     config.transport_type = endpoint->link->type;
     config.bus = &bus;
     config.transport.context = endpoint;
-    config.transport.read = port_read;
-    config.transport.write = port_write;
+    stream_ports[endpoint->server ? 1 : 0] = endpoint;
+    config.transport.stream.read = endpoint->server ? server_read : client_read;
+    config.transport.stream.write = endpoint->server ? server_write : client_write;
     config.transport.discard_input = port_discard;
     config.transport.prepare_frame = port_prepare;
     config.transport.wait_transmit_complete = port_complete;
@@ -480,6 +526,58 @@ static aStatus_t write_remote(aModbusHandle_t *client, aModbusArea_t area,
     request.access.size = size;
     request.result = result;
     return aModbusClientWrite(client, &request);
+}
+
+static void stream_tests(void)
+{
+    for (unsigned scenario = 0U; scenario < 6U; scenario++) {
+        link_t link = {
+            .type = scenario == 0U || scenario >= 4U ?
+                    AMODBUS_TRANSPORT_RTU : AMODBUS_TRANSPORT_TCP,
+            .buffered = A_TRUE,
+            .fail_flush = scenario == 2U || scenario == 4U,
+            .fail_write = scenario == 5U,
+            .eof = scenario == 3U,
+        };
+        endpoint_t server_port = {&link, A_TRUE};
+        endpoint_t client_port = {&link, A_FALSE};
+        aModbusConfig_t server_config =
+            configuration(&server_port, AMODBUS_ROLE_SERVER);
+        aModbusConfig_t client_config =
+            configuration(&client_port, AMODBUS_ROLE_CLIENT);
+        aModbusHandle_t server_storage, client_storage;
+        aModbusHandle_t *client;
+        aStatus_t status;
+        uint16_t value;
+
+        if (link.type == AMODBUS_TRANSPORT_TCP) {
+            /* TCP 只需要 Stream，不借用任何 RTU 辅助回调或 context。 */
+            aModbusTransportStructInit(&server_config.transport);
+            aModbusTransportStructInit(&client_config.transport);
+            server_config.transport.stream.read = server_read;
+            server_config.transport.stream.write = server_write;
+            client_config.transport.stream.read = client_read;
+            client_config.transport.stream.write = client_write;
+        }
+        server_config.transport.stream.flush = server_flush;
+        client_config.transport.stream.flush = client_flush;
+        link.server = open_instance(&server_config, &server_storage);
+        client = open_instance(&client_config, &client_storage);
+        status = read_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
+                             0U, 1U, &value, sizeof(value), NULL);
+        assert(link.flushes[0] == (scenario == 5U ? 0U : 1U));
+        if (scenario < 2U) {
+            assert(status == A_STATUS_OK && value == word);
+            assert(link.flushes[1] == 1U);
+            assert(link.completed == (scenario == 0U ? 2U : 0U));
+        } else {
+            assert(status == A_STATUS_ERROR && link.flushes[1] == 0U);
+            assert(read_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
+                0U, 1U, &value, sizeof(value), NULL) == A_STATUS_NOT_READY);
+        }
+        close_instance(client);
+        close_instance(link.server);
+    }
 }
 
 static void end_to_end(aModbusTransportType_t type, aBool_t callbacks)
@@ -795,6 +893,7 @@ int main(void)
     maximum_frames(AMODBUS_TRANSPORT_RTU);
     maximum_frames(AMODBUS_TRANSPORT_TCP);
     malformed_frames();
+    stream_tests();
 #endif
     assert(aBusDeInitStatic(&bus) == A_STATUS_OK);
     assert(testAllocations() == 0U);

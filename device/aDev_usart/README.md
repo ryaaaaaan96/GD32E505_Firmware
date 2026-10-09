@@ -4,6 +4,11 @@
 aDrv 负责非阻塞硬件操作与 IRQ/DMA，aDev 负责消费互斥、超时、缓冲和回调，
 app 负责配置、业务任务、排队和协议；不提供设备内 TX Queue。
 
+实例内嵌 `settings` 配置快照、`tx` 发送状态和 `rx` 接收状态；初始化输入
+配置不被长期借用。仅实例创建层包含 instance 头，业务通过公共接口访问。
+DMA 的通道、中断和循环计数由 aDrvDma 维护，USART DMA 实现仅适配路由和通知。
+详见 [aDrv 与 aDevice 设计](../../docs/driver_device_design.md)。
+
 ## 初始化只有一套收发配置
 
 mode 的 TX/RX 字段分别选择 POLLING、INTERRUPT_BUFFERED、DMA_BUFFERED，

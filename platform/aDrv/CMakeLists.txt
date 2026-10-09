@@ -61,7 +61,7 @@ if(ADRV_MODULE_GPIO_ENABLE)
         "${GD32_SPL_DIR}/Source/gd32e50x_gpio.c"
     )
     list(APPEND ADRV_SOURCES
-        src/aDrv_gpio.c
+        src/gpio/aDrv_gpio.c
     )
     set(GD32_RCU_DRIVER_REQUIRED ON)
 endif()
@@ -82,7 +82,7 @@ if(ADRV_MODULE_USART_ENABLE)
 
     if(ADRV_USART_DMA_ENABLE)
         list(APPEND ADRV_SOURCES
-            src/usart/aDrv_usart_async.c
+            src/usart/aDrv_usart_dma.c
         )
     endif()
 
@@ -94,7 +94,7 @@ if(ADRV_MODULE_DMA_ENABLE)
         "${GD32_SPL_DIR}/Source/gd32e50x_dma.c"
     )
     list(APPEND ADRV_SOURCES
-        src/aDrv_dma.c
+        src/dma/aDrv_dma.c
     )
     set(GD32_RCU_DRIVER_REQUIRED ON)
 endif()
@@ -104,7 +104,7 @@ if(ADRV_MODULE_SPI_ENABLE)
         "${GD32_SPL_DIR}/Source/gd32e50x_spi.c"
     )
     list(APPEND ADRV_SOURCES
-        src/aDrv_spi.c
+        src/spi/aDrv_spi.c
     )
     set(GD32_RCU_DRIVER_REQUIRED ON)
 endif()
@@ -114,7 +114,7 @@ if(ADRV_MODULE_QSPI_ENABLE)
         "${GD32_SPL_DIR}/Source/gd32e50x_sqpi.c"
     )
     list(APPEND ADRV_SOURCES
-        src/aDrv_qspi.c
+        src/qspi/aDrv_qspi.c
     )
     set(GD32_RCU_DRIVER_REQUIRED ON)
 endif()

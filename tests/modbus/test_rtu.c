@@ -59,7 +59,29 @@ static void clear_error(void *context)
     link_t *link = context;
     link->clears++;
 }
-static aModbusRtuConfig_t configuration(link_t *link)
+static link_t *links[2];
+static aModbusRtuHandle_t *bound[2];
+#define DEFINE_STREAM(index) \
+static aSSize_t output##index(const void *data, size_t size, aTimeout_t t) \
+{ return write_bytes(links[index], data, size, t); } \
+static aSSize_t read##index(void *data, size_t size, aTimeout_t t) \
+{ return aModbusRtuRead(bound[index], data, size, t); } \
+static aSSize_t write##index(const void *data, size_t size, aTimeout_t t) \
+{ return aModbusRtuWrite(bound[index], data, size, t); }
+DEFINE_STREAM(0)
+DEFINE_STREAM(1)
+
+static aStatus_t bind_transport(aModbusRtuHandle_t *handle,
+    aModbusTransport_t *transport, size_t index)
+{
+    bound[index] = handle;
+    aModbusTransportStructInit(transport);
+    transport->stream.read = index == 0U ? read0 : read1;
+    transport->stream.write = index == 0U ? write0 : write1;
+    return aModbusRtuBindTransport(handle, transport);
+}
+
+static aModbusRtuConfig_t configuration(link_t *link, size_t index)
 {
     aModbusRtuConfig_t config;
     aModbusRtuConfigStructInit(&config);
@@ -68,7 +90,8 @@ static aModbusRtuConfig_t configuration(link_t *link)
     config.io.ticks = ticks;
     config.io.enter = enter;
     config.io.exit = leave;
-    config.io.write = write_bytes;
+    links[index] = link;
+    config.output.write = index == 0U ? output0 : output1;
     config.io.wait_transmit_complete = wait_transmit;
     config.io.clear_error = clear_error;
     return config;
@@ -87,7 +110,7 @@ static void multi_instance(void)
 {
     link_t first = {.mutex = PTHREAD_MUTEX_INITIALIZER};
     link_t second = {.mutex = PTHREAD_MUTEX_INITIALIZER};
-    aModbusRtuConfig_t config = configuration(&first);
+    aModbusRtuConfig_t config = configuration(&first, 0U);
     aModbusRtuHandle_t storage, *other;
     aModbusTransport_t one, two;
     uint8_t data[20];
@@ -96,11 +119,11 @@ static void multi_instance(void)
     unsigned baseline = testAllocations();
 
     assert(aModbusRtuInitStatic(&config, &storage) == A_STATUS_OK);
-    config = configuration(&second);
+    config = configuration(&second, 1U);
     config.role = AMODBUS_ROLE_CLIENT;
     assert(aModbusRtuCreate(&config, &other) == A_STATUS_OK);
-    assert(aModbusRtuGetTransport(&storage, &one) == A_STATUS_OK);
-    assert(aModbusRtuGetTransport(other, &two) == A_STATUS_OK);
+    assert(bind_transport(&storage, &one, 0U) == A_STATUS_OK);
+    assert(bind_transport(other, &two, 1U) == A_STATUS_OK);
     assert(one.context != two.context && one.finish != NULL);
     advance(3000U);
     feed(&storage, request, sizeof(request));
@@ -108,22 +131,22 @@ static void multi_instance(void)
     advance(3000U);
     feed(&storage, request, sizeof(request));
     advance(3000U);
-    assert(one.read(one.context, data, 3U, A_TIMEOUT_NO_WAIT) == 3);
+    assert(one.stream.read(data, 3U, A_TIMEOUT_NO_WAIT) == 3);
     assert(memcmp(data, request, 3U) == 0);
-    assert(one.read(one.context, data, sizeof(data), A_TIMEOUT_NO_WAIT) == 5);
+    assert(one.stream.read(data, sizeof(data), A_TIMEOUT_NO_WAIT) == 5);
     assert(memcmp(data, request + 3U, 5U) == 0);
-    assert(one.read(one.context, data, sizeof(data), A_TIMEOUT_NO_WAIT) == 0);
+    assert(one.stream.read(data, sizeof(data), A_TIMEOUT_NO_WAIT) == 0);
     one.finish(one.context);
-    assert(one.read(one.context, data, sizeof(data), A_TIMEOUT_NO_WAIT) == 8);
+    assert(one.stream.read(data, sizeof(data), A_TIMEOUT_NO_WAIT) == 8);
     assert(memcmp(data, request, sizeof(request)) == 0);
-    assert(two.read(two.context, data, sizeof(data), A_TIMEOUT_NO_WAIT) == 7);
+    assert(two.stream.read(data, sizeof(data), A_TIMEOUT_NO_WAIT) == 7);
     assert(memcmp(data, response, sizeof(response)) == 0);
     one.finish(one.context);
     two.finish(two.context);
     assert(one.discard_input(one.context, A_TIMEOUT_MS(5U)) == A_STATUS_OK);
     assert(first.clears == 1U && second.clears == 0U);
     assert(one.prepare_frame(one.context, A_TIMEOUT_MS(5U)) == A_STATUS_OK);
-    assert(one.write(one.context, request, sizeof(request),
+    assert(one.stream.write(request, sizeof(request),
                      A_TIMEOUT_MS(5U)) == 8);
     assert(one.wait_transmit_complete(one.context,
                                       A_TIMEOUT_MS(5U)) == A_STATUS_OK);
@@ -132,7 +155,7 @@ static void multi_instance(void)
     assert(aModbusRtuDestroy(&storage) == A_STATUS_INVALID_PARAM);
     assert(aModbusRtuDeInitStatic(other) == A_STATUS_INVALID_PARAM);
     assert(aModbusRtuDeInitStatic(&storage) == A_STATUS_OK);
-    assert(aModbusRtuGetTransport(&storage, &one) == A_STATUS_NOT_READY);
+    assert(bind_transport(&storage, &one, 0U) == A_STATUS_NOT_READY);
     assert(aModbusRtuDestroy(other) == A_STATUS_OK);
     assert(testAllocations() == baseline);
     assert(pthread_mutex_destroy(&first.mutex) == 0);
@@ -143,7 +166,7 @@ static void timing(uint32_t baud, uint8_t bits, uint32_t gap,
                    uint32_t quiet)
 {
     link_t link = {.mutex = PTHREAD_MUTEX_INITIALIZER};
-    aModbusRtuConfig_t config = configuration(&link);
+    aModbusRtuConfig_t config = configuration(&link, 0U);
     aModbusRtuHandle_t handle;
     aModbusTransport_t transport;
     uint8_t data[8];
@@ -152,13 +175,13 @@ static void timing(uint32_t baud, uint8_t bits, uint32_t gap,
     config.character_bits = bits;
     config.unit_id = 7U;
     assert(aModbusRtuInitStatic(&config, &handle) == A_STATUS_OK);
-    assert(aModbusRtuGetTransport(&handle, &transport) == A_STATUS_OK);
+    assert(bind_transport(&handle, &transport, 0U) == A_STATUS_OK);
     advance(quiet);
     feed(&handle, request, 4U);
     advance(gap);
     feed(&handle, request + 4U, 4U);
     advance(quiet);
-    assert(transport.read(transport.context, data, sizeof(data),
+    assert(transport.stream.read(data, sizeof(data),
                           A_TIMEOUT_NO_WAIT) == 8);
     assert(memcmp(data, request, sizeof(data)) == 0);
     transport.finish(transport.context);
@@ -167,7 +190,7 @@ static void timing(uint32_t baud, uint8_t bits, uint32_t gap,
     advance(handle.byte_gap + handle.character_ticks + 100U);
     feed(&handle, request + 4U, 4U);
     advance(quiet);
-    assert(transport.read(transport.context, data, sizeof(data),
+    assert(transport.stream.read(data, sizeof(data),
                           A_TIMEOUT_MS(1U)) == -1);
     assert(handle.dropped_frames == 1U);
     assert(aModbusRtuDeInitStatic(&handle) == A_STATUS_OK);
@@ -177,20 +200,20 @@ static void timing(uint32_t baud, uint8_t bits, uint32_t gap,
 static void failures(void)
 {
     link_t link = {.mutex = PTHREAD_MUTEX_INITIALIZER};
-    aModbusRtuConfig_t config = configuration(&link);
+    aModbusRtuConfig_t config = configuration(&link, 0U);
     aModbusRtuHandle_t handle, *created = (void *)1;
     assert(aModbusRtuCreate(NULL, &created) == A_STATUS_INVALID_PARAM);
     assert(created == NULL);
     config.baud_rate = 0U;
     assert(aModbusRtuInitStatic(&config, &handle) == A_STATUS_INVALID_PARAM);
-    config = configuration(&link);
+    config = configuration(&link, 0U);
     config.io.ticks = NULL;
     assert(aModbusRtuInitStatic(&config, &handle) == A_STATUS_INVALID_PARAM);
-    config = configuration(&link);
+    config = configuration(&link, 0U);
     config.baud_rate = 1U;
     config.io.ticks_per_second = UINT32_MAX;
     assert(aModbusRtuInitStatic(&config, &handle) == A_STATUS_UNSUPPORTED);
-    config = configuration(&link);
+    config = configuration(&link, 0U);
     testFailAllocation(A_TRUE);
     assert(aModbusRtuCreate(&config, &created) == A_STATUS_NO_MEMORY);
     assert(created == NULL);

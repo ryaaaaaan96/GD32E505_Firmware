@@ -2,6 +2,7 @@
 #include "app_config.h"
 #include "aOS.h"
 #include "system_device.h"
+#include "protocol.h"
 #if ADEV_FLASH25Q_ENABLE
 #include "flash_device.h"
 #endif
@@ -14,18 +15,6 @@
 #if APP_LOG_ENABLE
 #include "log_service.h"
 #include "aLog.h"
-#endif
-#if ABUS_ENABLE
-#include "sig_data.h"
-#include "sig_task.h"
-#endif
-#if APP_MODBUS_ENABLE
-#if APP_MODBUS_MASTER_ENABLE
-#include "modbus_master.h"
-#else
-#include "modbus_slave.h"
-#endif
-#include "modbus_task.h"
 #endif
 #if ASHELL_ENABLE
 #include "aDrv_basic.h"
@@ -170,32 +159,11 @@ aStatus_t aSystemInit(void)
     }
 #endif
 
-#if ABUS_ENABLE
-    /* Shell 就绪后初始化数据服务，供后续业务协议借用。 */
-    status = sigDataInit();
+    /* 点表、协议端口与通信任务统一由 protocol 内部编排。 */
+    status = protocolInit();
     if (status != A_STATUS_OK) {
         return status;
     }
-    status = appSigTaskInit();
-    if (status != A_STATUS_OK) {
-        return status;
-    }
-#endif
-
-#if APP_MODBUS_ENABLE
-#if APP_MODBUS_MASTER_ENABLE
-    status = modbusMasterInit();
-#else
-    status = modbusSlaveInit();
-#endif
-    if (status != A_STATUS_OK) {
-        return status;
-    }
-    status = appModbusTaskInit();
-    if (status != A_STATUS_OK) {
-        return status;
-    }
-#endif
 
 #if ASHELL_ENABLE
     status = shellTaskStart();

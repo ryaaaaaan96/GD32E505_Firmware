@@ -19,6 +19,10 @@ mode 的 TX/RX 字段分别决定收发后端。普通、Direct、Async 共用�
 Write 返回表示数据已提交，DMA 搬运完成也不代表线路完成；需要排空时
 使用 `aDevUsartWaitTransmitComplete()`，以 TC 为准。
 
+DMA 中断入口、标志消费和循环计数集中在通用 aDrvDma；USART DMA 文件只负责
+路由、请求开关和通知适配。查询先消费事件时仍由 DMA ISR 派发通知。
+设备配置和 TX/RX 运行状态的组织见 [aDrv 与 aDevice 设计](driver_device_design.md)。
+
 ## 回调上下文和数据稳定性
 
 aDrv 硬件回调由 aDev 注册，应用不覆盖设备正在使用的 IRQ 分发。
@@ -48,7 +52,8 @@ GPIO_DE 由 aDev 在发送前置为有效电平，TC 后释放。芯片自动 UA
 | Modbus Demo | USART2，PC10/PC11，PA15 DE，115200 8N1 | ISR 字节回调收帧，TX 中断缓冲，当前默认从站 1 |
 
 USART2 的 PC10/PC11 重映射与 PA15 的 JTAG 引脚释放由 aDrv 完成，保留 SWD。
-Modbus 寄存器、帧间隔限制及联调步骤见[应用 Demo](../app/data/modbus/README.md)。
+Modbus 应用装配见[产品协议](../app/protocol/README.md)，
+RTU 分帧与时序接口见 [aModbus](../func/aModbus/README.md)。
 USART IDLE 只表示硬件空闲事件，不等同于协议帧结束。
 
 相关主机和构建检查见[验证指南](testing.md)，不替代真实 DMA、TC、DE

@@ -30,7 +30,7 @@ aStatus_t aModbusRtuInstanceInit(const aModbusRtuConfig_t *config,
         config->character_bits < 7U || config->character_bits > 16U ||
         config->io.ticks_per_second == 0U || config->io.ticks == NULL ||
         config->io.enter == NULL || config->io.exit == NULL ||
-        config->io.write == NULL ||
+        config->output.write == NULL ||
         config->io.wait_transmit_complete == NULL) {
         return A_STATUS_INVALID_PARAM;
     }
@@ -240,12 +240,15 @@ static aStatus_t receive_frame(aModbusRtuHandle_t *handle, aTimeout_t timeout)
     }
 }
 
-static aSSize_t port_read(void *context, void *data, size_t size,
-                         aTimeout_t timeout)
+aSSize_t aModbusRtuRead(aModbusRtuHandle_t *handle, void *data, size_t size,
+                      aTimeout_t timeout)
 {
-    aModbusRtuHandle_t *handle = context;
     aStatus_t status;
     size_t available;
+    if (handle == NULL || (size != 0U && data == NULL) ||
+        !aTimeoutIsValid(timeout)) {
+        return aOSFailWithStatus(A_STATUS_INVALID_PARAM);
+    }
     if (!handle->ready) return aOSFailWithStatus(A_STATUS_NOT_READY);
     if (size == 0U) return 0;
     if (!handle->frame_ready) {
@@ -259,12 +262,20 @@ static aSSize_t port_read(void *context, void *data, size_t size,
     return (aSSize_t)size;
 }
 
-static aSSize_t port_write(void *context, const void *data, size_t size,
-                          aTimeout_t timeout)
+aSSize_t aModbusRtuWrite(aModbusRtuHandle_t *handle, const void *data,
+                       size_t size, aTimeout_t timeout)
 {
-    aModbusRtuHandle_t *handle = context;
-    const aModbusRtuIo_t *io = &handle->config.io;
-    aSSize_t count = io->write(io->context, data, size, timeout);
+    const aModbusRtuIo_t *io;
+    aSSize_t count;
+
+    if (handle == NULL || (size != 0U && data == NULL) ||
+        !aTimeoutIsValid(timeout)) {
+        return aOSFailWithStatus(A_STATUS_INVALID_PARAM);
+    }
+    if (!handle->ready) return aOSFailWithStatus(A_STATUS_NOT_READY);
+    if (size == 0U) return 0;
+    io = &handle->config.io;
+    count = handle->config.output.write(data, size, timeout);
     if (count > 0) {
         handle->tx_pending = A_TRUE;
         handle->last_tx_ticks = io->ticks(io->context);
@@ -334,15 +345,16 @@ static aStatus_t port_discard(void *context, aTimeout_t timeout)
     }
 }
 
-aStatus_t aModbusRtuGetTransport(aModbusRtuHandle_t *handle,
+aStatus_t aModbusRtuBindTransport(aModbusRtuHandle_t *handle,
                                aModbusTransport_t *transport)
 {
     if (handle == NULL || transport == NULL) return A_STATUS_INVALID_PARAM;
-    aModbusTransportStructInit(transport);
     if (!handle->ready) return A_STATUS_NOT_READY;
+    if (transport->stream.read == NULL || transport->stream.write == NULL ||
+        transport->stream.flush != handle->config.output.flush) {
+        return A_STATUS_INVALID_PARAM;
+    }
     transport->context = handle;
-    transport->read = port_read;
-    transport->write = port_write;
     transport->discard_input = port_discard;
     transport->prepare_frame = port_prepare;
     transport->wait_transmit_complete = port_wait;

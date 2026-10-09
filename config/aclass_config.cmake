@@ -48,7 +48,7 @@ set(ADEV_USART_DYNAMIC_ENABLE ON)
 set(ADEV_USART_INTERRUPT_ENABLE ON)
 # 同步用户缓冲区直传 API；轮询/DMA 后端在设备初始化时选择。
 set(ADEV_USART_DIRECT_ENABLE OFF)
-# 业务异步请求、超时/取消和任务回调；当前依赖底层 DMA/IRQ，不依赖 Direct API。
+# 业务异步请求、超时/取消和 ISR 回调；当前依赖底层 DMA/IRQ，不依赖 Direct API。
 set(ADEV_USART_ASYNC_ENABLE OFF)
 set(ADEV_USART_RS485_ENABLE ON)
 
