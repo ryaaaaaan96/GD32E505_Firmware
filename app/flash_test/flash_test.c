@@ -57,7 +57,7 @@ static aStatus_t verify(uint32_t address, uint32_t size, aBool_t erased)
         for (i = 0U; i < request.size; ++i) {
             expected = erased ? 0xFFU : pattern(offset + (uint32_t)i);
             if (buffer[i] != expected) {
-                ASHELL_PRINT("Mismatch at 0x%08lX: expected %02X, got %02X"
+                ASHELL_REPLY("Mismatch at 0x%08lX: expected %02X, got %02X"
                              "\r\n",
                              (unsigned long)(request.address + i),
                              (unsigned)expected, (unsigned)buffer[i]);
@@ -81,7 +81,7 @@ static aStatus_t sector_test(uint32_t address, const aDevFlash25qInfo_t *info)
         (address > info->capacity) ||
         (info->erase_size > info->capacity - address))
         return A_STATUS_INVALID_PARAM;
-    ASHELL_PRINT("Erasing %lu bytes at 0x%08lX; previous data is lost.\r\n",
+    ASHELL_REPLY("Erasing %lu bytes at 0x%08lX; previous data is lost.\r\n",
                  (unsigned long)info->erase_size, (unsigned long)address);
     aDevFlash25qEraseRequestStructInit(&erase);
     erase.address = address;
@@ -90,7 +90,7 @@ static aStatus_t sector_test(uint32_t address, const aDevFlash25qInfo_t *info)
     if (status != A_STATUS_OK) return status;
     status = verify(address, info->erase_size, A_TRUE);
     if (status != A_STATUS_OK) return status;
-    ASHELL_PRINT("Erase verify OK\r\n");
+    ASHELL_REPLY("Erase verify OK\r\n");
 
     aDevFlash25qWriteRequestStructInit(&write);
     write.data = buffer;
@@ -107,7 +107,7 @@ static aStatus_t sector_test(uint32_t address, const aDevFlash25qInfo_t *info)
     }
     status = verify(address, info->erase_size, A_FALSE);
     if (status == A_STATUS_OK)
-        ASHELL_PRINT("Flash test PASS: %lu bytes at 0x%08lX\r\n",
+        ASHELL_REPLY("Flash test PASS: %lu bytes at 0x%08lX\r\n",
                      (unsigned long)info->erase_size, (unsigned long)address);
     return status;
 }
@@ -121,7 +121,7 @@ static int command_flash(int argc, char **argv)
 
     test = (argc == 3) && (strcmp(argv[1], "test") == 0);
     if (!test && !((argc == 2) && (strcmp(argv[1], "info") == 0))) {
-        ASHELL_PRINT("flash info\r\n"
+        ASHELL_REPLY("flash info\r\n"
                      "flash test <address>: destroys one erase sector; "
                      "use an unused region\r\n");
         return -1;
@@ -129,7 +129,7 @@ static int command_flash(int argc, char **argv)
     status = appSystemFlashGetInfo(&info);
     if (status != A_STATUS_OK) goto failed;
     if (!test) {
-        ASHELL_PRINT("JEDEC %02X %02X %02X, %lu bytes, erase %lu bytes\r\n",
+        ASHELL_REPLY("JEDEC %02X %02X %02X, %lu bytes, erase %lu bytes\r\n",
                      (unsigned)info.manufacturer_id,
                      (unsigned)info.memory_type, (unsigned)info.capacity_id,
                      (unsigned long)info.capacity,
@@ -140,7 +140,7 @@ static int command_flash(int argc, char **argv)
     if (status == A_STATUS_OK) status = sector_test(address, &info);
     if (status == A_STATUS_OK) return 0;
 failed:
-    ASHELL_PRINT("Flash command failed: %d\r\n", (int)status);
+    ASHELL_REPLY("Flash command failed: %d\r\n", (int)status);
     return -1;
 }
 

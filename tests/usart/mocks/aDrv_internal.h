@@ -9,6 +9,9 @@ typedef unsigned usart_interrupt_enum;
 typedef unsigned usart_interrupt_flag_enum;
 enum { RESET = 0, SET = 1 };
 enum {
+    USART_INT_PERR = 100, USART5_INT_PERR,
+    USART_INT_FLAG_ERR_NERR, USART_INT_FLAG_ERR_FERR, USART_INT_FLAG_PERR,
+    USART5_INT_FLAG_ERR_NERR, USART5_INT_FLAG_ERR_FERR, USART5_INT_FLAG_PERR,
     USART5_INT_ERR = 1,
     USART5_INT_FLAG_ERR_ORERR = 2,
     USART5_INT_FLAG_IDLE = 3,

@@ -206,6 +206,8 @@ Shell 只要求 read/write，不自动调用 flush；若接入需显式提交的
 安排提交时机并保证与 Shell 输出的并发安全。
 
 Shell 按值保存流配置，通过应用回调使用 USART；任务由 app 创建。
+命令回复使用 ASHELL_REPLY / aShellReplyWrite，仅允许 Process 调用链使用；
+空间不足时发送已有队列内容，错误锁存并在恢复输出后提示重试。
 ASHELL_PRINT 和 aShellWrite 只把副本放入有界输出队列，Process 执行实际
 发送与命令处理；入队成功不代表线路发送完成。满队列或锁争用时整条拒绝，
 命令不能阻塞等待同一任务消费自身输出。

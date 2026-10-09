@@ -24,6 +24,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | 范围 | 命令 |
 | --- | --- |
 | OS 通知、定时器与工作队列 | `python3 tests/aos/run.py` |
+| SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |
 | USART、RS485、FIFO 与 IRQ | `python3 tests/usart/run.py` |
 | aBus 定义、绑定、锁与分配 | `python3 tests/bus/run.py` |
 | SIG 应用与 Shell 类型解析 | `python3 tests/bus/test_app_sig.py`、`python3 tests/bus/test_shell_types.py` |
@@ -72,11 +73,11 @@ ELF 的静态 RAM 统计包含预留区，不等同于运行时堆使用量或�
 | 路径 | 重点 |
 | --- | --- |
 | USART / RS485 | 引脚路由、TC 后释放 DE、IRQ 延迟、溢出和 DMA 覆盖边界 |
-| Modbus | 主从读写与断线恢复、任务栈余量、当前毫秒级收帧的限制 |
+| Modbus | 主从读写与断线恢复、任务栈余量、ISR 分帧、队列满、最坏中断延迟 |
 | SPI Flash | JEDEC 信息、跨页编程、擦除范围、CS 时序和超时恢复 |
 | 数据库 | 目标介质上的恢复时间、GC、实际掉电与写入失败 |
 | Shell / 日志 | 交互延迟、后台输出并发及队列满时行为 |
 
 板上操作步骤见[应用联调入口](README.md#应用与联调)。Flash 测试会改变指定
 区域，数据库首次格式化也由应用命令显式触发；按各演示文档选择测试区域。
-当前 Modbus Demo 尚未提供严格的 RTU 微秒级时序判定，见其应用说明。
+当前 Modbus Demo 使用 ISR 周期时间戳分帧，硬件边界精度与使用限制见其应用说明。

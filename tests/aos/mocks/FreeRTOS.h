@@ -62,3 +62,5 @@ BaseType_t xTimerChangePeriod(TimerHandle_t, TickType_t, TickType_t);
 BaseType_t xTimerStop(TimerHandle_t, TickType_t);
 BaseType_t xTimerDelete(TimerHandle_t, TickType_t);
 #endif
+
+TickType_t xTaskGetTickCountFromISR(void);

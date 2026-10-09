@@ -10,6 +10,7 @@ with tempfile.TemporaryDirectory() as directory:
     (tmp / "aShell.h").write_text('''
 int test_print(const char *format, ...);
 #define ASHELL_PRINT(...) test_print(__VA_ARGS__)
+#define ASHELL_REPLY(...) ASHELL_PRINT(__VA_ARGS__)
 #define ASHELL_CMD_EXPORT(name, fn, desc) \\
 int test_command(int argc, char **argv) { return fn(argc, argv); }
 ''')

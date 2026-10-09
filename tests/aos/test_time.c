@@ -5,7 +5,9 @@
 static TickType_t now;
 static unsigned waits;
 static aBool_t forever;
-TickType_t xTaskGetTickCount(void) { return now; }
+static BaseType_t in_isr;
+BaseType_t xPortIsInsideInterrupt(void) { return in_isr; }
+TickType_t xTaskGetTickCount(void) { assert(!in_isr); return now; }
 BaseType_t xTaskGetSchedulerState(void) { return taskSCHEDULER_RUNNING; }
 BaseType_t xSemaphoreTake(SemaphoreHandle_t sem, TickType_t ticks)
 {
@@ -20,6 +22,11 @@ BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t sem, TickType_t ticks)
 { return xSemaphoreTake(sem, ticks); }
 int main(void)
 {
+    now = 123U;
+    in_isr = pdTRUE;
+    assert(aOSGetUptimeMs() == 123U);
+    in_isr = pdFALSE;
+    assert(aOSGetUptimeMs() == 123U);
     now = UINT32_MAX - 10U;
     assert(aOSMutexLock(&now, A_TIMEOUT_MS(20)) == A_STATUS_TIMEOUT);
     assert(now == 9U && waits == 1);
@@ -35,3 +42,6 @@ int main(void)
     assert(milliseconds_to_ticks(UINT32_MAX) == UINT32_MAX);
     puts("aOS finite/infinite/long-wait/wrap boundary tests passed");
 }
+
+TickType_t xTaskGetTickCountFromISR(void)
+{ assert(in_isr); return now; }

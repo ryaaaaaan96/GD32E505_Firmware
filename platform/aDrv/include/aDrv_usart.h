@@ -173,6 +173,10 @@ aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *handle, uint8_t data);
  */
 aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *handle, uint8_t *data);
 
+/** 查询并清除接收硬件错误；ERROR 表示存在错误，丢弃关联数据字节。
+ * 仅接收所有者调用；与 RXNE/IDLE/DMA 操作串行化。 */
+aStatus_t aDrvUsartTakeRxError(aDrvUsartHandle_t *handle);
+
 /**
  * @brief 查询 USART 的 TC 物理发送完成状态。
  * @param[in] handle 已初始化句柄。
@@ -373,6 +377,14 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
  */
 aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
                                            size_t *received);
+
+/** 循环 DMA 的一致快照；累计计数回绕后不能用 received % 容量求位置。 */
+typedef struct {
+    size_t received; /**< 累计字节数，允许无符号回绕。 */
+    size_t position; /**< DMA 下一次写入的物理下标。 */
+} aDrvUsartRxProgress_t;
+aStatus_t aDrvUsartAsyncRxGetProgress(aDrvUsartHandle_t *handle,
+                                      aDrvUsartRxProgress_t *progress);
 
 /**
  * @brief 查询单次 RX DMA 的剩余字节。

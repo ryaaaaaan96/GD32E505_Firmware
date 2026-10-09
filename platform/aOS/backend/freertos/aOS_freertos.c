@@ -289,7 +289,8 @@ void aOSYield(void)
 
 uint32_t aOSGetUptimeMs(void)
 {
-    const TickType_t ticks = xTaskGetTickCount();
+    const TickType_t ticks = xPortIsInsideInterrupt() ?
+                            xTaskGetTickCountFromISR() : xTaskGetTickCount();
 
     return (uint32_t)(((uint64_t)ticks * 1000ULL) /
                       (uint64_t)configTICK_RATE_HZ);

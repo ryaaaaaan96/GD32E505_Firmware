@@ -7,6 +7,7 @@ app 负责配置、业务任务、排队和协议；不提供设备内 TX Queue�
 ## 初始化只有一套收发配置
 
 mode 的 TX/RX 字段分别选择 POLLING、INTERRUPT_BUFFERED、DMA_BUFFERED，
+RX 还可选择独占的 INTERRUPT_CALLBACK，
 OPTION_RX_IDLE 是接收附加功能。普通、Direct、Async 都使用对应方向的同一配置，
 不再有 direct_tx_backend/direct_rx_backend 或第二份后端选择。
 DMA_BUFFERED 名称表示具备缓冲流能力；不提供 ring 时可用于显式用户 buffer 操作。
@@ -22,10 +23,10 @@ DMA_BUFFERED 名称表示具备缓冲流能力；不提供 ring 时可用于显�
 设备缓冲区由 app 提供，有效至 DeInit 完成。静态设备对象并不意味着内部 OS 对象
 完全不用堆；TX 超时定时器目前仍按需创建。生命周期由 app 串行管理。
 
-## Async 是唯一的应用回调入口
+## Async 与接收字节回调
 
 不提供 CallbackSet、RegisterEventCallback、RegisterIsrEventCallback。
-硬件回调由 aDev 注册；app 只能在 ReadAsync/WriteAsync 的 request 中传 callback 和 argument。
+硬件 IRQ 分发始终由 aDev 注册。缓冲模式通过 ReadAsync/WriteAsync 请求传入回调。
 活动期间不替换回调：RX 先 Cancel，再重新 ReadAsync；TX 等本次终结后再提交。
 
 所有 Async 回调统一在 USART/DMA ISR 中执行。TX 超时由 aOS 定时服务记录终态，
@@ -36,6 +37,21 @@ TX/RX 取消由调用任务记录状态，再软件挂起 USART IRQ 派发回调
 回调参数在终结回调退出前必须有效。Cancel 返回 OK 仅表示取消已受理；
 回调可能在 Cancel 返回前或之后执行，应用通过 ISR 安全通知让任务在终态回调退出后回收资源。
 等待终态期间 DeInit 返回 BUSY；不要在回调中调用任务版同步 API。
+
+## 接收字节钩子与错误恢复
+
+`ADEV_USART_RX_INTERRUPT_CALLBACK` 用于需要字节到达时刻的协议端口。
+初始化配置 `rx_byte_callback/context`，每字节直接在 USART ISR 交付，不进入
+设备 ring，也不创建 RX 等待对象。不支持 Read、ReadDirect、ReadAsync 或
+IDLE 选项，不与缓冲消费共用。回调必须非阻塞，不得重入设备 API；context
+在 DeInit 完成前有效。Modbus Demo 在此回调中保存帧边界，业务解析仍在任务。
+
+硬件 ORERR/NERR/FERR/PERR 会被检查、清除并锁存为接收错误；字节回调收到
+ERROR 时 byte 无效。缓冲 Read 被唤醒后返回错误，Async 报错并终止订阅。
+应用先恢复协议边界，再用 `aDevUsartClearRxError` 清除软件错误；该操作不
+清除缓存或 overflow 标志，不修复 DMA 硬件故障，后者需要重新初始化。
+控制台适配在 Read 报错后清除锁存，Shell 丢弃异常半行至下个回车；
+不会因一次硬件接收错误永久停止输入。
 
 ## 普通与 Direct
 
@@ -77,6 +93,9 @@ aStatus_t status = aDevUsartReadAsync(usart, &request);
 ```
 
 ### 循环 DMA 的边界
+
+累计收发计数允许无符号回绕；物理读游标独立推进，不由累计计数对 ring
+容量取模。发生覆盖后使用 DMA 当前物理写位置恢复，支持非二次幂容量。
 
 快照保证已交付数据在当前回调期间稳定，不保证任意延迟下无丢包。
 GD32 循环 DMA 完成标志不能累计多圈：必须保证最坏 IRQ 服务间隔小于一圈接收时间，

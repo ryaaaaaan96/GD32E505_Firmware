@@ -47,11 +47,20 @@ typedef uint32_t aDevUsartMode_t;
 #define ADEV_USART_TX_INTERRUPT_BUFFERED   0x00000001U
 #define ADEV_USART_TX_DMA_BUFFERED         0x00000002U
 
-/** @brief RX 模式字段及其有效值，三者互斥。 */
+/** @brief RX 模式字段及其有效值，四者互斥。 */
 #define ADEV_USART_RX_MASK                 0x0000000CU
 #define ADEV_USART_RX_POLLING              0x00000000U
 #define ADEV_USART_RX_INTERRUPT_BUFFERED   0x00000004U
 #define ADEV_USART_RX_DMA_BUFFERED         0x00000008U
+#define ADEV_USART_RX_INTERRUPT_CALLBACK   0x0000000CU
+
+/** 字节接收钩子，限 CALLBACK 模式；在 USART ISR 中运行，不得阻塞。
+ * OK 时 byte 有效，ERROR 表示硬件接收错误，byte 无效。
+ * 数据由应用立即处理或复制，不再进入设备环形区。
+ * context 在 DeInit 完成前有效；禁止重入设备 API、销毁或调用任务版 OS API。
+ * CALLBACK 模式独占 RX，不支持 Read/ReadDirect/ReadAsync 和 IDLE 选项。 */
+typedef void (*aDevUsartRxByteCallback_t)(void *context, uint8_t byte,
+                                         aStatus_t status);
 
 /**
  * @brief RX 空闲线检测；与中断缓冲 RX 或 DMA buffered RX 组合。
@@ -129,6 +138,9 @@ typedef struct {
 
     /** TX 环形缓冲区容量；需要该缓冲区的模式要求容量至少为 2 字节。 */
     size_t tx_buffer_size;
+
+    aDevUsartRxByteCallback_t rx_byte_callback;
+    void *rx_byte_context; /**< 回调上下文，保持有效至 DeInit。 */
 
 } aDevUsartConfig_t;
 
@@ -515,6 +527,11 @@ aBool_t aDevUsartHasRxOverflowed(const aDevUsartHandle_t *handle);
  * @param[in,out] handle USART 句柄；不清除 GetRxError 返回的错误状态。
  */
 void aDevUsartClearRxOverflow(aDevUsartHandle_t *handle);
+
+/** 任务上下文清除软件接收错误锁存；不清缓冲、溢出标志或 DMA 硬件故障。
+ * 丢失的数据不可恢复，协议层自行丢弃异常帧；DMA 故障需重新初始化。
+ * 清除前由应用协调接收者，避免把连续出错的数据当成新帧。 */
+void aDevUsartClearRxError(aDevUsartHandle_t *handle);
 
 /**
  * @brief 查询接收路径保存的错误状态。

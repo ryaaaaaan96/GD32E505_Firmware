@@ -19,9 +19,9 @@ static aStatus_t level_parse(const char *name, aLogLevel_t *level)
 
 static void usage_print(void)
 {
-    ASHELL_PRINT("log test | info | level [error|warn|info|debug|verbose]"
+    ASHELL_REPLY("log test | info | level [error|warn|info|debug|verbose]"
                  "\r\n");
-    ASHELL_PRINT("log write <level> <tag> <text...>\r\n");
+    ASHELL_REPLY("log write <level> <tag> <text...>\r\n");
 }
 
 /* nr 按空格拆分参数，日志正文将剩余参数合并成一条消息。 */
@@ -74,7 +74,7 @@ static int log_command(int argc, char **argv)
     } else if (argc == 2 && strcmp(argv[1], "info") == 0) {
         status = aLogGetStats(&stats);
         if (status == A_STATUS_OK) {
-            ASHELL_PRINT("level=%s, compiled=%u, output=%u, dropped=%u, "
+            ASHELL_REPLY("level=%s, compiled=%u, output=%u, dropped=%u, "
                          "filtered=%u\r\n", level_names[stats.level],
                          (unsigned)ALOG_OUTPUT_LEVEL, stats.output_records,
                          stats.dropped_records, stats.filtered_records);
@@ -82,12 +82,12 @@ static int log_command(int argc, char **argv)
     } else if (argc == 2 && strcmp(argv[1], "level") == 0) {
         status = aLogGetStats(&stats);
         if (status == A_STATUS_OK)
-            ASHELL_PRINT("log level: %s\r\n", level_names[stats.level]);
+            ASHELL_REPLY("log level: %s\r\n", level_names[stats.level]);
     } else if (argc == 3 && strcmp(argv[1], "level") == 0) {
         status = level_parse(argv[2], &level);
         if (status == A_STATUS_OK) status = aLogSetLevel(level);
         if (status == A_STATUS_OK)
-            ASHELL_PRINT("log level: %s\r\n", level_names[level]);
+            ASHELL_REPLY("log level: %s\r\n", level_names[level]);
     } else if (argc >= 5 && strcmp(argv[1], "write") == 0) {
         status = write_output(argc, argv);
     } else {
@@ -95,7 +95,7 @@ static int log_command(int argc, char **argv)
         return -1;
     }
     if (status != A_STATUS_OK) {
-        ASHELL_PRINT("log failed: %d\r\n", (int)status);
+        ASHELL_REPLY("log failed: %d\r\n", (int)status);
         return -1;
     }
     return 0;

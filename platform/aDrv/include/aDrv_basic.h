@@ -57,6 +57,12 @@ uint32_t aDrvGetRevisionId(void);
  */
 uint32_t aDrvGetCoreClockHz(void);
 
+/** 开启自由运行的内核周期计数器，不清零已有计数；不支持则返回错误。
+ * 用于短间隔测量，计数自然回绕；测量期间内核时钟必须保持不变。
+ * 休眠或调试暂停可能停止计数，不能用作墙上时钟。 */
+aStatus_t aDrvCycleCounterEnable(void);
+uint32_t aDrvCycleCounterRead(void);
+
 /**
  * @brief 读取芯片出厂 Flash 容量信息。
  * @return Flash 容量，单位 KiB；不是字节数。

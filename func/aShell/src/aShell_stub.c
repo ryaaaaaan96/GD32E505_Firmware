@@ -34,6 +34,19 @@ aStatus_t aShellWrite(const char *data, size_t size)
     return A_STATUS_OK;
 }
 
+aStatus_t aShellReplyf(const char *format, ...)
+{
+    (void)format;
+    return A_STATUS_OK;
+}
+
+aStatus_t aShellReplyWrite(const char *data, size_t size)
+{
+    (void)data;
+    (void)size;
+    return A_STATUS_OK;
+}
+
 aStatus_t aShellGetOutputStats(aShellOutputStats_t *stats)
 {
     if (stats == NULL) return A_STATUS_INVALID_PARAM;

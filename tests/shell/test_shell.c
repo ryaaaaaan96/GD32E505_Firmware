@@ -128,6 +128,49 @@ ASHELL_CMD_EXPORT(capture, capture, "Record arguments");
 ASHELL_CMD_EXPORT(cat, capture, "Alias");
 ASHELL_CMD_EXPORT(cancel, capture, "Third ambiguous completion");
 
+static int bulk_reply(int argc, char **argv)
+{
+    (void)argc;
+    (void)argv;
+    for (unsigned i = 0U; i < 160U; i++) {
+        if (ASHELL_REPLY("reply %03u: abcdefghijklmnopqrstuvwxyz\r\n", i)
+            != A_STATUS_OK) return -1;
+    }
+    return 0;
+}
+ASHELL_CMD_EXPORT(bulk, bulk_reply, "Exercise replies larger than the queue");
+
+static void test_bulk_reply(void)
+{
+    aShellOutputStats_t before, after;
+    assert(aShellGetOutputStats(&before) == A_STATUS_OK);
+    reset_output();
+    feed("bulk\r");
+    assert(strstr(output, "reply 000:") != NULL);
+    assert(strstr(output, "reply 159:") != NULL);
+    assert(aShellGetOutputStats(&after) == A_STATUS_OK);
+    assert(after.dropped_messages == before.dropped_messages);
+    assert(write_calls > 1U);
+}
+
+static void test_reply_failure(void)
+{
+    aShellOutputStats_t before, after;
+    assert(aShellGetOutputStats(&before) == A_STATUS_OK);
+    reset_output();
+    write_mode = 2U;
+    input = "bulk\r";
+    assert(aShellProcess() == A_STATUS_ERROR);
+    assert(aShellGetOutputStats(&after) == A_STATUS_OK);
+    assert(after.dropped_messages == before.dropped_messages + 1U);
+    write_mode = 0U;
+    assert(aShellProcess() == A_STATUS_BUSY);
+    assert(strstr(output, "reply interrupted; retry command.") != NULL);
+    reset_output();
+    feed("bulk\r");
+    assert(strstr(output, "reply 159:") != NULL);
+}
+
 static void test_queue(void)
 {
     aShellOutputStats_t stats;
@@ -340,6 +383,17 @@ int main(void)
     last_error = A_EIO;
     assert(aShellProcess() == A_STATUS_ERROR);
     forced_read = -99;
+    feed("\r"); /* I/O 故障后先恢复行边界。 */
+    before = calls;
+    feed("capture dam");
+    forced_read = -1;
+    last_error = A_EIO;
+    assert(aShellProcess() == A_STATUS_ERROR);
+    forced_read = -99;
+    feed("aged\r");
+    assert(calls == before); /* 出错半行不能执行。 */
+    feed("capture recovered\r");
+    assert(calls == before + 1U && !strcmp(last_arg, "recovered"));
 
     reset_output();
     write_limit = 2;
@@ -362,8 +416,10 @@ int main(void)
         assert(aShellProcess() == A_STATUS_BUSY);
         assert(!strcmp(output, "abcdef")); /* No replay of accepted prefix. */
     }
+    test_bulk_reply();
     test_queue();
     test_producers();
+    test_reply_failure();
     assert(aShellDeInit() == A_STATUS_OK);
     assert(!allocations && !mutexes && !lock_depth);
     assert(ASHELL_PRINT("not ready") == A_STATUS_NOT_READY);

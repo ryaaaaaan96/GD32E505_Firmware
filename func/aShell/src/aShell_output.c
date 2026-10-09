@@ -71,9 +71,8 @@ aStatus_t aShellOutputWrite(const char *data, size_t size)
  * running, so producers cannot overwrite the span passed to the stream.
  * Drain only the initial snapshot to bound work under continuous producers.
  */
-aStatus_t aShellOutputDrain(void)
+static aStatus_t output_drain(const aTimepoint_t *deadline)
 {
-    aTimepoint_t deadline;
     aStatus_t status;
     aSSize_t count;
     size_t remaining;
@@ -85,14 +84,12 @@ aStatus_t aShellOutputDrain(void)
     remaining = output.used;
     tail = output.tail;
     (void)aOSMutexUnlock(output.mutex);
-    deadline = aTimepointCalc(
-        aShellContext.config.write_timeout, aOSGetUptimeMs());
     while (remaining != 0U) {
         size = sizeof(output.data) - tail;
         if (size > remaining) size = remaining;
         count = aShellContext.config.stream.write(
             output.data + tail, size,
-            aTimepointRemaining(&deadline, aOSGetUptimeMs()));
+            aTimepointRemaining(deadline, aOSGetUptimeMs()));
         if (count < -1 || count > (aSSize_t)size) return A_STATUS_ERROR;
         if (count < 0) return aShellIoError();
         if (count == 0) return A_STATUS_BUSY;
@@ -105,7 +102,7 @@ aStatus_t aShellOutputDrain(void)
         (void)aOSMutexUnlock(output.mutex);
         remaining -= (size_t)count;
         if (remaining != 0U &&
-            aTimepointExpired(&deadline, aOSGetUptimeMs())) {
+            aTimepointExpired(deadline, aOSGetUptimeMs())) {
             return A_STATUS_TIMEOUT;
         }
     }
@@ -124,5 +121,42 @@ aStatus_t aShellGetOutputStats(aShellOutputStats_t *stats)
     stats->dropped_messages = atomic_load_explicit(
         &output.dropped, memory_order_relaxed);
     (void)aOSMutexUnlock(output.mutex);
+    return A_STATUS_OK;
+}
+
+aStatus_t aShellOutputDrain(void)
+{
+    const aTimepoint_t deadline = aTimepointCalc(
+        aShellContext.config.write_timeout, aOSGetUptimeMs());
+    return output_drain(&deadline);
+}
+
+/* 仅消费者调用：空间不足时发送已有快照；后台生产者仍不等待空间。 */
+aStatus_t aShellOutputReply(const char *data, size_t size)
+{
+    const aTimepoint_t deadline = aTimepointCalc(
+        aShellContext.config.write_timeout, aOSGetUptimeMs());
+    while (size != 0U) {
+        size_t chunk = size < sizeof(output.data) ? size : sizeof(output.data);
+        aStatus_t status = aOSMutexLock(output.mutex,
+            aTimepointRemaining(&deadline, aOSGetUptimeMs()));
+        if (status != A_STATUS_OK) return status;
+        if (chunk <= sizeof(output.data) - output.used) {
+            size_t first = sizeof(output.data) - output.head;
+            if (first > chunk) first = chunk;
+            memcpy(output.data + output.head, data, first);
+            memcpy(output.data, data + first, chunk - first);
+            output.head = (output.head + chunk) % sizeof(output.data);
+            output.used += chunk;
+            data += chunk;
+            size -= chunk;
+        }
+        (void)aOSMutexUnlock(output.mutex);
+        if (size == 0U) return A_STATUS_OK;
+        status = output_drain(&deadline);
+        if (status != A_STATUS_OK) return status;
+        if (aTimepointExpired(&deadline, aOSGetUptimeMs()))
+            return A_STATUS_TIMEOUT;
+    }
     return A_STATUS_OK;
 }

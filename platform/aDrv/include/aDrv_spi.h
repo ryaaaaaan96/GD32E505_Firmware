@@ -54,10 +54,10 @@ typedef enum {
 /** @brief aDrvSpiConfig_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */
 typedef struct {
     aDrvSpiId_t spiId; /**< 实例编号与 SPI0/1/2 一致。 */
-    aDrvSpiMode_t mode; /**< 主机或从机角色。 */
+    aDrvSpiMode_t mode; /**< 当前仅支持 MASTER，SLAVE 返回 UNSUPPORTED。 */
     aDrvSpiClockPolarity_t polarity; /**< 时钟空闲极性。 */
     aDrvSpiClockPhase_t phase; /**< 第一或第二边沿采样。 */
-    aDrvSpiCsMode_t csMode; /**< 片选控制方式；当前 port 两种 HARD 值均映射 NSS_HARD。 */
+    aDrvSpiCsMode_t csMode; /**< 当前仅支持 SOFT，HARD 返回 UNSUPPORTED。 */
     aDrvSpiBitOrder_t bitOrder; /**< 高位或低位先传输。 */
     uint32_t prescaler; /**< 请求分频比，当前 port 向下映射到 2..256 的二次幂档位。 */
     uint8_t dataBits; /**< 每帧 8 或 16 位；TryRead/TryWrite 每次一帧。 */
@@ -97,6 +97,7 @@ void aDrvSpiHandleStructInit(aDrvSpiHandle_t *handle);
  * @param[out] handle 调用方分配的句柄。
  * @retval A_STATUS_OK 初始化成功。
  * @retval A_STATUS_INVALID_PARAM 参数、引脚或枚举无效。
+ * @retval A_STATUS_UNSUPPORTED 当前后端未实现从机或硬件片选。
  * @return 也可能返回 GPIO 初始化错误。
  * @note 软件片选初始化为高电平；本接口不提供总线仲裁。
  */

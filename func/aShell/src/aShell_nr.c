@@ -36,7 +36,7 @@ static int command_clear(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    return ASHELL_PRINT("\x1b[2J\x1b[H") == A_STATUS_OK ? 0 : -1;
+    return ASHELL_REPLY("\x1b[2J\x1b[H") == A_STATUS_OK ? 0 : -1;
 }
 ASHELL_CMD_EXPORT(clear, command_clear, "Clear terminal screen");
 
@@ -44,7 +44,7 @@ static int command_version(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    ASHELL_PRINT("nr_micro_shell %s\r\n", NR_SHELL_VERSION);
+    ASHELL_REPLY("nr_micro_shell %s\r\n", NR_SHELL_VERSION);
     return 0;
 }
 ASHELL_CMD_EXPORT(version, command_version, "Shell version");
@@ -95,12 +95,19 @@ void aShellNrProcess(char character)
     shell(character);
 }
 
+void aShellNrResetInput(void)
+{
+    /* 官方重置入口同时清理编辑状态和历史，避免执行出错的半行。 */
+    shell_init();
+}
+
 void aShellPortWrite(const char *data, size_t size)
 {
-    (void)aShellOutputWrite(data, size);
+    if (aShellContext.ready) (void)aShellReplyWrite(data, size);
+    else (void)aShellOutputWrite(data, size);
 }
 
 void aShellPortPutc(char character)
 {
-    (void)aShellOutputWrite(&character, 1U);
+    aShellPortWrite(&character, 1U);
 }

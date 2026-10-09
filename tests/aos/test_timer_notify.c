@@ -148,3 +148,6 @@ int main(void)
     assert(count == 0 && live_allocations == 0 && depth == 0);
     puts("aOS timer lifetime and cross-context notification tests passed");
 }
+
+TickType_t xTaskGetTickCountFromISR(void)
+{ return xTaskGetTickCount(); }

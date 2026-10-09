@@ -12,7 +12,7 @@
 
 /** argc 包含命令名；argv 仅在回调期间有效，不保证 argv[argc] 为 NULL。
  * 回调在 Process 调用者任务中同步运行，返回 0 表示成功。
- * 可调用 Print；禁止递归调用 Process 或在回调中 Init/DeInit。
+ * 回复使用 ASHELL_REPLY；禁止递归调用 Process 或在回调中 Init/DeInit。
  */
 typedef int (*aShellCommandFn_t)(int argc, char **argv);
 
@@ -29,6 +29,7 @@ typedef int (*aShellCommandFn_t)(int argc, char **argv);
 #error "aShell command export currently requires GCC/ELF"
 #endif
 #define ASHELL_PRINT(...) aShellPrintf(__VA_ARGS__)
+#define ASHELL_REPLY(...) aShellReplyf(__VA_ARGS__)
 #else
 /* No descriptor, callback reference or argument evaluation when disabled. */
 #define ASHELL_CMD_EXPORT(name, callback, description) \
@@ -38,6 +39,7 @@ static inline aStatus_t aShellPrintDisabled(void)
     return A_STATUS_OK;
 }
 #define ASHELL_PRINT(...) aShellPrintDisabled()
+#define ASHELL_REPLY(...) aShellPrintDisabled()
 #endif
 
 typedef struct {
@@ -58,8 +60,10 @@ aStatus_t aShellInit(const aShellConfig_t *config);
 
 /** 输入处理前后发送排队数据，每次读取至多 64 字节并同步执行命令。
  * 只允许一个调用者；业务命令和实际流读写均不持队列锁。
- * 每轮最多两个 write_timeout 预算和一个 read_timeout 预算。
+ * 输入前后各用一个 write_timeout，命令 Reply 各自使用新的发送预算。
+ * 命令执行及队列短临界区的互斥等待不受整轮时间上限约束。
  * 无输入返回 BUSY；输出错误优先返回，未发送字节留待下次处理。
+ * 输入 I/O 故障丢弃至下一个换行并重置编辑/历史；超时与 BUSY 不重置。
  * OK 不表示业务成功或输出队列为空；入队丢弃通过 Print/Stats 报告。
  */
 aStatus_t aShellProcess(void);
@@ -72,7 +76,7 @@ aBool_t aShellIsEnabled(void);
 
 typedef struct {
     size_t pending_bytes; /**< 包含流 write 正在读取但尚未确认的字节。 */
-    unsigned dropped_messages; /**< 满队列、争用或格式失败次数，溢出回绕。 */
+    unsigned dropped_messages; /**< 拒绝入队或回复中断次数，溢出回绕。 */
 } aShellOutputStats_t;
 
 /** 获取队列快照；返回 OK / INVALID_PARAM / NOT_READY 或锁错误。
@@ -97,5 +101,17 @@ aStatus_t aShellWrite(const char *data, size_t size);
 __attribute__((format(printf, 1, 2)))
 #endif
 aStatus_t aShellPrintf(const char *format, ...);
+
+/** 命令输出：仅 Process 调用链内使用，队列不足时主动发送再继续。
+ * 每次调用使用 write_timeout 预算；后台任务继续使用 ASHELL_PRINT。
+ * 失败锁存至本轮 Process 返回，后续回复停止，避免反复等待故障接口。
+ * 计一次丢弃，保留已入队部分；输出恢复后提示重试，不自动重放命令。
+ * 只发送输出，不递归处理输入，也不调用 stream.flush。
+ * Replyf 与 Printf 的格式长度限制相同；更长原始文本使用 ReplyWrite。 */
+aStatus_t aShellReplyWrite(const char *data, size_t size);
+#if defined(__GNUC__)
+__attribute__((format(printf, 1, 2)))
+#endif
+aStatus_t aShellReplyf(const char *format, ...);
 
 #endif

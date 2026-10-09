@@ -64,6 +64,26 @@ CMakeLists 只消费 resolver 生成的有效值，不在各自目录改写配�
 完整 SPL 的 28 个头文件和 28 个源文件保持官方 V1.7.0 原貌。Examples、Docs 和
 USB 库不纳入工程。
 
+## 第三方源码交付
+
+第三方目录以普通源码文件纳入本仓库，不依赖嵌套 Git 仓库或 submodule。
+新检出直接构建，不需要额外下载 SFUD、FlashDB、EasyLogger、nanoMODBUS，
+也不要在已适配的 FlashDB 上重复应用补丁。各目录保留原许可证和参考文档。
+
+| 目录 | 上游基线提交 |
+| --- | --- |
+| `device/aDev_Flash25q/SFUD` | `6b4bef82e6c603b783a17968f1b75da89cc5e2f8` |
+| `func/aDataBase/FlashDB` | `db0afd954ea0f11397e43f6baf3654979d446345` |
+| `func/aLog/EasyLogger` | `806328e131836662fa83dd43364a53f699fd76ac` |
+| `func/aModbus/nanoMODBUS` | `91d6782930ee263bc760f27b0cbc5b82773c5f0d` |
+
+FlashDB 包含项目的 aMemory 与 KV 索引适配；`patches` 仅供重新导入官方基线
+时重放、审核差异，运行和构建直接使用当前源码，见
+[aDataBase](func/aDataBase/README.md#构建和验证)。
+nr_micro_shell 的基线及本地修正单独记录在
+[aShell](func/aShell/README.md#上游与本地补丁)。升级第三方代码时先核对适配
+差异和许可证，再运行对应回归与构建矩阵。
+
 ## 工程选择与构建
 
 根 `CMakeLists.txt` 使用 `aclass_select()` 选择固件名、MCU profile、链接脚本和

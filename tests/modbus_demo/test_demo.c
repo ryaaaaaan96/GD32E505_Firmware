@@ -19,6 +19,28 @@ static uint32_t input_at;
 static aBool_t overflow, fail_task, close_busy;
 static aDevUsartHandle_t *device;
 static char dynamic_device;
+static aDevUsartRxByteCallback_t rx_callback;
+static void *rx_context;
+static uint32_t cycle_bias;
+static void deliver(void)
+{
+    if (overflow) {
+        rx_callback(rx_context, 0U, A_STATUS_ERROR);
+        overflow = A_FALSE;
+    }
+    if (aOSGetUptimeMs() >= input_at) {
+        while (input_pos < input_size)
+            rx_callback(rx_context, input[input_pos++], A_STATUS_OK);
+    }
+}
+aStatus_t aDrvCycleCounterEnable(void) { return A_STATUS_OK; }
+uint32_t aDrvGetCoreClockHz(void) { return 180000000U; }
+uint32_t aDrvCycleCounterRead(void)
+{ return aOSGetUptimeMs() * 180000U + cycle_bias; }
+void aOSCriticalEnter(void) {}
+void aOSCriticalExit(void) {}
+void aDevUsartClearRxError(aDevUsartHandle_t *handle) { (void)handle; }
+
 #if APP_MODBUS_MASTER_ENABLE
 static uint32_t response_value = 4321U;
 static aBool_t response_enabled = A_TRUE, response_extra;
@@ -60,7 +82,11 @@ static void check_config(const aDevUsartConfig_t *config)
     assert(config->rs485.de_pin == ADRV_PIN(ADRV_GPIO_PORT_A, 15));
     assert(config->rs485.de_active_level == ADRV_GPIO_HIGH);
     assert(config->tx_buffer_size >= 256U);
-    assert(config->rx_buffer_size >= 256U);
+    assert((config->mode & ADEV_USART_RX_MASK) ==
+           ADEV_USART_RX_INTERRUPT_CALLBACK);
+    assert(config->rx_byte_callback != NULL);
+    rx_callback = config->rx_byte_callback;
+    rx_context = config->rx_byte_context;
     assert(device == NULL);
     ++opened;
 }
@@ -158,7 +184,7 @@ void aDevUsartClearRxOverflow(aDevUsartHandle_t *handle)
     assert(handle == device);
     overflow = A_FALSE;
 }
-void aOSDelayMs(uint32_t ms) { testAdvanceTime(ms); }
+void aOSDelayMs(uint32_t ms) { testAdvanceTime(ms); deliver(); }
 aStatus_t aOSCreateTask(const aOSTaskConfig_t *task, aOSTaskHandle_t *out)
 {
     assert(out == NULL && task->function != NULL);
@@ -241,11 +267,69 @@ static void server_tests(void)
     recover();
     write_speed(1U, 789U);
     overflow = A_TRUE;
-    assert(appModbusProcess() != A_STATUS_OK && output_size == 0U);
+    assert(appModbusProcess() == A_STATUS_OK && output_size == 0U);
     recover();
     write_speed(1U, 789U);
     assert(appModbusProcess() == A_STATUS_OK);
     assert(motor_get().speed == 789U);
+    /* 消费任务暂停，两帧之间只有 2 ms，不能合并成一个 ADU。 */
+    testAdvanceTime(3U);
+    write_speed(0U, 111U);
+    deliver();
+    testAdvanceTime(2U);
+    write_speed(0U, 222U);
+    deliver();
+    testAdvanceTime(2U);
+    assert(appModbusProcess() == A_STATUS_OK);
+    assert(motor_get().speed == 111U);
+    assert(appModbusProcess() == A_STATUS_OK);
+    assert(motor_get().speed == 222U);
+    /* 完成时间差 800 us，扣除字符时间后仍小于 t1.5。 */
+    testAdvanceTime(3U);
+    write_speed(0U, 444U);
+    for (size_t i = 0U; i < input_size; i++) {
+        if (i == 4U) cycle_bias += 800U * 180U;
+        rx_callback(rx_context, input[i], A_STATUS_OK);
+    }
+    input_pos = input_size;
+    assert(appModbusProcess() == A_STATUS_OK);
+    assert(motor_get().speed == 444U);
+    /* DWT 在两帧间回绕，仍须保持帧边界和顺序。 */
+    testAdvanceTime(30U);
+    cycle_bias = UINT32_MAX - 100000U - aOSGetUptimeMs() * 180000U;
+    write_speed(0U, 555U);
+    deliver();
+    testAdvanceTime(2U);
+    write_speed(0U, 666U);
+    deliver();
+    testAdvanceTime(2U);
+    assert(appModbusProcess() == A_STATUS_OK);
+    assert(motor_get().speed == 555U);
+    assert(appModbusProcess() == A_STATUS_OK);
+    assert(motor_get().speed == 666U);
+    /* 三槽满后丢弃新帧，不能覆盖未消费的写入。 */
+    for (uint32_t value = 1U; value <= 4U; value++) {
+        testAdvanceTime(3U);
+        write_speed(0U, value);
+        deliver();
+    }
+    testAdvanceTime(3U);
+    for (uint32_t value = 1U; value <= 3U; value++) {
+        assert(appModbusProcess() == A_STATUS_OK);
+        assert(motor_get().speed == value);
+    }
+    assert(appModbusProcess() == A_STATUS_OK);
+    assert(motor_get().speed == 3U);
+    /* 帧内 1 ms 间隔超过 t1.5，不能执行写入。 */
+    testAdvanceTime(3U);
+    write_speed(0U, 333U);
+    for (size_t i = 0U; i < input_size; i++) {
+        if (i == 4U) testAdvanceTime(1U);
+        rx_callback(rx_context, input[i], A_STATUS_OK);
+    }
+    input_pos = input_size;
+    assert(appModbusProcess() == A_STATUS_OK);
+    assert(motor_get().speed == 3U);
 }
 #else
 static void master_tests(void)

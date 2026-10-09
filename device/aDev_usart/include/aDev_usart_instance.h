@@ -39,6 +39,8 @@ struct aDevUsartHandle {
     uint8_t interrupt_priority;
     uint8_t *rx_buffer;
     size_t rx_buffer_size;
+    aDevUsartRxByteCallback_t rx_byte_callback;
+    void *rx_byte_context;
     volatile size_t rx_head;
     volatile size_t rx_tail;
     volatile size_t rx_count;

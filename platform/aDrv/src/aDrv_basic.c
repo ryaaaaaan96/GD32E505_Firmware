@@ -22,6 +22,23 @@ uint32_t aDrvGetCoreClockHz(void)
     return SystemCoreClock;
 }
 
+aStatus_t aDrvCycleCounterEnable(void)
+{
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    if ((DWT->CTRL & DWT_CTRL_NOCYCCNT_Msk) != 0U)
+        return A_STATUS_UNSUPPORTED;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    __DSB();
+    __ISB();
+    return (DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) != 0U ?
+           A_STATUS_OK : A_STATUS_UNSUPPORTED;
+}
+
+uint32_t aDrvCycleCounterRead(void)
+{
+    return DWT->CYCCNT;
+}
+
 uint16_t aDrvGetFlashSize(void)
 {
     return *(const volatile uint16_t *)GD32_FLASH_SIZE_ADDRESS;

@@ -21,6 +21,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-storage-") as directory:
 #define TEST_SHELL_H
 int test_shell_print(const char *format, ...);
 #define ASHELL_PRINT(...) test_shell_print(__VA_ARGS__)
+#define ASHELL_REPLY(...) ASHELL_PRINT(__VA_ARGS__)
 #define ASHELL_CMD_EXPORT(n, f, h) \\
     int test_database_command(int argc, char **argv) \\
         { return f(argc, argv); } \\

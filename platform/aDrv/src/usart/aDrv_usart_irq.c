@@ -29,6 +29,20 @@ static void interrupt_config(aDrvUsartHandle_t *handle,
     if (trigger == ADRV_USART_EXTI_SOFTWARE) return;
     const uint32_t interrupt = interrupt_value(handle->id, trigger);
 
+    if (trigger == ADRV_USART_EXTI_ERROR) {
+        if (handle->id == ADRV_USART_5) {
+            if (enabled) usart5_interrupt_enable((uint32_t)handle->instance,
+                                                 USART5_INT_PERR);
+            else usart5_interrupt_disable((uint32_t)handle->instance,
+                                            USART5_INT_PERR);
+        } else {
+            if (enabled) usart_interrupt_enable((uint32_t)handle->instance,
+                                                USART_INT_PERR);
+            else usart_interrupt_disable((uint32_t)handle->instance,
+                                           USART_INT_PERR);
+        }
+    }
+
     if (handle->id == ADRV_USART_5) {
         if (enabled) {
             usart5_interrupt_enable((uint32_t)handle->instance,
@@ -194,6 +208,26 @@ void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *handle)
 static aBool_t interrupt_pending(const aDrvUsartHandle_t *handle,
                                  aDrvUsartExti_t trigger)
 {
+    if (trigger == ADRV_USART_EXTI_ERROR) {
+        if (handle->id == ADRV_USART_5) {
+            return usart5_interrupt_flag_get(handle->instance,
+                       USART5_INT_FLAG_ERR_ORERR) != RESET ||
+                   usart5_interrupt_flag_get(handle->instance,
+                       USART5_INT_FLAG_ERR_NERR) != RESET ||
+                   usart5_interrupt_flag_get(handle->instance,
+                       USART5_INT_FLAG_ERR_FERR) != RESET ||
+                   usart5_interrupt_flag_get(handle->instance,
+                       USART5_INT_FLAG_PERR) != RESET;
+        }
+        return usart_interrupt_flag_get(handle->instance,
+                   USART_INT_FLAG_ERR_ORERR) != RESET ||
+               usart_interrupt_flag_get(handle->instance,
+                   USART_INT_FLAG_ERR_NERR) != RESET ||
+               usart_interrupt_flag_get(handle->instance,
+                   USART_INT_FLAG_ERR_FERR) != RESET ||
+               usart_interrupt_flag_get(handle->instance,
+                   USART_INT_FLAG_PERR) != RESET;
+    }
     static const uint32_t regular[] = {
         USART_INT_FLAG_TBE,
         USART_INT_FLAG_RBNE,
@@ -251,6 +285,8 @@ static void usart_irq_dispatch(aDrvUsartId_t id)
         if (callback.function != NULL) callback.function(callback.argument);
     }
 
+    /* 先报告并清除错误，避免 RXNE 读取把错误状态一并清掉。 */
+    invoke_callback(handle, ADRV_USART_EXTI_ERROR);
     invoke_callback(handle, ADRV_USART_EXTI_RXNE);
     invoke_callback(handle, ADRV_USART_EXTI_TXE);
     invoke_callback(handle, ADRV_USART_EXTI_TC);
@@ -265,7 +301,6 @@ static void usart_irq_dispatch(aDrvUsartId_t id)
         }
     }
 
-    invoke_callback(handle, ADRV_USART_EXTI_ERROR);
 }
 
 void USART0_IRQHandler(void)

@@ -20,6 +20,19 @@ aStatus_t aDevLedInit(const aDevLedConfig_t *config, aDevLedHandle_t *handle)
 static aDevUsartHandle_t *expected_handle;
 static aSSize_t io_result = 2;
 static unsigned shell_calls, deinit_calls;
+static unsigned rx_error_clears;
+static aStatus_t rx_error = A_STATUS_OK;
+void aDevUsartClearRxError(aDevUsartHandle_t *handle)
+{
+    assert(handle == expected_handle);
+    rx_error_clears++;
+    rx_error = A_STATUS_OK;
+}
+aStatus_t aDevUsartGetRxError(const aDevUsartHandle_t *handle)
+{
+    assert(handle == expected_handle);
+    return rx_error;
+}
 static aStream_t stream;
 static char data[4];
 void aShellConfigStructInit(aShellConfig_t *config)
@@ -103,6 +116,10 @@ int main(void)
     assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == 2);
     io_result = -1;
     assert(stream.read(data, sizeof(data), A_TIMEOUT_MS(7U)) == -1);
+    assert(rx_error_clears == 0U);
+    rx_error = A_STATUS_ERROR;
+    assert(stream.read(data, sizeof(data), A_TIMEOUT_MS(7U)) == -1);
+    assert(rx_error_clears == 1U && rx_error == A_STATUS_OK);
     assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == -1);
     assert(usart_calls == 1);
 #endif

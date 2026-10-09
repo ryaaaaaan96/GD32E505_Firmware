@@ -526,12 +526,25 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
 aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
                                            size_t *received)
 {
+    aDrvUsartRxProgress_t progress;
+    aStatus_t status;
+
+    if (received == NULL) return A_STATUS_INVALID_PARAM;
+    status = aDrvUsartAsyncRxGetProgress(handle, &progress);
+    if (status == A_STATUS_OK || status == A_STATUS_BUSY ||
+        status == A_STATUS_ERROR) *received = progress.received;
+    return status;
+}
+
+aStatus_t aDrvUsartAsyncRxGetProgress(aDrvUsartHandle_t *handle,
+                                      aDrvUsartRxProgress_t *progress)
+{
     aDrvPrivateUsartAsyncState_t *state;
     size_t remaining_before;
     size_t remaining_after;
     aBool_t error;
 
-    if ((handle == NULL) || (received == NULL)) {
+    if ((handle == NULL) || (progress == NULL)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (handle->initialized == 0U) {
@@ -559,8 +572,10 @@ aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
             (dma_flag_get((uint32_t)state->rx_dma.controller,
                           (dma_channel_enum)state->rx_dma.channel,
                           DMA_FLAG_FTF) == RESET)) {
-            *received = state->rx_wrap_count * state->rx_size +
-                        (state->rx_size - remaining_after);
+            progress->received = state->rx_wrap_count * state->rx_size +
+                                 (state->rx_size - remaining_after);
+            progress->position = remaining_after == 0U ? 0U :
+                                  state->rx_size - remaining_after;
             nvic_irq_enable(state->rx_dma_irq, state->rx_irq_priority, 0U);
             error = state->rx_error;
             return error != 0U ? A_STATUS_ERROR : A_STATUS_OK;
@@ -570,8 +585,10 @@ aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *handle,
     nvic_irq_disable(state->rx_dma_irq);
     rx_dma_flags_service(state);
     remaining_after = (size_t)aDrvDmaCurLenGet(&state->rx_dma);
-    *received = state->rx_wrap_count * state->rx_size +
-                (state->rx_size - remaining_after);
+    progress->received = state->rx_wrap_count * state->rx_size +
+                         (state->rx_size - remaining_after);
+    progress->position = remaining_after == 0U ? 0U :
+                          state->rx_size - remaining_after;
     error = state->rx_error;
     nvic_irq_enable(state->rx_dma_irq, state->rx_irq_priority, 0U);
     return error != 0U ? A_STATUS_ERROR : A_STATUS_BUSY;

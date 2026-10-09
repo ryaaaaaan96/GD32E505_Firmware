@@ -51,14 +51,14 @@ static void data_print(const void *data, size_t size)
 
     for (size_t i = 0U; i < size; ++i)
         if (bytes[i] < 32U || bytes[i] > 126U) printable = A_FALSE;
-    ASHELL_PRINT("%lu bytes", (unsigned long)size);
-    ASHELL_PRINT("\r\n");
+    ASHELL_REPLY("%lu bytes", (unsigned long)size);
+    ASHELL_REPLY("\r\n");
     if (printable) {
         for (size_t offset = 0U; offset < size; offset += 64U) {
             size_t count = size - offset;
 
             if (count > 64U) count = 64U;
-            ASHELL_PRINT("%.*s\r\n", (int)count,
+            ASHELL_REPLY("%.*s\r\n", (int)count,
                          (const char *)data + offset);
         }
     }
@@ -71,7 +71,7 @@ static void data_print(const void *data, size_t size)
             hex[i * 2U + 1U] = digits[bytes[offset + i] & 15U];
         }
         hex[count * 2U] = '\0';
-        ASHELL_PRINT("%s\r\n", hex);
+        ASHELL_REPLY("%s\r\n", hex);
     }
 }
 
@@ -100,7 +100,7 @@ static aStatus_t kv_command(int argc, char **argv)
         status = appDatabaseKvGet(&get);
         if (status == A_STATUS_OK) data_print(buffer, size);
         if (status == A_STATUS_NO_MEMORY)
-            ASHELL_PRINT("Value requires %lu bytes\r\n",
+            ASHELL_REPLY("Value requires %lu bytes\r\n",
                          (unsigned long)size);
         return status;
     }
@@ -130,7 +130,7 @@ static aBool_t record_print(const aDataBaseTsRecord_t *record, void *context)
         print->limited = A_TRUE;
         return A_FALSE;
     }
-    ASHELL_PRINT("time=%s ", timestamp_text(record->timestamp, time));
+    ASHELL_REPLY("time=%s ", timestamp_text(record->timestamp, time));
     data_print(record->data, record->size);
     ++print->count;
     print->output_bytes += output_bound;
@@ -169,9 +169,9 @@ static aStatus_t ts_command(int argc, char **argv)
         iterate.callback = record_print;
         iterate.context = &print;
         status = appDatabaseTsIterate(&iterate);
-        ASHELL_PRINT("%lu records shown\r\n", (unsigned long)print.count);
+        ASHELL_REPLY("%lu records shown\r\n", (unsigned long)print.count);
         if (print.limited && print.last_timestamp < INT64_MAX)
-            ASHELL_PRINT("Continue: db ts list %s %s\r\n",
+            ASHELL_REPLY("Continue: db ts list %s %s\r\n",
                 timestamp_text(print.last_timestamp + 1, from),
                 timestamp_text(iterate.to, to));
         return status;
@@ -181,7 +181,7 @@ static aStatus_t ts_command(int argc, char **argv)
 
 static void usage(void)
 {
-    ASHELL_PRINT("db init | close | info\r\n"
+    ASHELL_REPLY("db init | close | info\r\n"
                  "db kv set <key> <text>\r\n"
                  "db kv get <key>\r\n"
                  "db kv del <key>\r\n"
@@ -196,13 +196,13 @@ static int database_command(int argc, char **argv)
     char time[21];
 
     if (argc == 2 && strcmp(argv[1], "init") == 0) {
-        ASHELL_PRINT("Open database partitions; invalid headers may be "
+        ASHELL_REPLY("Open database partitions; invalid headers may be "
                      "formatted.\r\n");
         status = appDatabaseOpen(A_TRUE);
     } else if (argc == 2 && strcmp(argv[1], "close") == 0) {
         status = appDatabaseClose();
     } else if (argc == 2 && strcmp(argv[1], "info") == 0) {
-        ASHELL_PRINT("KV: 0x%08lX, %lu bytes; TSDB: 0x%08lX, "
+        ASHELL_REPLY("KV: 0x%08lX, %lu bytes; TSDB: 0x%08lX, "
                      "%lu bytes\r\n",
                      (unsigned long)AMEMORY_PART_PARAM_OFFSET,
                      (unsigned long)AMEMORY_PART_PARAM_SIZE,
@@ -210,7 +210,7 @@ static int database_command(int argc, char **argv)
                      (unsigned long)AMEMORY_PART_LOG_SIZE);
         status = appDatabaseTsGetInfo(&info);
         if (status == A_STATUS_OK)
-            ASHELL_PRINT("last_time=%s, max_record=%lu, "
+            ASHELL_REPLY("last_time=%s, max_record=%lu, "
                          "rollover=%u\r\n",
                          timestamp_text(info.last_timestamp, time),
                          (unsigned long)info.max_record_size,
@@ -222,8 +222,8 @@ static int database_command(int argc, char **argv)
     } else {
         usage();
     }
-    if (status == A_STATUS_OK) ASHELL_PRINT("OK\r\n");
-    else ASHELL_PRINT("Database command failed: %d\r\n", (int)status);
+    if (status == A_STATUS_OK) ASHELL_REPLY("OK\r\n");
+    else ASHELL_REPLY("Database command failed: %d\r\n", (int)status);
     return status == A_STATUS_OK ? 0 : -1;
 }
 

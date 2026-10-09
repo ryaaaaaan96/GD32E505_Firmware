@@ -11,6 +11,7 @@ static unsigned isr_depth;
 static aBool_t irq_supported = A_TRUE;
 static aBool_t tc = A_TRUE;
 static aBool_t dma_stall;
+static aBool_t hardware_rx_error;
 static aBool_t dma_error;
 static aBool_t dma_supported = A_TRUE;
 static unsigned driver_init_count;
@@ -35,8 +36,10 @@ static size_t rx_dma_size;
 static size_t rx_dma_remaining;
 static aBool_t rx_dma_circular;
 static size_t rx_dma_produced;
+static size_t rx_dma_position = SIZE_MAX;
 static aStatus_t rx_dma_progress_status = A_STATUS_OK;
 static aBool_t complete_rx_on_wait;
+static aDevUsartHandle_t *error_on_wait;
 static aBool_t overwrite_in_callback;
 static uint8_t *rx_ring;
 static aBool_t overwrite_during_copy;
@@ -69,6 +72,12 @@ void aOSWaitObjectDestroy(void **p) { *p = NULL; }
 aStatus_t aOSWaitObjectWait(void *p, aTimeout_t t)
 {
     (void)p; ++rx_waits;
+    if (error_on_wait != NULL) {
+        hardware_rx_error = A_TRUE;
+        fire(error_on_wait, ADRV_USART_EXTI_ERROR);
+        error_on_wait = NULL;
+        return A_STATUS_OK;
+    }
     if (complete_rx_on_wait) {
         complete_rx_on_wait = A_FALSE;
         rx_dma_remaining = 0U;
@@ -149,7 +158,8 @@ aStatus_t aDrvUsartRegisterCallback(aDrvUsartHandle_t *h, const aDrvUsartExtiCon
 aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *h, uint8_t b)
 { (void)h; (void)b; if (!byte_budget) return A_STATUS_BUSY; --byte_budget; tc = A_FALSE; return A_STATUS_OK; }
 aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *h, uint8_t *b)
-{ (void)h; if (!rx_byte_budget) return A_STATUS_BUSY;
+{ if (aDrvUsartTakeRxError(h) != A_STATUS_OK) return A_STATUS_ERROR;
+  if (!rx_byte_budget) return A_STATUS_BUSY;
   --rx_byte_budget; *b = rx_byte; return A_STATUS_OK; }
 aStatus_t aDrvUsartIsTransmitComplete(const aDrvUsartHandle_t *h, aBool_t *v)
 { (void)h; *v = tc; return A_STATUS_OK; }
@@ -191,6 +201,15 @@ aStatus_t aDrvUsartAsyncRxGetReceivedCount(aDrvUsartHandle_t *h, size_t *n)
       overwrite_during_copy = A_FALSE;
   }
   *n = rx_dma_produced; return rx_dma_progress_status; }
+aStatus_t aDrvUsartAsyncRxGetProgress(aDrvUsartHandle_t *h,
+                                      aDrvUsartRxProgress_t *progress)
+{
+    aStatus_t status = aDrvUsartAsyncRxGetReceivedCount(h,
+                                                      &progress->received);
+    progress->position = rx_dma_position != SIZE_MAX ? rx_dma_position :
+                         progress->received % rx_dma_size;
+    return status;
+}
 aStatus_t aDrvUsartAsyncRxGetRemaining(aDrvUsartHandle_t *h, size_t *n)
 { (void)h; *n = rx_dma_remaining; return A_STATUS_OK; }
 aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *h, size_t *n)
@@ -295,6 +314,15 @@ static void buffered_rx_tests(void)
     assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
     assert(critical_depth == 0U && mutex_count == 0U && locks == 0U);
     rx_byte = 42U;
+}
+
+static unsigned byte_callbacks, byte_errors;
+static void byte_receive(void *context, uint8_t byte, aStatus_t status)
+{
+    (void)byte;
+    assert(context == &byte_callbacks);
+    if (status == A_STATUS_OK) byte_callbacks++;
+    else byte_errors++;
 }
 
 int main(void)
@@ -649,7 +677,73 @@ int main(void)
     assert(aDevUsartInitStatic(&c, h) == A_STATUS_OK);
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
     assert(mutex_count == 0U && locks == 0U);
+    /* 累计计数跨 SIZE_MAX；物理游标必须独立推进。 */
+    {
+        uint8_t rollover_ring[3] = {0x11U, 0x22U, 0x33U};
+        uint8_t value = 0U;
+        aDevUsartConfigStructInit(&c);
+        c.mode = ADEV_USART_RX_DMA_BUFFERED;
+        c.rx_buffer = rollover_ring;
+        c.rx_buffer_size = sizeof(rollover_ring);
+        assert(aDevUsartInitStatic(&c, h) == A_STATUS_OK);
+        h->rx_dma_consumed = SIZE_MAX;
+        h->rx_tail = SIZE_MAX % sizeof(rollover_ring);
+        rx_dma_produced = 0U;
+        assert(aDevUsartRead(h, &value, 1U, A_TIMEOUT_NO_WAIT) == 1);
+        assert(value == 0x11U);
+        rx_dma_produced = 1U;
+        assert(aDevUsartRead(h, &value, 1U, A_TIMEOUT_NO_WAIT) == 1);
+        assert(value == 0x22U);
+        /* 已累计回绕后发生覆盖，必须使用 DMA 的物理位置恢复。 */
+        rx_dma_produced = 7U;
+        rx_dma_position = 2U;
+        assert(aDevUsartRead(h, &value, 1U, A_TIMEOUT_NO_WAIT) == 1);
+        assert(value == 0x33U);
+        assert(aDevUsartHasRxOverflowed(h));
+        aDevUsartClearRxOverflow(h);
+        aDevUsartClearRxError(h);
+        assert(aDevUsartRead(h, &value, 1U, A_TIMEOUT_NO_WAIT) == 1);
+        assert(value == 0x11U);
+        rx_dma_position = SIZE_MAX;
+        assert(aDevUsartDeInit(h) == A_STATUS_OK);
+    }
+    aDevUsartConfigStructInit(&c);
+    c.mode = ADEV_USART_RX_INTERRUPT_CALLBACK;
+    c.rx_byte_callback = byte_receive;
+    c.rx_byte_context = &byte_callbacks;
+    assert(aDevUsartInitStatic(&c, h) == A_STATUS_OK);
+    fire(h, ADRV_USART_EXTI_RXNE);
+    assert(byte_callbacks == 1U);
+    hardware_rx_error = A_TRUE;
+    fire(h, ADRV_USART_EXTI_ERROR);
+    assert(byte_errors == 1U && !hardware_rx_error);
+    assert(aDevUsartGetRxError(h) == A_STATUS_ERROR);
+    aDevUsartClearRxError(h);
+    assert(aDevUsartGetRxError(h) == A_STATUS_OK);
+    assert(aDevUsartRead(h, read_buffer, 1U, A_TIMEOUT_NO_WAIT) == -1);
+    assert(last_error == A_STATUS_UNSUPPORTED);
+    assert(aDevUsartDeInit(h) == A_STATUS_OK);
+    aDevUsartConfigStructInit(&c);
+    c.mode = ADEV_USART_RX_INTERRUPT_BUFFERED;
+    c.rx_buffer = ring;
+    c.rx_buffer_size = sizeof(ring);
+    assert(aDevUsartInitStatic(&c, h) == A_STATUS_OK);
+    error_on_wait = h;
+    assert(aDevUsartRead(h, read_buffer, 1U, A_TIMEOUT_MS(100U)) == -1);
+    assert(last_error == A_STATUS_ERROR && error_on_wait == NULL);
+    aDevUsartClearRxError(h);
+    fire(h, ADRV_USART_EXTI_RXNE);
+    assert(aDevUsartRead(h, read_buffer, 1U, A_TIMEOUT_NO_WAIT) == 1);
+    assert(aDevUsartDeInit(h) == A_STATUS_OK);
     buffered_rx_tests();
     puts("RS485 USART tests passed");
     return 0;
+}
+
+aStatus_t aDrvUsartTakeRxError(aDrvUsartHandle_t *h)
+{
+    (void)h;
+    aBool_t error = hardware_rx_error;
+    hardware_rx_error = A_FALSE;
+    return error ? A_STATUS_ERROR : A_STATUS_OK;
 }

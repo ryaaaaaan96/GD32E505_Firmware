@@ -231,11 +231,47 @@ aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *handle, uint8_t data)
     if (((uint32_t)handle->owner & ADRV_USART_OWNER_ASYNC_TX) != 0U) {
         return A_STATUS_BUSY;
     }
-    if (usart_flag_get((uint32_t)handle->instance, USART_FLAG_TBE) == RESET) {
+    if ((handle->id == ADRV_USART_5 ?
+         usart5_flag_get(handle->instance, USART5_FLAG_TBE) :
+         usart_flag_get(handle->instance, USART_FLAG_TBE)) == RESET) {
         return A_STATUS_BUSY;
     }
 
     usart_data_transmit((uint32_t)handle->instance, data);
+    return A_STATUS_OK;
+}
+
+aStatus_t aDrvUsartTakeRxError(aDrvUsartHandle_t *handle)
+{
+    uint32_t instance;
+
+    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (!handle->initialized) return A_STATUS_NOT_READY;
+    instance = (uint32_t)handle->instance;
+    if (handle->id == ADRV_USART_5) {
+        const usart5_flag_enum flags[] = {
+            USART5_FLAG_ORERR, USART5_FLAG_NERR,
+            USART5_FLAG_FERR, USART5_FLAG_PERR
+        };
+        aBool_t error = A_FALSE;
+        for (size_t i = 0U; i < ADRV_ARRAY_COUNT(flags); i++) {
+            if (usart5_flag_get(instance, flags[i]) != RESET) {
+                usart5_flag_clear(instance, flags[i]);
+                error = A_TRUE;
+            }
+        }
+        if (error && usart5_flag_get(instance, USART5_FLAG_RBNE) != RESET)
+            (void)usart_data_receive(instance);
+        return error ? A_STATUS_ERROR : A_STATUS_OK;
+    }
+    if (usart_flag_get(instance, USART_FLAG_ORERR) != RESET ||
+        usart_flag_get(instance, USART_FLAG_NERR) != RESET ||
+        usart_flag_get(instance, USART_FLAG_FERR) != RESET ||
+        usart_flag_get(instance, USART_FLAG_PERR) != RESET) {
+        /* 先读状态再读数据，按芯片规定清除接收错误。 */
+        (void)usart_data_receive(instance);
+        return A_STATUS_ERROR;
+    }
     return A_STATUS_OK;
 }
 
@@ -250,7 +286,10 @@ aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *handle, uint8_t *data)
     if (((uint32_t)handle->owner & ADRV_USART_OWNER_ASYNC_RX) != 0U) {
         return A_STATUS_BUSY;
     }
-    if (usart_flag_get((uint32_t)handle->instance, USART_FLAG_RBNE) == RESET) {
+    if (aDrvUsartTakeRxError(handle) != A_STATUS_OK) return A_STATUS_ERROR;
+    if ((handle->id == ADRV_USART_5 ?
+         usart5_flag_get(handle->instance, USART5_FLAG_RBNE) :
+         usart_flag_get(handle->instance, USART_FLAG_RBNE)) == RESET) {
         return A_STATUS_BUSY;
     }
 
@@ -268,7 +307,9 @@ aStatus_t aDrvUsartIsTransmitComplete(const aDrvUsartHandle_t *handle,
         return A_STATUS_NOT_READY;
     }
 
-    *complete = usart_flag_get((uint32_t)handle->instance, USART_FLAG_TC) !=
+    *complete = (handle->id == ADRV_USART_5 ?
+         usart5_flag_get(handle->instance, USART5_FLAG_TC) :
+         usart_flag_get(handle->instance, USART_FLAG_TC)) !=
                 RESET;
     return A_STATUS_OK;
 }

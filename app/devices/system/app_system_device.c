@@ -63,11 +63,14 @@ static const aDevUsartConfig_t usart_config = {
 
 static aDevUsartHandle_t *console_handle;
 
-/* Product adaptation: the generic stream does not expose the USART type. */
+/* 应用适配：通用流不暴露 USART 类型；接收故障先报告给 Shell 再恢复。 */
 static aSSize_t console_read(void *buffer, size_t size,
                             aTimeout_t timeout)
 {
-    return aDevUsartRead(console_handle, buffer, size, timeout);
+    aSSize_t count = aDevUsartRead(console_handle, buffer, size, timeout);
+    if (count < 0 && aDevUsartGetRxError(console_handle) != A_STATUS_OK)
+        aDevUsartClearRxError(console_handle);
+    return count;
 }
 
 static aSSize_t console_write(const void *buffer, size_t size,

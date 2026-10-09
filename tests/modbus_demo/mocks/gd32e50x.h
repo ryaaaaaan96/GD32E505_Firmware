@@ -3,8 +3,12 @@
 #include <stdint.h>
 typedef unsigned rcu_periph_enum;
 typedef unsigned IRQn_Type;
+typedef unsigned usart5_flag_enum;
 enum {
-    RESET, SET, DISABLE = 0, ENABLE = 1,
+    USART_FLAG_ORERR = 100, USART_FLAG_NERR, USART_FLAG_FERR, USART_FLAG_PERR,
+    USART5_FLAG_ORERR, USART5_FLAG_NERR, USART5_FLAG_FERR, USART5_FLAG_PERR,
+    USART5_FLAG_RBNE, USART5_FLAG_TBE, USART5_FLAG_TC,
+    RESET = 0, SET, DISABLE = 0, ENABLE = 1,
     GPIOA = 10, GPIOB, GPIOC, GPIOD, GPIOE, GPIOF, GPIOG,
     RCU_GPIOA = 20, RCU_GPIOB, RCU_GPIOC, RCU_GPIOD, RCU_GPIOE,
     RCU_GPIOF, RCU_GPIOG, RCU_AF,
@@ -38,4 +42,6 @@ void usart_receive_config(uint32_t instance, uint32_t value);
 void usart_data_transmit(uint32_t instance, uint32_t value);
 uint16_t usart_data_receive(uint32_t instance);
 unsigned usart_flag_get(uint32_t instance, uint32_t flag);
+unsigned usart5_flag_get(uint32_t instance, usart5_flag_enum flag);
+void usart5_flag_clear(uint32_t instance, usart5_flag_enum flag);
 #endif

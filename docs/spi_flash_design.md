@@ -41,7 +41,9 @@ aMemory 不依赖 Flash25Q 类型，具体介质回调由应用设备层注册�
 存储注册和分区边界见 [aMemory](../func/aMemory/README.md)。
 
 aDrv 不依赖 SFUD、aOS、系统时间或堆分配；提供硬件配置、传输推进、
-完成查询和中止恢复。device 的 port 负责等待、总线互斥、deadline 和
+完成查询和中止恢复。当前 SPI 后端只支持主机软件片选，从机和硬件片选在
+访问硬件前返回 UNSUPPORTED；引脚有效性及互相重复检查也在配置 GPIO 前完成。
+device 的 port 负责等待、总线互斥、deadline 和
 SFUD 回调转换。SPI/QSPI 保持不同硬件接口，不强行统一成字节流。
 
 ## 目录和官方源码边界

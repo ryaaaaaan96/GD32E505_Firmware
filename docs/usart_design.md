@@ -22,7 +22,8 @@ Write 返回表示数据已提交，DMA 搬运完成也不代表线路完成；�
 ## 回调上下文和数据稳定性
 
 aDrv 硬件回调由 aDev 注册，应用不覆盖设备正在使用的 IRQ 分发。
-业务回调通过 ReadAsync / WriteAsync 请求设置，不另外注册 CallbackSet。
+缓冲业务回调通过 ReadAsync / WriteAsync 请求设置，不另外注册 CallbackSet。
+需要字节到达时刻的协议可选独占 RX 字节回调模式，在初始化时提供钩子。
 
 - Async 回调统一在 USART/DMA ISR 执行；任务取消和定时服务超时通过
   软件挂起 USART IRQ 派发，不能理解成“谁触发就在哪个上下文回调”。
@@ -44,7 +45,7 @@ GPIO_DE 由 aDev 在发送前置为有效电平，TC 后释放。芯片自动 UA
 | 应用 | 端口 | 说明 |
 | --- | --- | --- |
 | Shell | USART0，PA9/PA10，115200 8N1 | 中断缓冲、IDLE 通知，通过应用回调适配 aStream |
-| Modbus Demo | USART2，PC10/PC11，PA15 DE，115200 8N1 | 中断缓冲，主从宏切换，当前默认从站 1 |
+| Modbus Demo | USART2，PC10/PC11，PA15 DE，115200 8N1 | ISR 字节回调收帧，TX 中断缓冲，当前默认从站 1 |
 
 USART2 的 PC10/PC11 重映射与 PA15 的 JTAG 引脚释放由 aDrv 完成，保留 SWD。
 Modbus 寄存器、帧间隔限制及联调步骤见[应用 Demo](../app/modbus/README.md)。

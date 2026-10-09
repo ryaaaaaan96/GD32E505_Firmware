@@ -7,6 +7,29 @@
 
 static unsigned route, changes, stage;
 static aBool_t swd_only;
+static unsigned error_flag, data_reads;
+unsigned usart_flag_get(uint32_t instance, uint32_t flag)
+{
+    assert(instance != USART5);
+    return flag == error_flag || flag == USART_FLAG_RBNE;
+}
+unsigned usart5_flag_get(uint32_t instance, usart5_flag_enum flag)
+{
+    assert(instance == USART5);
+    return flag == error_flag || flag == USART5_FLAG_RBNE;
+}
+void usart5_flag_clear(uint32_t instance, usart5_flag_enum flag)
+{
+    assert(instance == USART5);
+    if (flag == error_flag) error_flag = 0U;
+}
+uint16_t usart_data_receive(uint32_t instance)
+{
+    (void)instance;
+    data_reads++;
+    error_flag = 0U;
+    return 0x5aU;
+}
 void rcu_periph_clock_enable(rcu_periph_enum clock) { (void)clock; }
 void gpio_pin_remap_config(uint32_t remap, unsigned enable)
 {
@@ -84,6 +107,27 @@ int main(void)
     assert(aDrvGpioInit(&gpio, &de) == A_STATUS_OK);
     assert(swd_only && stage == 3U);
     assert(route == GPIO_USART2_FULL_REMAP);
+    /* 真实驱动必须分别使用普通 USART 和 USART5 的状态寄存器接口。 */
+    for (unsigned special = 0U; special < 2U; special++) {
+        const unsigned errors[] = {
+            USART_FLAG_ORERR, USART_FLAG_NERR, USART_FLAG_FERR,
+            USART_FLAG_PERR, USART5_FLAG_ORERR, USART5_FLAG_NERR,
+            USART5_FLAG_FERR, USART5_FLAG_PERR
+        };
+        uint8_t byte = 0U;
+        handle.initialized = A_TRUE;
+        handle.instance = special ? USART5 : USART2;
+        handle.id = special ? ADRV_USART_5 : ADRV_USART_2;
+        for (unsigned i = 0U; i < 4U; i++) {
+            unsigned reads = data_reads;
+            error_flag = errors[special * 4U + i];
+            assert(aDrvUsartTryReadByte(&handle, &byte) == A_STATUS_ERROR);
+            assert(byte == 0U && error_flag == 0U);
+            assert(data_reads == reads + 1U);
+        }
+        assert(aDrvUsartTryReadByte(&handle, &byte) == A_STATUS_OK);
+        assert(byte == 0x5aU);
+    }
     puts("USART2 routing and PA15 GPIO/SWD setup passed");
     return 0;
 }

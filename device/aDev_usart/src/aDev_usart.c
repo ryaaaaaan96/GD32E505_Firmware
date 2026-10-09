@@ -29,7 +29,8 @@ static aBool_t mode_is_valid(aDevUsartMode_t mode)
         return A_FALSE;
     }
     if (((mode & ADEV_USART_OPTION_RX_IDLE) != 0U) &&
-        (rx_mode == ADEV_USART_RX_POLLING)) {
+        (rx_mode == ADEV_USART_RX_POLLING ||
+         rx_mode == ADEV_USART_RX_INTERRUPT_CALLBACK)) {
         return A_FALSE;
     }
 
@@ -46,6 +47,7 @@ static aBool_t mode_is_valid(aDevUsartMode_t mode)
     case ADEV_USART_RX_POLLING:
     case ADEV_USART_RX_INTERRUPT_BUFFERED:
     case ADEV_USART_RX_DMA_BUFFERED:
+    case ADEV_USART_RX_INTERRUPT_CALLBACK:
         return A_TRUE;
     default:
         return A_FALSE;
@@ -63,7 +65,9 @@ static aStatus_t wait_objects_create(aDevUsartHandle_t *handle)
         }
     }
 
-    if ((handle->mode & ADEV_USART_RX_MASK) != ADEV_USART_RX_POLLING) {
+    if ((handle->mode & ADEV_USART_RX_MASK) != ADEV_USART_RX_POLLING &&
+        (handle->mode & ADEV_USART_RX_MASK) !=
+        ADEV_USART_RX_INTERRUPT_CALLBACK) {
         status = aOSWaitObjectCreate(&handle->rx_wait_object);
         if (status != A_STATUS_OK) {
             aOSWaitObjectDestroy(&handle->tx_wait_object);
@@ -114,6 +118,8 @@ void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
     config->rx_buffer_size = 0U;
     config->tx_buffer = NULL;
     config->tx_buffer_size = 0U;
+    config->rx_byte_callback = NULL;
+    config->rx_byte_context = NULL;
     config->rs485.mode = ADEV_USART_RS485_NONE;
     config->rs485.de_pin = ADRV_PIN_NONE;
     config->rs485.de_active_level = ADRV_GPIO_HIGH;
@@ -162,7 +168,8 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
          !ADEV_USART_INTERRUPT_ENABLE) ||
         ((tx == ADEV_USART_TX_DMA_BUFFERED) &&
             !ADEV_USART_DMA_BACKEND_ENABLE) ||
-        ((rx == ADEV_USART_RX_INTERRUPT_BUFFERED) &&
+        ((rx == ADEV_USART_RX_INTERRUPT_BUFFERED ||
+          rx == ADEV_USART_RX_INTERRUPT_CALLBACK) &&
          !ADEV_USART_INTERRUPT_ENABLE) ||
         ((rx == ADEV_USART_RX_DMA_BUFFERED) &&
          !ADEV_USART_DMA_BACKEND_ENABLE) ||
@@ -174,6 +181,8 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
     if (aOSValidateIsrPriority(config->interrupt_priority) != A_STATUS_OK) {
         return A_STATUS_INVALID_PARAM;
     }
+    if ((rx == ADEV_USART_RX_INTERRUPT_CALLBACK) !=
+        (config->rx_byte_callback != NULL)) return A_STATUS_INVALID_PARAM;
 
     if ((config->rs485.mode != ADEV_USART_RS485_NONE) &&
         ((config->rs485.de_pin == config->drv_config.tx_pin) ||

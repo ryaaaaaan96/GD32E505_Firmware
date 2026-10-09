@@ -1,0 +1,10 @@
+.idea
+.cache
+compile_commands.json
+cmake-build*
+build*
+/tests/cmake-build*
+/tests/build*
+/examples/cmake-build*
+/examples/build*
+doxygen

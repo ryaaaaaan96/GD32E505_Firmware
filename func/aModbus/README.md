@@ -227,7 +227,8 @@ TCP 半帧、传输或协议错误后锁定为故障状态，后续调用返回 
 AMODBUS_ENABLE、AMODBUS_STATIC_ENABLE、AMODBUS_DYNAMIC_ENABLE、
 AMODBUS_CLIENT_ENABLE、AMODBUS_SERVER_ENABLE。
 至少开启一种角色和一种分配接口；启用协议必须显式开启 ABUS_ENABLE。
-当前只启用库编译，未选择真实 Modbus 串口或自动创建通信任务。
+当前产品通过 APP_MODBUS_DEMO_ENABLE 接入 USART2 / RS485 及通信任务；
+模块本身不创建任务，板级配置和限制见 [应用演示](../../app/modbus/README.md)。
 
 ```sh
 SANITIZE=1 python3 tests/modbus/run.py
@@ -238,4 +239,4 @@ cmake -P tests/config/test_resolver.cmake
 主机测试使用真实 nanoMODBUS 与 aBus，覆盖 RTU/TCP、主从站、两级回调、
 多设备表、范围拒绝、完整值写入、RAW 补位、跨段位数组、广播、CRC、
 最大帧、畸形帧、超时回绕、重入拒绝及角色/分配/锁粒度裁剪。
-板上 RTU 时序和物理 RS485 收发尚需提供实际端口后验证。
+板级接收端口已接入；RTU 时序和物理 RS485 收发仍需上板验证。

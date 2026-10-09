@@ -263,7 +263,8 @@ FlashDB 使用新增的 FDB_USING_AMEMORY_MODE，底层入口直接调用
 FlashDB 核心作为 OBJECT target 合入 aDataBase，与项目代码使用相同的
 编译参数，含 Wall、Wextra、Wpedantic、Werror。
 
-修改分别保存为 aMemory 和 KV 索引两个补丁。重新下载上述基线版本后，
+当前 FlashDB 是已经完成适配、直接参与版本管理的普通源码，构建不应用补丁。
+aMemory 和 KV 索引的补丁文件保留用于追踪适配差异。仅重新下载上述基线版本后，
 在项目根目录依次执行一次，无需在 FlashDB 目录保留独立 Git 仓库：
 
 ```sh

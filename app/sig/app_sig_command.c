@@ -101,15 +101,15 @@ static void value_print(aDataType_t type, const void *data, size_t size)
             line[used++] = hex[bytes[i] & 15U];
             if (used == sizeof(line) - 1U || i + 1U == size) {
                 line[used] = '\0';
-                ASHELL_PRINT("%s", line);
+                ASHELL_REPLY("%s", line);
                 used = 0U;
             }
         }
-        ASHELL_PRINT("\r\n");
+        ASHELL_REPLY("\r\n");
         return;
     }
     if (size != aDataTypeSize(type)) {
-        ASHELL_PRINT("invalid definition\r\n");
+        ASHELL_REPLY("invalid definition\r\n");
         return;
     }
     switch (type) {
@@ -127,13 +127,13 @@ static void value_print(aDataType_t type, const void *data, size_t size)
         break;
     case ALIB_DATA_S32:
         memcpy(&value.s32, data, size);
-        ASHELL_PRINT("%ld\r\n", (long)value.s32);
+        ASHELL_REPLY("%ld\r\n", (long)value.s32);
         return;
     default:
-        ASHELL_PRINT("unsupported type\r\n");
+        ASHELL_REPLY("unsupported type\r\n");
         return;
     }
-    ASHELL_PRINT("%lu\r\n", number);
+    ASHELL_REPLY("%lu\r\n", number);
 }
 
 static void range_print(aDataType_t type, const aBusRange_t *range)
@@ -142,7 +142,7 @@ static void range_print(aDataType_t type, const aBusRange_t *range)
     unsigned long maximum;
 
     if (range == NULL) {
-        ASHELL_PRINT(" range=none\r\n");
+        ASHELL_REPLY(" range=none\r\n");
         return;
     }
     switch (type) {
@@ -159,25 +159,25 @@ static void range_print(aDataType_t type, const aBusRange_t *range)
         maximum = range->max.u32;
         break;
     case ALIB_DATA_S32:
-        ASHELL_PRINT(" range=[%ld,%ld]\r\n", (long)range->min.s32,
+        ASHELL_REPLY(" range=[%ld,%ld]\r\n", (long)range->min.s32,
                      (long)range->max.s32);
         return;
     default:
-        ASHELL_PRINT(" range=invalid\r\n");
+        ASHELL_REPLY(" range=invalid\r\n");
         return;
     }
-    ASHELL_PRINT(" range=[%lu,%lu]\r\n", minimum, maximum);
+    ASHELL_REPLY(" range=[%lu,%lu]\r\n", minimum, maximum);
 }
 
 static void sig_info_print(const aBusSigQuery_t *query,
                            const aBusSigInfo_t *info)
 {
-    ASHELL_PRINT("sig[%u:%lu] key=%u type=%s size=%lu flags=0x%04X (",
+    ASHELL_REPLY("sig[%u:%lu] key=%u type=%s size=%lu flags=0x%04X (",
                  (unsigned)query->deviceID, (unsigned long)query->sigIndex,
                  (unsigned)info->sigKey, aDataTypeName(info->type),
                  (unsigned long)info->size, (unsigned)info->flags);
     if (info->flags == 0U) {
-        ASHELL_PRINT("%s", aBusSigFlagName(0U));
+        ASHELL_REPLY("%s", aBusSigFlagName(0U));
     } else {
         aBool_t first = A_TRUE;
 
@@ -185,17 +185,17 @@ static void sig_info_print(const aBusSigQuery_t *query,
             uint16_t flag = (uint16_t)(1U << bit);
 
             if ((info->flags & flag) == 0U) continue;
-            ASHELL_PRINT("%s%s", first ? "" : "|", aBusSigFlagName(flag));
+            ASHELL_REPLY("%s%s", first ? "" : "|", aBusSigFlagName(flag));
             first = A_FALSE;
         }
     }
-    ASHELL_PRINT(") params=%lu", (unsigned long)info->param_count);
+    ASHELL_REPLY(") params=%lu", (unsigned long)info->param_count);
     range_print(info->type, info->range);
 }
 
 static void param_info_print(size_t index, const aBusParam_t *param)
 {
-    ASHELL_PRINT("  param[%lu] type=%s offset=%lu size=%lu",
+    ASHELL_REPLY("  param[%lu] type=%s offset=%lu size=%lu",
                  (unsigned long)index, aDataTypeName(param->type),
                  (unsigned long)param->offset, (unsigned long)param->size);
     range_print(param->type, param->range);
@@ -324,14 +324,14 @@ next_sig:
     if (status != A_STATUS_OK) goto done;
     if (!writing) sig_info_print(&query, &info);
     if (type == ALIB_DATA_STRUCT) {
-        ASHELL_PRINT("sig[%u:%lu] (%lu params)\r\n", query.deviceID,
+        ASHELL_REPLY("sig[%u:%lu] (%lu params)\r\n", query.deviceID,
                      (unsigned long)query.sigIndex,
                      (unsigned long)info.param_count);
         for (size_t i = 0; i < info.param_count; i++) {
             const aBusParam_t *item = &info.params[i];
 
             param_info_print(i, item);
-            ASHELL_PRINT("  param[%lu]=", (unsigned long)i);
+            ASHELL_REPLY("  param[%lu]=", (unsigned long)i);
             value_print(item->type,
                         (const unsigned char *)data + item->offset,
                         item->size);
@@ -340,16 +340,16 @@ next_sig:
         if (!writing && field) {
             param_info_print((size_t)param, &info.params[param]);
         }
-        ASHELL_PRINT("sig[%u:%lu]", query.deviceID,
+        ASHELL_REPLY("sig[%u:%lu]", query.deviceID,
                      (unsigned long)query.sigIndex);
-        if (field) ASHELL_PRINT(".param[%lu]", (unsigned long)param);
-        ASHELL_PRINT("=");
+        if (field) ASHELL_REPLY(".param[%lu]", (unsigned long)param);
+        ASHELL_REPLY("=");
         value_print(type, data, size);
     }
 done:
     aOSFree(data);
     if (status != A_STATUS_OK) {
-        ASHELL_PRINT("sig failed: %d\r\n", (int)status);
+        ASHELL_REPLY("sig failed: %d\r\n", (int)status);
         return -1;
     }
     if (all) {
@@ -358,7 +358,7 @@ done:
     }
     return 0;
 usage:
-    ASHELL_PRINT("sig get <deviceID> [sigIndex [paramIndex]]\r\n"
+    ASHELL_REPLY("sig get <deviceID> [sigIndex [paramIndex]]\r\n"
                  "sig set <deviceID> <sigIndex> [paramIndex] <value>\r\n"
                  "RAW: exact-length hex; STRUCT: set a param\r\n");
     return -1;

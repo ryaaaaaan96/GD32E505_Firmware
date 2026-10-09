@@ -117,6 +117,24 @@ aStatus_t aDrvSpiInitStatic(const aDrvSpiConfig_t *config,
         return A_STATUS_INVALID_PARAM;
     }
 
+    /* 当前后端只实现主机软件片选；未实现模式在访问硬件前拒绝。 */
+    if (config->mode != ADRV_SPI_MODE_MASTER ||
+        config->csMode != ADRV_SPI_CS_SOFT) return A_STATUS_UNSUPPORTED;
+    {
+        aDrvPrivateGpio_t pin;
+        const aDrvGpioPin_t pins[] = {
+            config->sckPin, config->mosiPin, config->misoPin, config->csPin
+        };
+        for (size_t i = 0U; i < ADRV_ARRAY_COUNT(pins); i++) {
+            if (i == 3U && pins[i] == ADRV_PIN_NONE) continue;
+            if (aDrvResolvePin(pins[i], &pin) != A_STATUS_OK)
+                return A_STATUS_INVALID_PARAM;
+            for (size_t j = 0U; j < i; j++) {
+                if (pins[i] == pins[j]) return A_STATUS_INVALID_PARAM;
+            }
+        }
+    }
+
     if ((configure_pin(config->sckPin, GPIO_MODE_AF_PP) != A_STATUS_OK) ||
         (configure_pin(config->mosiPin, GPIO_MODE_AF_PP) != A_STATUS_OK) ||
         (configure_pin(config->misoPin, GPIO_MODE_IN_FLOATING) !=
