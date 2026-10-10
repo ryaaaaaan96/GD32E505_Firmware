@@ -11,13 +11,23 @@
 #include "aBus_instance.h"
 #endif
 
-/* 清单在头文件生成标识，在此生成只读描述；字段数量由数组推导。
- * 文件作用域的 const 复合字面量用于默认值和规则，生命周期覆盖实例。
+/* 先生成命名字段组，再展开 SIG；两者与头文件中的索引来自同一清单。
+ * 默认值、规则和字段数组均有静态存储期，生命周期覆盖实例。
  */
-#define ABUS_PARAMS(...) \
-    .params = (const aBusParam_t[]){__VA_ARGS__}, \
-    .param_count = sizeof((const aBusParam_t[]){__VA_ARGS__}) / \
-                   sizeof(aBusParam_t)
+#define ABUS_SIG(name, key_value, ...)
+#define ABUS_PARAM(name, ...) [name] = {__VA_ARGS__},
+#define ABUS_PARAMS(group, ...) \
+    static const aBusParam_t group##_params[] = {__VA_ARGS__};
+#include "sig/IDU_sig.inc"
+#include "sig/FAN_sig.inc"
+#undef ABUS_PARAMS
+#undef ABUS_PARAM
+#undef ABUS_SIG
+
+#define ABUS_PARAMS(group, ...)
+#define ABUS_PARAM_REF(group) \
+    .params = group##_params, \
+    .param_count = sizeof(group##_params) / sizeof(group##_params[0])
 #define ABUS_SIG(name, key_value, ...) \
     {.sigKey = (key_value), __VA_ARGS__},
 
@@ -28,6 +38,7 @@ static const aBusSig_t FAN_sigs[] = {
 #include "sig/FAN_sig.inc"
 };
 #undef ABUS_SIG
+#undef ABUS_PARAM_REF
 #undef ABUS_PARAMS
 
 /* 直接借用 Flash 中的连续表描述，不在初始化时复制到 RAM。 */

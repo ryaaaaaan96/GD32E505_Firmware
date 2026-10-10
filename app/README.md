@@ -10,7 +10,8 @@
 | --- | --- |
 | 业务测点清单 | `sig/IDU_sig.inc`、`sig/FAN_sig.inc` |
 | 系统服务配置与生命周期 | `database_service.c`、`log_service.c`、`data_bus_service.c` |
-| 协议角色及数据映射 | `FAN_modbus_master.c`、`IDU_modbus_slave.c` |
+| 协议映射及采集清单 | `mapping/FAN_modbus_master.inc`、`mapping/IDU_modbus_slave.inc` |
+| 协议角色和服务参数 | `FAN_modbus_master.c`、`IDU_modbus_slave.c` |
 | 任务创建与运行循环 | `protocol.c`、`sig_task.c` |
 | 板级资源配置与注册 | `rs485_device.c`、`memory_config.c`、`log_config.c` |
 | 设备实例与访问入口 | `system_device.c`、`flash_device.c` |
@@ -48,6 +49,7 @@ app/
 │   ├── inc/           # protocol.h 与产品数据头文件
 │   ├── config/        # 后续 JSON 配置输入
 │   ├── sig/           # IDU_sig.inc、FAN_sig.inc 测点清单
+│   ├── mapping/       # 从站映射组/地址段与主站采集清单
 │   ├── protocol.c         # 唯一入口、协议实例与通信任务
 │   ├── FAN_modbus_master.c
 │   └── IDU_modbus_slave.c
@@ -72,7 +74,8 @@ app/
 - devices/rs485/：提供板载串口配置与端口生命周期、Stream 和时序适配。
 - protocol/sig/IDU_sig.inc、FAN_sig.inc：测点标识、类型、默认值和规则；新增测点由清单同步生成枚举及数组。
 - task/system/data_bus_*：应用私有 aBus 实例、通用读写和 Shell 命令。
-- protocol/FAN_modbus_master.c、IDU_modbus_slave.c：主从配置与 aBus 寄存器映射，默认从站 1；
+- protocol/mapping/：定义从站映射组、地址段与主站采集项，引用生成的 SIG/字段标识。
+- protocol/FAN_modbus_master.c、IDU_modbus_slave.c：展开清单、配置主从服务参数，默认从站 1；
   RTU 分帧由 func/aModbus 提供，串口与时基在 devices/rs485/rs485_device.c；
   protocol.c 生成并挂载只读点表，持有 FAN Motor 副本、协议与 RTU 并创建任务。
 - task/system/flash_test.c：手动擦写测试，默认不加入 CMake 源码列表。
@@ -190,5 +193,6 @@ SIG 和 Param 都通过可选 range 指针指定上下限，NULL 表示不限制
 字段操作由 aBus 在原 SIG 锁内完成；任务直接修改绑定变量的同步仍由应用负责。
 
 Shell 的原 sigIndex 参数已改为 sigKey，旧命令需调整。SIG 顺序变化不影响键的定位；
-STRUCT 的 paramIndex 仍随字段描述顺序变化。点表挂载与设备关系见
+STRUCT 的 paramIndex 仍随字段描述顺序变化；C 代码使用生成的字段名称，
+如 FAN_MOTOR_SPEED，避免直接填写数字下标。点表挂载与设备关系见
 [产品协议](protocol/README.md)。

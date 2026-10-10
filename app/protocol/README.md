@@ -10,13 +10,16 @@ app/protocol/
 ├── sig/                  # 参与编译的 X-Macro 测点清单
 │   ├── IDU_sig.inc        # IDU 测点清单：名称、固定 Key、描述
 │   └── FAN_sig.inc        # FAN 测点清单及字段、范围、默认值
+├── mapping/              # 协议映射与采集声明清单
+│   ├── IDU_modbus_slave.inc
+│   └── FAN_modbus_master.inc
 ├── inc/
 │   ├── protocol.h         # 统一初始化入口
 │   ├── IDU_sig_table.h    # IDU 设备号和测点标识
 │   └── FAN_sig_table.h    # FAN 设备号、测点标识和共享数据类型
 ├── protocol.c             # 展开并挂载点表、FAN 副本、协议实例与任务
-├── IDU_modbus_slave.c     # 通信类：IDU 对上提供的寄存器映射
-└── FAN_modbus_master.c    # 通信类：IDU 访问 FAN 的采集配置
+├── IDU_modbus_slave.c     # 展开从站清单，配置服务参数
+└── FAN_modbus_master.c    # 展开主站清单，配置服务参数
 ```
 
 点表清单使用 `<设备>_sig.inc`，配套数据头使用 `<设备>_sig_table.h`，
@@ -25,9 +28,9 @@ app/protocol/
 master/slave 表示 IDU 在链路中的角色，不代表 FAN 自身作为主站。
 物理 USART、引脚、缓冲区和 DE 配置仍在 devices。
 
-[sig](sig/README.md) 存放参与编译的 X-Macro 测点清单。
-[config](config/README.md) 留给后续 JSON 配置输入；未来由工具生成 sig/ 下的
-清单和通信配置，当前尚未接入生成工具。
+[sig](sig/README.md) 存放数据定义，[mapping](mapping/README.md) 存放协议映射
+和采集定义，两者采用 X-Macro 清单。[config](config/README.md) 留给后续 JSON
+输入；未来由工具生成这些清单，当前尚未接入生成工具。
 
 ## 文件职责
 
@@ -35,8 +38,10 @@ master/slave 表示 IDU 在链路中的角色，不代表 FAN 自身作为主站
 | --- | --- | --- |
 | `sig/IDU_sig.inc` | IDU 测点名称、Key、描述 | 生成标识和 SIG 定义 |
 | `sig/FAN_sig.inc` | FAN 测点及字段、默认值、范围 | 生成标识和 SIG 定义 |
-| `IDU_modbus_slave.c` | IDU 从站地址映射和任务参数 | 提供只读配置 |
-| `FAN_modbus_master.c` | FAN 站号、采集项和任务参数 | 提供只读配置 |
+| `mapping/IDU_modbus_slave.inc` | 映射组、区域、地址段和权限 | 生成从站映射与地址段数组 |
+| `mapping/FAN_modbus_master.inc` | 远端站号、地址、采集目标和超时 | 生成采集数组 |
+| `IDU_modbus_slave.c` | 清单展开、从站服务及任务参数 | 提供只读配置 |
+| `FAN_modbus_master.c` | 清单展开、主站服务及任务参数 | 提供只读配置 |
 | `protocol.c` | 私有只读点表、FAN 数据副本、协议与 RTU 实例 | 初始化、任务循环及失败回收 |
 | `../devices/rs485/rs485_device.c` | USART 句柄和 TX 缓冲 | 硬件收发、ISR 回调和时基 |
 | `../task/system/data_bus_service.c` | 私有 aBus handle | 通用数据访问及内部协议装配 |
@@ -80,18 +85,24 @@ ABUS_SIG(COUNTER, 42U,
 )
 ```
 
-头文件将同一清单展开两次，生成连续的 `IDU_SIG_COUNTER` 等索引、
+头文件展开同一清单，生成连续的 `IDU_SIG_COUNTER` 等索引、
 `IDU_SIG_COUNT` 和固定的 `IDU_SIG_COUNTER_KEY`。protocol.c 再展开清单，
 生成按相同顺序排列的 aBusSig_t 数组。新增已有设备的测点无需修改枚举或数量。
 索引随顺序变化，固定 Key 不随顺序变化；持久化及 Shell 继续使用 Key。
 
-STRUCT 使用 `ABUS_PARAMS(...)` 描述一个或多个字段，由宏推导 param_count。
-默认值、范围、字段数组使用文件作用域的 const 复合字面量，具有静态存储期，
-在当前固件中放入 Flash。没有字段时省略 ABUS_PARAMS，没有范围或默认值时
-省略对应指定初始化项；默认值为空时仍由 aBus 初始化为零。
+STRUCT 先用 `ABUS_PARAMS(组名, ...)` 声明命名字段组，各字段使用
+`ABUS_PARAM(字段名, 描述...)`。头文件生成字段枚举和组的 PARAM_COUNT，
+protocol.c 生成字段数组；SIG 中使用 `ABUS_PARAM_REF(组名)` 引用并推导数量。
+例如 FAN_MOTOR_SPEED 和 FAN_MOTOR_TEMPERATURE 直接用于协议目标，
+无需手工维护数字 paramIndex，字段顺序变化时枚举和描述同步变化。
+
+字段数组、默认值和范围均具有静态存储期，在当前固件中放入 Flash。
+没有字段时省略字段组及引用，没有范围或默认值时省略对应指定初始化项；
+默认值为空时仍由 aBus 初始化为零。字段声明示例见 [测点清单](sig/README.md)。
 
 清单不设置头文件保护，也不单独参与 CMake 编译；它是多次包含的数据清单。
-ABUS_SIG、ABUS_PARAMS 仅在展开期间定义，随后 undef，不作为运行时 API。
+ABUS_SIG、ABUS_PARAMS、ABUS_PARAM、ABUS_PARAM_REF 仅在展开期间定义，
+随后 undef，不作为运行时 API。
 应用公共头生成枚举时丢弃描述参数，不引入 aBus、aOS 或 aModbus 头文件。
 各编译单元必须使用一致的条件配置；清单中的描述不应再次指定 sigKey。
 名称和同表 Key 须唯一，当前没有新增重复 Key 的构建期校验工具。
@@ -103,6 +114,17 @@ FAN 副本在 protocol.c 中绑定。新增测点可使用已有动态分配补�
 
 新增设备时需要提供清单和数据头，并在 protocol.c 中增加该设备的数组展开、
 表描述及静态状态容量。aBus 核心始终接收普通 aBusTable_t，不依赖产品清单。
+
+## 协议清单与装配
+
+从站清单分别声明映射组和地址段，段通过 AMODBUS_MAP_REF 引用组，数量自动推导。
+主站清单逐项声明 AMODBUS_POLL，采集数量和顺序来自数组。
+映射仍有序保存在 Flash，沿用 aModbus 的二分查找和初始化校验。
+清单不自动生成协议地址，不重复存储 aBus 中的数据类型、长度和范围。
+
+新增既有设备的映射、段或采集项只修改 mapping/ 下的清单；任务参数、
+主从角色、字节超时和生命周期留在所属 `.c` 中。声明格式、多段及空洞的要求见
+[协议映射与采集清单](mapping/README.md)。
 
 ## 配置对象的 extern 约定
 

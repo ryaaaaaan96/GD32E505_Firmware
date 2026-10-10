@@ -7,6 +7,7 @@ enum {
 };
 
 /* 同一清单生成连续下标和固定 Key，新增测点只修改清单。 */
+#define ABUS_PARAMS(group, ...)
 typedef enum {
 #define ABUS_SIG(name, key_value, ...) IDU_SIG_##name,
 #include "../sig/IDU_sig.inc"
@@ -20,5 +21,15 @@ enum {
 #include "../sig/IDU_sig.inc"
 #undef ABUS_SIG
 };
+#undef ABUS_PARAMS
+
+/* 当前清单只有标量；新增 STRUCT 字段组时也由同一规则生成名称。 */
+#define ABUS_SIG(name, key_value, ...)
+#define ABUS_PARAM(name, ...) name,
+#define ABUS_PARAMS(group, ...) enum { __VA_ARGS__ group##_PARAM_COUNT };
+#include "../sig/IDU_sig.inc"
+#undef ABUS_PARAMS
+#undef ABUS_PARAM
+#undef ABUS_SIG
 
 #endif

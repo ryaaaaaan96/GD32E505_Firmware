@@ -75,7 +75,8 @@ subprocess.run([
     "-DAPP_MODBUS_ENABLE=1", "-DABUS_ENABLE=1", "-x", "c", "-",
 ], input=('#include "protocol.h"\n#include "IDU_sig_table.h"\n'
           '#include "FAN_sig_table.h"\n'
-          '#if defined(ABUS_SIG) || defined(ABUS_PARAMS)\n'
+          '#if defined(ABUS_SIG) || defined(ABUS_PARAMS) || '
+          'defined(ABUS_PARAM) || defined(ABUS_PARAM_REF)\n'
           '#error "SIG expansion macros leaked into application headers"\n'
           '#endif\n'),
     text=True, cwd=root, check=True)

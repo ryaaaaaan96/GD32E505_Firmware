@@ -11,6 +11,7 @@ enum {
 };
 
 /* 同一清单生成连续下标和固定 Key，描述中的类型在此阶段不展开。 */
+#define ABUS_PARAMS(group, ...)
 typedef enum {
 #define ABUS_SIG(name, key_value, ...) FAN_SIG_##name,
 #include "../sig/FAN_sig.inc"
@@ -24,6 +25,16 @@ enum {
 #include "../sig/FAN_sig.inc"
 #undef ABUS_SIG
 };
+#undef ABUS_PARAMS
+
+/* 字段名称与描述同源，调整清单顺序后协议引用会同步更新。 */
+#define ABUS_SIG(name, key_value, ...)
+#define ABUS_PARAM(name, ...) name,
+#define ABUS_PARAMS(group, ...) enum { __VA_ARGS__ group##_PARAM_COUNT };
+#include "../sig/FAN_sig.inc"
+#undef ABUS_PARAMS
+#undef ABUS_PARAM
+#undef ABUS_SIG
 
 typedef struct {
     uint32_t speed;

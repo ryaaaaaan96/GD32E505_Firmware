@@ -2,6 +2,8 @@
 """验证板级 Demo 的主从模式、静动态实例及真实 Modbus/aBus 链路。"""
 from pathlib import Path
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 
@@ -65,15 +67,49 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
             for mode in ("startup", "clock", "task"):
                 subprocess.run([executable, mode], check=True, timeout=20)
             print(f"master={master}, dynamic={dynamic}: passed")
-    # 两项采集共用同一目标，校验失败推进、BUSY 重入及轮转顺序。
-    executable = str(Path(tmp) / "poll-list")
-    poll_sources = [source for source in sources
-                    if not source.endswith("FAN_modbus_master.c")]
-    subprocess.run(flags + [
-        "-DAPP_MODBUS_MASTER_ENABLE=1", "-DABUS_DYNAMIC_ENABLE=1",
+    # 仅修改清单：字段调序、多地址段/区域、地址空洞和两个采集项。
+    fixture = Path(tmp) / "fixture"
+    protocol = fixture / "app/protocol"
+    shutil.copytree(root / "app/protocol", protocol)
+    test_source = fixture / "tests/modbus_demo/test_demo.c"
+    test_source.parent.mkdir(parents=True)
+    shutil.copy(root / "tests/modbus_demo/test_demo.c", test_source)
+    params = protocol / "sig/FAN_sig.inc"
+    changed, count = re.subn(
+        r"(    ABUS_PARAM\(FAN_MOTOR_SPEED,[\s\S]*?\n    \))\n"
+        r"(    ABUS_PARAM\(FAN_MOTOR_TEMPERATURE,[\s\S]*?\n    \))",
+        r"\2\n\1", params.read_text())
+    assert count == 1
+    params.write_text(changed)
+    polls = protocol / "mapping/FAN_modbus_master.inc"
+    original_polls = polls.read_text()
+    polls.write_text(original_polls + original_polls.replace(
+        "AMODBUS_POLL(SPEED,", "AMODBUS_POLL(SPEED_RETRY,").replace(
+        "500U", "501U"))
+    ranges = protocol / "mapping/IDU_modbus_slave.inc"
+    ranges.write_text(ranges.read_text() +
+                      (root / "tests/modbus_demo/extra_ranges.inc").read_text())
+    fixture_sources = [str(fixture / source) if source in (
+        "tests/modbus_demo/test_demo.c", "app/protocol/FAN_modbus_master.c",
+        "app/protocol/IDU_modbus_slave.c") else source for source in sources]
+    fixture_flags = flags[:1] + ["-I" + str(protocol / "inc")] + flags[1:] + [
+        "-DTEST_EXTENDED_LISTS=1", "-DABUS_DYNAMIC_ENABLE=1",
         "-DAMODBUS_STATIC_ENABLE=0", "-DAMODBUS_DYNAMIC_ENABLE=1",
         "-DADEV_USART_STATIC_ENABLE=0", "-DADEV_USART_DYNAMIC_ENABLE=1",
-    ] + poll_sources + ["tests/modbus_demo/test_poll_config.c",
-                        "-o", executable], cwd=root, check=True)
-    subprocess.run([executable], check=True, timeout=20)
-    print("multiple polls: progress/error/reentry passed")
+    ]
+    for master in (0, 1):
+        executable = str(Path(tmp) / f"extended-{master}")
+        subprocess.run(fixture_flags + [f"-DAPP_MODBUS_MASTER_ENABLE={master}"]
+                       + fixture_sources + ["-o", executable],
+                       cwd=root, check=True)
+        subprocess.run([executable], check=True, timeout=20)
+    print("extended lists: fields/ranges/holes/permissions/polls passed")
+    # 生成方式不绕过运行期校验，重叠地址段仍在打开串口前被拒绝。
+    ranges.write_text(ranges.read_text().replace(".address = 16U",
+                                               ".address = 1U"))
+    executable = str(Path(tmp) / "overlap")
+    subprocess.run(fixture_flags + ["-DAPP_MODBUS_MASTER_ENABLE=0"]
+                   + fixture_sources + ["-o", executable],
+                   cwd=root, check=True)
+    subprocess.run([executable, "mapping"], check=True, timeout=20)
+    print("overlapping generated ranges rejected")

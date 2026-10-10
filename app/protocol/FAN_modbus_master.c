@@ -7,15 +7,12 @@
 #error "Modbus master demo requires AMODBUS_CLIENT_ENABLE"
 #endif
 
-/* 采集目标属于产品配置；协议库负责远端读取、解码及发布到 aBus。 */
-static const aModbusClientSigRequest_t polls[] = {{
-    .unit_id = APP_MODBUS_MASTER_TARGET_ID,
-    .area = AMODBUS_AREA_HOLDING_REGISTERS,
-    .address = 2U,
-    .target = {FAN_SIG_DEVICE_ID, FAN_SIG_MOTOR, 0U},
-    .word_order = AMODBUS_WORD_HIGH_FIRST,
-    .timeout = {.milliseconds = 500U, .type = A_TIMEOUT_TYPE_RELATIVE},
-}};
+/* 只展开采集配置，协议库负责远端读取、解码及发布到 aBus。 */
+#define AMODBUS_POLL(name, ...) {__VA_ARGS__},
+static const aModbusClientSigRequest_t polls[] = {
+#include "mapping/FAN_modbus_master.inc"
+};
+#undef AMODBUS_POLL
 
 /* 每处理一个采集项后等待 1 s；通信时间另计。 */
 const aModbusServiceConfig_t FAN_modbus_master_config = {

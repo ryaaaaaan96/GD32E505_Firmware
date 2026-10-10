@@ -41,13 +41,15 @@ static void definitions_check(void)
     assert(motor->size == sizeof(FANMotor_t));
     assert(defaults != NULL && defaults->speed == 100U);
     assert(defaults->temperature == 25);
-    assert(motor->param_count == 2U);
-    assert(motor->params[0].offset == offsetof(FANMotor_t, speed));
-    assert(motor->params[0].range->min.u32 == 0U);
-    assert(motor->params[0].range->max.u32 == 6000U);
-    assert(motor->params[1].offset == offsetof(FANMotor_t, temperature));
-    assert(motor->params[1].type == ALIB_DATA_S32);
-    assert(motor->params[1].range == NULL);
+    assert(motor->param_count == FAN_MOTOR_PARAM_COUNT);
+    assert(motor->params[FAN_MOTOR_SPEED].offset ==
+           offsetof(FANMotor_t, speed));
+    assert(motor->params[FAN_MOTOR_SPEED].range->min.u32 == 0U);
+    assert(motor->params[FAN_MOTOR_SPEED].range->max.u32 == 6000U);
+    assert(motor->params[FAN_MOTOR_TEMPERATURE].offset ==
+           offsetof(FANMotor_t, temperature));
+    assert(motor->params[FAN_MOTOR_TEMPERATURE].type == ALIB_DATA_S32);
+    assert(motor->params[FAN_MOTOR_TEMPERATURE].range == NULL);
 #ifdef TEST_ADDED_SIG
     {
         const aBusSig_t *spare = &borrowed_tables[0].sigs[IDU_SIG_SPARE];

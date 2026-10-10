@@ -144,6 +144,8 @@ aModbus 在模块内部提供地址段、SIG 映射及编码转换，不设置�
 默认 RTU 从站 1，可通过应用宏切换为主站。应用协议配置位于
 app/protocol 根目录，测点清单位于 sig/IDU_sig.inc 和 sig/FAN_sig.inc，
 由 X-Macro 生成索引、固定 Key 常量和只读描述，点表无需跨文件 extern。
+STRUCT 字段同样生成名称和描述；mapping/ 下的独立清单生成从站映射组、
+地址段与主站采集数组，目标引用这些名称，协议地址不随字段顺序改变。
 端口配置和初始化位于 app/devices/rs485。system 只调用 protocolInit，
 由 protocol.c 统一挂载
 IDU/FAN 两张表、初始化协议并创建任务；主从文件仅提供只读业务配置。

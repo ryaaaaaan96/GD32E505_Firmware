@@ -17,6 +17,12 @@
 #include <string.h>
 #include <setjmp.h>
 
+#ifdef TEST_EXTENDED_LISTS
+/* 仅调换字段清单，业务结构体、协议地址和功能测试都保持不变。 */
+_Static_assert(FAN_MOTOR_SPEED == 1 && FAN_MOTOR_TEMPERATURE == 0,
+               "Field indices must follow reordered definitions");
+#endif
+
 void testAdvanceTime(uint32_t ms);
 unsigned testAllocations(void);
 void testFailAllocation(aBool_t fail);
@@ -322,6 +328,38 @@ static void recover(void)
     assert(output_size == 0U);
 }
 
+#ifdef TEST_EXTENDED_LISTS
+static void extra_range_tests(void)
+{
+    /* 第二段映射正常读取，映射间空洞和段间空洞都不能访问。 */
+    feed((uint8_t[]){1, 3, 0, 16, 0, 2}, 6U);
+    assert(testModbusProcess() == A_STATUS_OK);
+    assert(output_size == 9U);
+    assert(memcmp(output + 3U,
+                  (uint8_t[]){0x12, 0x34, 0x56, 0x78}, 4U) == 0);
+    feed((uint8_t[]){1, 3, 0, 20, 0, 2}, 6U);
+    assert(testModbusProcess() == A_STATUS_OK);
+    assert(output_size == 9U && output[6] == 100U);
+    feed((uint8_t[]){1, 3, 0, 18, 0, 1}, 6U);
+    assert(testModbusProcess() == A_STATUS_OK);
+    assert(output_size == 5U && output[2] == 2U);
+    feed((uint8_t[]){1, 3, 0, 8, 0, 1}, 6U);
+    assert(testModbusProcess() == A_STATUS_OK);
+    assert(output_size == 5U && output[2] == 2U);
+    /* 完整写入也必须遵守只读映射权限。 */
+    feed((uint8_t[]){1, 16, 0, 16, 0, 2, 4, 0, 0, 0, 1}, 11U);
+    assert(testModbusProcess() == A_STATUS_OK);
+    assert(output_size == 5U && output[2] == 2U);
+    assert(counter == 0x12345678U);
+    /* 输入寄存器与保持寄存器可使用相同地址。 */
+    feed((uint8_t[]){1, 4, 0, 0, 0, 2}, 6U);
+    assert(testModbusProcess() == A_STATUS_OK);
+    assert(output_size == 9U && output[1] == 4U);
+    assert(memcmp(output + 3U,
+                  (uint8_t[]){0x12, 0x34, 0x56, 0x78}, 4U) == 0);
+}
+#endif
+
 static void server_tests(void)
 {
     const uint8_t read[] = {1, 3, 0, 0, 0, 6};
@@ -332,6 +370,9 @@ static void server_tests(void)
     assert(memcmp(output, (uint8_t[]){1, 3, 12, 0x12, 0x34,
            0x56, 0x78, 0, 0, 0, 100, 0, 0, 0, 25}, 15U) == 0);
     assert(waits == 2U); /* 发送前检查和发送后 TC 确认。 */
+#ifdef TEST_EXTENDED_LISTS
+    extra_range_tests();
+#endif
     write_speed(1U, 4321U);
     assert(testModbusProcess() == A_STATUS_OK && output_size == 8U);
     assert(motor_get().speed == 4321U);
@@ -522,6 +563,8 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[1], "task") == 0) {
             fail_task = A_TRUE;
             expected = A_STATUS_NO_MEMORY;
+        } else if (strcmp(argv[1], "mapping") == 0) {
+            expected = A_STATUS_INVALID_PARAM;
         } else {
             assert(strcmp(argv[1], "startup") == 0);
             run_immediately = A_TRUE;
