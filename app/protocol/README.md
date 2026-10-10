@@ -220,7 +220,7 @@ protocolInit 在启动阶段单线程依次完成：
 4. 创建 RTU、创建 aModbus 并校验映射，然后打开 USART 接收回调。
 5. 创建通信任务；所有实例已就绪，允许任务立即运行。
 
-system 在成功返回后启动 Shell 消费任务。关闭 aBus 时不装配点表；
+Shell 任务在系统早期已创建；system 在成功返回后才放行该任务处理输入和输出。关闭 aBus 时不装配点表；
 关闭 Modbus 时仍可初始化点表并使用 Shell。重复调用 protocolInit 返回 BUSY，
 不会重写正在使用的表描述或重复创建任务。
 

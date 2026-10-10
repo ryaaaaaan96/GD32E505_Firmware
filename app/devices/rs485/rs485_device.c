@@ -30,6 +30,7 @@ static const aDevUsartConfig_t usart_config = {
 };
 
 /* 仅持有物理串口；协议实例及接收上下文由调用方管理。 */
+/* 发送由协议任务独占，接收在 ISR 交付；打开/关闭须与协议任务串行化。 */
 static aDevUsartHandle_t *usart;
 #if !ADEV_USART_DYNAMIC_ENABLE
 static aDevUsartHandle_t usart_instance;

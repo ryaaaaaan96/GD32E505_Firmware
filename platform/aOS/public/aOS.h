@@ -32,7 +32,7 @@
 #define AOS_TASK_PRIO_REALTIME 7U
 
 /**
- * @brief 任务入口，由后端调用；允许正常返回，后端负责结束当前任务。
+ * @brief 任务入口，不得直接返回；结束时必须显式调用 aOSTaskExit()。
  * @param[in] argument 创建任务时传入的借用参数，可以为 NULL。
  * @note 业务负责退出协议和资源清理，禁止在仍持有共享资源时删除任务。
  */
@@ -44,7 +44,7 @@ typedef void *aOSTaskHandle_t;
 /** @brief 任务创建配置；创建期间读取字段，不保存配置结构体指针。 */
 typedef struct {
     const char *name; /**< 后端在创建时复制名称，可按后端长度上限截断。 */
-    aOSTaskFunction_t function; /**< 必填入口，允许自然返回。 */
+    aOSTaskFunction_t function; /**< 必填入口，不得直接返回。 */
     void *argument; /**< 借用参数，其对象须在任务访问期间有效。 */
     size_t stack_bytes; /**< 字节数，0 使用后端默认容量；后端向上对齐。 */
     uint32_t priority; /**< AOS_TASK_PRIO_LOWEST..REALTIME。 */
@@ -155,6 +155,7 @@ aStatus_t aOSValidateIsrPriority(uint32_t priority);
  * @retval A_STATUS_NO_MEMORY 分配失败。
  * @note 仅启动阶段或任务上下文调用。调度器启动后，新任务可能在本函数返回前运行。
  * 使用 aOSTaskConfigStructInit 或 AOS_TASK_CONFIG_DEFAULT 设置默认值；全零配置无效。
+ * 入口和 argument 直接传给后端，不包装启动参数，也不提供自动退出。
  * 逻辑优先级由后端映射，不保证不同 OS 的调度效果一致。
  */
 aStatus_t aOSCreateTask(const aOSTaskConfig_t *config, aOSTaskHandle_t *handle);

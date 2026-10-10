@@ -516,15 +516,9 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
     }
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
-    status = aOSMutexLock(
-        handle->tx.mutex,
-        aTimepointRemaining(&end, aOSGetUptimeMs()));
-    if (status != A_STATUS_OK) {
-        return fail_with_wait_status(status, timeout);
-    }
+
     if ((handle->tx.state != ADEV_USART_TX_IDLE) ||
         (handle->tx.callback != NULL)) {
-        (void)aOSMutexUnlock(handle->tx.mutex);
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
 
@@ -573,11 +567,11 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
         break;
     }
     handle->tx.state = ADEV_USART_TX_IDLE;
-    (void)aOSMutexUnlock(handle->tx.mutex);
+
     return result;
 }
 
-static aStatus_t wait_transmit_complete_locked(
+static aStatus_t wait_transmit_complete(
     aDevUsartHandle_t *handle, const aTimepoint_t *end,
     aTimeout_t original_timeout)
 {
@@ -651,23 +645,15 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
     }
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
-    status = aOSMutexLock(
-        handle->tx.mutex,
-        aTimepointRemaining(&end, aOSGetUptimeMs()));
-    if (status != A_STATUS_OK) {
-        return status == A_STATUS_BUSY && timeout.milliseconds != 0U
-                   ? A_STATUS_TIMEOUT
-                   : status;
-    }
+
     if (handle->tx.state != ADEV_USART_TX_IDLE) {
-        (void)aOSMutexUnlock(handle->tx.mutex);
         return A_STATUS_BUSY;
     }
 
     handle->tx.state = ADEV_USART_TX_STREAM;
-    status = wait_transmit_complete_locked(handle, &end, timeout);
+    status = wait_transmit_complete(handle, &end, timeout);
     handle->tx.state = ADEV_USART_TX_IDLE;
-    (void)aOSMutexUnlock(handle->tx.mutex);
+
     return status;
 }
 
@@ -698,12 +684,10 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
         return A_STATUS_UNSUPPORTED;
     }
     const aTimepoint_t deadline = aTimepointCalc(timeout, aOSGetUptimeMs());
-    status = aOSMutexLock(handle->tx.mutex, A_TIMEOUT_NO_WAIT);
-    if (status != A_STATUS_OK) return status;
+
     if ((handle->tx.state != ADEV_USART_TX_IDLE) ||
         (handle->tx.callback != NULL) ||
         (handle->tx.count != 0U) || (handle->tx.dma_active != 0U)) {
-        (void)aOSMutexUnlock(handle->tx.mutex);
         return A_STATUS_BUSY;
     }
 
@@ -712,14 +696,12 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
             status = aOSTimerCreate(&handle->tx.deadline_timer,
                                     aDevUsartAsyncTxTimeout, handle);
             if (status != A_STATUS_OK) {
-                (void)aOSMutexUnlock(handle->tx.mutex);
                 return status;
             }
         }
     }
 
     if (aTimepointExpired(&deadline, aOSGetUptimeMs())) {
-        (void)aOSMutexUnlock(handle->tx.mutex);
         return A_STATUS_TIMEOUT;
     }
     status = A_STATUS_OK;
@@ -727,7 +709,6 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
     status = aDevUsartRS485Begin(handle);
 #endif
     if (status != A_STATUS_OK) {
-        (void)aOSMutexUnlock(handle->tx.mutex);
         return status;
     }
     aOSCriticalEnter();
@@ -777,28 +758,25 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
         handle->tx.async_size = 0U;
     }
     aOSCriticalExit();
-    (void)aOSMutexUnlock(handle->tx.mutex);
+
     return status;
 }
 
 aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle)
 {
-    aStatus_t status;
     size_t remaining = 0U;
     size_t transferred = 0U;
 
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (!handle->drv_handle.initialized) return A_STATUS_NOT_READY;
-    status = aOSMutexLock(handle->tx.mutex, A_TIMEOUT_FOREVER);
-    if (status != A_STATUS_OK) return status;
+
     if (handle->tx.state != ADEV_USART_TX_ASYNC) {
-        (void)aOSMutexUnlock(handle->tx.mutex);
         return A_STATUS_NOT_READY;
     }
     aOSCriticalEnter();
     if (handle->tx.state != ADEV_USART_TX_ASYNC) {
         aOSCriticalExit();
-        (void)aOSMutexUnlock(handle->tx.mutex);
+
         return A_STATUS_NOT_READY;
     }
     (void)aOSTimerStop(handle->tx.deadline_timer);
@@ -813,7 +791,7 @@ aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle)
     }
     async_tx_complete(handle, A_STATUS_CANCELLED, transferred);
     aOSCriticalExit();
-    (void)aOSMutexUnlock(handle->tx.mutex);
+
     (void)aDrvUsartPendInterrupt(&handle->drv_handle);
     return A_STATUS_OK;
 }
@@ -821,7 +799,7 @@ aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle)
 #endif
 
 #if ADEV_USART_DIRECT_ENABLE && ADEV_USART_DMA_BACKEND_ENABLE
-/* DMA implementation of synchronous user-buffer TX. */
+/* 直接使用用户缓冲区的同步 DMA 发送实现。 */
 static void direct_tx_interrupts_disable(aDevUsartHandle_t *handle)
 {
     const aDevUsartMode_t tx_mode = handle->settings.mode & ADEV_USART_TX_MASK;
@@ -862,19 +840,13 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
     }
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
-    status = aOSMutexLock(
-        handle->tx.mutex,
-        aTimepointRemaining(&end, aOSGetUptimeMs()));
-    if (status != A_STATUS_OK) {
-        return fail_with_wait_status(status, timeout);
-    }
 
     aDrvUsartDisableInterrupt(&handle->drv_handle);
     if ((handle->tx.state != ADEV_USART_TX_IDLE) ||
         (handle->tx.callback != NULL) ||
         (handle->tx.count != 0U) || (handle->tx.dma_active != 0U)) {
         aDrvUsartEnableInterrupt(&handle->drv_handle);
-        (void)aOSMutexUnlock(handle->tx.mutex);
+
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
     handle->tx.state = ADEV_USART_TX_DIRECT;
@@ -912,7 +884,7 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
             }
             status = direct_wait(handle->tx.wait_object, &end, A_TRUE);
             if (status != A_STATUS_OK) {
-                /* Sample progress before abort clears the hardware counter. */
+                /* 终止操作会清除硬件计数器，须在终止前读取传输进度。 */
                 size_t final_remaining = remaining;
                 if (aDrvUsartAsyncTxGetRemaining(
                         &handle->drv_handle, &final_remaining) == A_STATUS_OK &&
@@ -926,7 +898,7 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
         if (status != A_STATUS_OK) break;
     }
 
-    /* Return only after DMA has stopped accessing the caller's buffer. */
+    /* 确认 DMA 已停止访问调用者缓冲区后才能返回。 */
     (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
     aDrvUsartDisableInterrupt(&handle->drv_handle);
     (void)aDrvUsartSetInterruptEnabled(
@@ -936,13 +908,12 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
 #endif
     handle->tx.state = ADEV_USART_TX_IDLE;
     aDrvUsartEnableInterrupt(&handle->drv_handle);
-    (void)aOSMutexUnlock(handle->tx.mutex);
+
     if (count != 0U) return (aSSize_t)count;
     return status == A_STATUS_TIMEOUT
                ? aOSFailWithTimeout(timeout)
                : aOSFailWithStatus(status);
 }
-
 
 #endif
 
@@ -966,15 +937,13 @@ aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
         return aOSFailWithStatus(A_STATUS_UNSUPPORTED);
 
     const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
-    aStatus_t status = aOSMutexLock(handle->tx.mutex,
-        aTimepointRemaining(&end, aOSGetUptimeMs()));
-    if (status != A_STATUS_OK) return fail_with_wait_status(status, timeout);
+    aStatus_t status = A_STATUS_OK;
 
     aOSCriticalEnter();
     if (handle->tx.state != ADEV_USART_TX_IDLE || handle->tx.callback != NULL ||
         handle->tx.count != 0U || handle->tx.dma_active != 0U) {
         aOSCriticalExit();
-        (void)aOSMutexUnlock(handle->tx.mutex);
+
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
     handle->tx.state = ADEV_USART_TX_DIRECT;
@@ -992,7 +961,7 @@ aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
 #endif
     aOSCriticalExit();
 
-    /* The CPU reads the original caller buffer; no device TX ring copy. */
+    /* CPU 直接读取调用者的原始缓冲区，不复制到设备发送环形缓冲区。 */
     const aSSize_t result = status == A_STATUS_OK
         ? polling_write(handle, data, data_size, &end, timeout)
         : aOSFailWithStatus(status);
@@ -1002,7 +971,7 @@ aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
 #endif
     handle->tx.state = ADEV_USART_TX_IDLE;
     aOSCriticalExit();
-    (void)aOSMutexUnlock(handle->tx.mutex);
+
     return result;
 }
 #endif

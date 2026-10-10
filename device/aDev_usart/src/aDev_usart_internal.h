@@ -57,8 +57,8 @@ static inline aSSize_t fail_with_wait_status(aStatus_t status,
 
 
 #if ADEV_USART_DMA_BACKEND_ENABLE
-/* TC wakes TX and DMA completion/error wakes RX. A bounded sleeping check
- * also detects TX DMA faults on drivers without a DMA-error IRQ callback. */
+/* TC 事件唤醒发送等待，DMA 完成或错误事件唤醒接收等待。
+ * 对未提供 DMA 错误中断回调的驱动，通过有限间隔的休眠检查发现发送故障。 */
 static inline aStatus_t direct_wait(
     aOSWaitObject_t object,
     const aTimepoint_t *end,

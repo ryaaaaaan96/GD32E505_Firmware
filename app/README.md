@@ -97,9 +97,10 @@ func 不创建/删除任务，不配置任务优先级和栈大小。
 协议配置、注册和扩展步骤见 [protocol 说明](protocol/README.md)。
 
 日志由 aSystemInit 在 Shell 初始化完成后单独调用 appLogInit，
-Shell 任务在全部服务就绪后启动，不创建单独日志任务。
+Shell 任务在 shellInit 中创建，等待全部服务就绪后才处理命令及输出，
+不创建单独日志任务。
 Flash 探测、aMemory 分区注册、数据库和 protocolInit 由 aSystemInit 显式编排；
-全部成功后才启动 Shell 任务。appSystemFlashInit 不再启动存储或数据库服务，
+全部成功后才放行 Shell 任务。appSystemFlashInit 不再启动存储或数据库服务，
 appDatabaseInit 负责 aDataBaseInit 及打开应用数据库。启动失败不开放命令输入。
 数据库配置和 `db` 命令用法见 [数据库演示](task/system/database.md)。
 `log test`、`log level verbose` 和 `log info` 的用法见
@@ -110,7 +111,8 @@ SIG 就绪后启动 Modbus 演示，使用 USART2 PC10/PC11、PA15 手动 DE、
 115200 8N1。主从切换与点表关系见 [产品协议](protocol/README.md)，
 后续 JSON 生成输入放在 [protocol/config](protocol/config/README.md)。
 销毁 func 实例前必须停止其调用者并等待在途操作结束，禁止强行删除持有模块锁的任务。
-system 设备公开 appSystemStatusLedInit 与 appSystemConsoleInit，保留按实例初始化，不做统一重初始化。
+system 设备公开 appSystemStatusLedInit 与 appSystemConsoleInit，保留按实例初始化；
+控制台失败清理由 appSystemConsoleDeInit 统一处理，不提供系统运行期重启。
 
 控制台通过 `appSystemConsoleInit(void)` 初始化 USART、绑定 Stream 并初始化 aShell 单例，
 USART 类型、私有控制台句柄指针和适配回调只在 app/devices 内部使用；
@@ -121,6 +123,15 @@ flush 不等待线路完成、不丢弃输入；Shell 不自动调用。
 
 当前控制台使用 aDevUsartCreate 动态分配对象，Shell 初始化失败时调用
 aDevUsartDestroy 回收；产品必须开启 ADEV_USART_DYNAMIC_ENABLE。
+创建 Shell 任务或初始化日志失败时，统一释放控制台串口及 Shell 队列；
+清理失败返回清理错误并保留串口句柄，允许在独占条件下重试清理。
+日志就绪后的服务初始化失败仍进入 appFatal，Shell 门控不放行，
+不尝试回滚可能已有使用者的全部服务，也不支持重试整个系统初始化。
+
+控制台串口只由 Shell 消费任务读写，后台日志通过 Shell 队列入队；
+RS485 只由选定的 Modbus 协议任务调用。两者无额外串口互斥锁。
+若新增直接访问者，应用设备入口须协调同方向 API 及完整 RS485 事务，
+关闭设备前须先停止所有使用者。设备层的 BUSY 检查不能替代应用互斥。
 
 ## SIG 数据与测试任务
 

@@ -39,6 +39,9 @@ set(BOARD_HXTAL_BYPASS ON)
 
 # device / LED
 set(ADEV_LED_ENABLE ON)
+# 状态灯使用静态实例；两种分配接口可独立裁剪。
+set(ADEV_LED_STATIC_ENABLE ON)
+set(ADEV_LED_DYNAMIC_ENABLE OFF)
 
 # device / USART：按功能组配置；TX/RX 模式与 IDLE 由 app 初始化选择。
 set(ADEV_USART_ENABLE ON)
@@ -59,6 +62,9 @@ set(ADEV_FLASH25Q_DYNAMIC_ENABLE ON)
 
 # driver：显式启用依赖的底层能力。
 set(ADRV_MODULE_GPIO_ENABLE ON)
+# 默认拒绝 GPIO 初始化 PA13/PA14，保留 SWD；不配置即保留保护。
+# 如需关闭检查，取消下面的注释；实际 SWJ 复用释放仍由板级代码负责。
+# set(ADRV_GPIO_SWD_PROTECT_DISABLE ON)
 set(ADRV_MODULE_USART_ENABLE ON)
 set(ADRV_USART_INTERRUPT_ENABLE ON)
 # USART 专用 DMA 搬运能力，依赖通用 DMA 驱动；不是业务 Async 开关。

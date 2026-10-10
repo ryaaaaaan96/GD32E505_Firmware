@@ -8,6 +8,13 @@
  * 路径使用 aOS 单调时基和 yield。因此本文件中的 read/write/等待接口只能在
  * 任务或线程上下文调用，不能在 ISR 中调用。
  *
+ * 并发契约：本模块不创建任务互斥锁。调用者须串行化同方向的全部 API，
+ * 包括同步收发、异步提交/取消、发送完成等待及接收状态操作。
+ * 全双工时 TX 与 RX 可分别由一个任务操作；RS485 事务由协议层协调。
+ * Init/DeInit/Destroy 必须独占实例，禁止与其他调用并发；回调不得重入。
+ * ISR/DMA 临界区、忙状态检查和等待对象仍由模块维护；BUSY 不代替外部互斥。
+ * timeout 只覆盖设备调用内的等待，应用加锁耗时须自行扣除后传入剩余预算。
+ *
  * 配置中的缓冲区均由调用者提供，模块不管理这些 DMA/ring 缓冲区的内存。
  * 缓冲区和
  * handle 从静态初始化或动态创建成功开始，到 DeInit/Destroy 完成为止必须持续有效。
@@ -313,7 +320,7 @@ aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle);
  * @return 正数表示实际读取长度，0 表示请求长度为 0，-1 表示未读取到任何数据
  *         且发生错误；返回 -1 时使用 aOSGetErrno() 查询详细原因。
  *
- * @warning 不是 ISR 安全接口；模块内部会用 RX mutex 串行化多读取者。
+ * @warning 不是 ISR 安全接口；调用者必须保证同一实例的接收操作串行化。
  */
 aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
                        size_t buffer_size, aTimeout_t timeout);
@@ -337,8 +344,7 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
  * @return 正数表示实际提交长度，0 表示请求长度为 0，-1 表示未提交任何数据
  *         且发生错误；返回 -1 时使用 aOSGetErrno() 查询详细原因。
  *
- * @warning 不是 ISR 安全接口；模块内部会用 TX mutex 保证一次 Write 的数据
- *          不会与另一个写入者按字节交错。
+ * @warning 不是 ISR 安全接口；调用者须串行化发送操作，避免不同写入者的数据交错。
  */
 aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
                         size_t data_size, aTimeout_t timeout);
@@ -362,7 +368,7 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
  * @param[in,out] handle 已初始化的句柄，调用期间占用 RX 路径。
  * @param[out] buffer 可写用户区域，返回前不得被其他上下文访问；DMA 时须硬件可达，零长度允许 NULL。
  * @param[in] buffer_size 字节数，不得超过 PTRDIFF_MAX。
- * @param[in] timeout 本次调用的总预算，含锁等待与分段接收。
+ * @param[in] timeout 本次调用的总预算，覆盖分段接收。
  * @return 实际接收字节数；无进展失败返回 -1 并设置 aOS errno。
  * @warning 仅任务上下文；DIRECT_ENABLE 为 0 时不提供此声明。
  */
@@ -383,7 +389,7 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
  * @param[in,out] handle 已初始化的句柄，调用期间占用 TX 路径。
  * @param[in] data 可读用户区域，返回前不得修改/释放；DMA 时须硬件可达，零长度允许 NULL。
  * @param[in] data_size 字节数，不得超过 PTRDIFF_MAX。
- * @param[in] timeout 含锁等待的总预算，NO_WAIT 不保证传输全部数据。
+ * @param[in] timeout 设备调用内的总预算，NO_WAIT 不保证传输全部数据。
  * @return 实际搬运字节数；无进展失败返回 -1 并设置 aOS errno；零长度返回 0。
  * @warning 仅任务上下文；DIRECT_ENABLE 为 0 时不提供此声明。
  */
@@ -433,7 +439,7 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
  * 多请求排队由应用实现，本模块不提供 TX Queue。当前仅实现 DMA 异步后端，初始化
  * mode 的 TX 字段必须选择 TX_DMA_BUFFERED 且实例有 DMA 路由。
  * 不依赖同步 Direct API 开关；一次最大 65535 字节。timeout 是从提交入口开始的总预算。
- * 提交不等待 TX 锁，竞争时立即返回 BUSY；初始化耗尽预算返回 TIMEOUT。
+ * 已有在途事务时提交返回 BUSY，任务调用须由上层串行化；初始化耗尽预算返回 TIMEOUT。
  * callback 统一在 USART ISR 中执行，不经过 worker；不得阻塞或重入 USART API。
  *
  * @param[in,out] handle 已初始化句柄。
@@ -454,7 +460,6 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
  * @retval A_STATUS_OK 已受理取消；buffer/argument 保留至终态回调结束，线路可能仍在排空。
  * @retval A_STATUS_NOT_READY 未初始化或没有当前异步 TX。
  * @retval A_STATUS_INVALID_PARAM handle 为空。
- * @return 也可能返回 TX mutex 获取错误。
  * @warning 仅任务上下文；取消挂起 USART IRQ，回调可能早于返回或稍后执行，不得重入 USART API。
  */
 #if ADEV_USART_ASYNC_ENABLE

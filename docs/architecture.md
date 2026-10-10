@@ -176,9 +176,10 @@ SIG 模块通过内部装配接口借用私有 aBus handle，不向业务公开�
 
 启动顺序为 main → aDrvInit → aOSInit → 创建 appInit 任务 → aOSRun。
 调度器启动后，由 main.c 内的 appInitTask 调用 aSystemInit。状态灯任务可先运行；
-控制台及 Shell 先完成状态初始化，启动文字仅入队。随后单独初始化日志、Flash、
+控制台及 Shell 先完成状态初始化并创建 Shell 任务，任务等待就绪门控，
+启动文字仅入队。随后单独初始化日志、Flash、
 aMemory 分区、数据库、SIG 服务及测试任务，再初始化 Modbus 和通信任务，
-最后创建 Shell 任务，开放命令输入。对应功能关闭时跳过该步骤。
+全部成功后放行 Shell 任务，开放命令输入与队列发送。对应功能关闭时跳过该步骤。
 数据库模块初始化由 appDatabaseInit 管理，Flash 初始化只负责设备探测。
 产品数据库配置位于 app/devices/system/database_config.c；KV/TSDB 实例管理
 与调试命令位于 app/task/system/database_service.c、database_command.c。
@@ -187,12 +188,14 @@ aMemory 分区、数据库、SIG 服务及测试任务，再初始化 Modbus 和
 初始化任务通过 aOSTaskExit() 自退出，无需保存全局任务句柄；
 aOSDeleteTask(handle) 仍用于删除指定任务，传入 NULL 保持空操作语义。
 system_init.c 内部的静态函数 statusInit 调用 appSystemStatusLedInit 并创建状态任务；
-同文件内 shellInit 初始化控制台和 Shell，aSystemInit 随后单独调用 appLogInit；
+同文件内 shellInit 初始化控制台、Shell 并创建任务，
+aSystemInit 随后单独调用 appLogInit；
 日志输出适配及配置位于 app/devices/system/log_config.c，初始化入口和
 调试命令位于 app/task/system/log_service.c、log_command.c。
-shellTaskStart 在服务就绪后创建调用 Process 的任务。日志初始化或 Shell 任务
-创建失败时，由 aSystemInit 清理对应的日志、Shell 资源。
-中途失败向 main 返回错误，不启动 Shell，不自动重试；
+Shell 任务通过原子就绪标志等待，服务全部就绪前不调用 Process。
+日志初始化或 Shell 任务创建失败时，通过 appSystemConsoleDeInit 统一释放
+控制台串口与 Shell 队列。清理失败保留串口句柄，返回清理错误。
+中途失败向 main 返回错误，Shell 门控不放行，不自动重试；
 已成功初始化的其他服务保留，仍按启动失败停机策略处理。
 不存在集中初始化全部实例的注册表、链接段或分散加载。
 
@@ -209,7 +212,9 @@ shellTaskStart 在服务就绪后创建调用 Process 的任务。日志初始�
 - 不做运行时跨设备资源冲突检查；构建期资源告警尚未实现，设备参数/能力检查仍保留。
 
 tests/app_devices/run.py 验证独立初始化、错误传递、参数检查和 Shell 裁剪，使用硬件替身，
-不代表上板验证。通用契约见[接口规范](interface_contract.md)，USART 细节见
+并覆盖控制台清理失败后的句柄保留及重试。tests/app_startup/run.py 调用真实
+Shell 任务入口，验证服务初始化间隙及失败后均不处理命令，成功后才放行。
+这些检查不代表上板验证。通用契约见[接口规范](interface_contract.md)，USART 细节见
 [USART 设计](usart_design.md)。
 
 ## 平台复用边界

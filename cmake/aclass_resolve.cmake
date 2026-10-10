@@ -37,7 +37,7 @@ foreach(module AOS_WORKQUEUE ABUS ABUS_STATIC ABUS_DYNAMIC ABUS_DEF_CHECK ASHELL
         ALOG AMEMORY
         ADATABASE ADATABASE_STATIC ADATABASE_DYNAMIC
         AMODBUS AMODBUS_STATIC AMODBUS_DYNAMIC AMODBUS_CLIENT AMODBUS_SERVER
-        ADEV_LED ADEV_USART
+        ADEV_LED ADEV_LED_STATIC ADEV_LED_DYNAMIC ADEV_USART
         ADEV_USART_INTERRUPT ADEV_USART_DIRECT ADEV_USART_ASYNC
         ADEV_USART_RS485 ADEV_USART_STATIC ADEV_USART_DYNAMIC ADEV_FLASH25Q
         ADEV_FLASH25Q_STATIC ADEV_FLASH25Q_DYNAMIC)
@@ -58,6 +58,11 @@ endforeach()
 foreach(feature INTERRUPT DMA)
     _aclass_option(ADRV_USART_${feature}_ENABLE)
 endforeach()
+# SWD 保护默认存在，产品仅在需要绕过检查时显式配置关闭。
+if(NOT DEFINED ADRV_GPIO_SWD_PROTECT_DISABLE)
+    set(ADRV_GPIO_SWD_PROTECT_DISABLE OFF)
+endif()
+_aclass_option(ADRV_GPIO_SWD_PROTECT_DISABLE)
 
 # ── func / aShell ─────────────────────────────────────────────────────
 
@@ -103,6 +108,10 @@ endif()
 
 # ── device / LED ──────────────────────────────────────────────────────
 _aclass_requires(ADEV_LED_ENABLE ADRV_MODULE_GPIO_ENABLE)
+if(ADEV_LED_ENABLE AND NOT ADEV_LED_STATIC_ENABLE AND
+   NOT ADEV_LED_DYNAMIC_ENABLE)
+    message(FATAL_ERROR "LED requires STATIC or DYNAMIC allocation enabled")
+endif()
 
 # ── device / USART ────────────────────────────────────────────────────
 foreach(feature INTERRUPT DIRECT ASYNC RS485 STATIC DYNAMIC)

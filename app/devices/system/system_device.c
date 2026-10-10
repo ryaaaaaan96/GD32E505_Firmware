@@ -5,10 +5,13 @@
 #include "aShell.h"
 #endif
 
-/* 系统状态指示灯实例。 */
+/* --------------------------------------------------------------------------
+ * 系统状态指示灯：PA8，低电平点亮。
+ * -------------------------------------------------------------------------- */
 static const aDevLedConfig_t led_config = {
     .pin = ADRV_PIN(ADRV_GPIO_PORT_A, 8),
     .active_level = ADEV_LED_ACTIVE_LOW,
+    .speed = ADRV_GPIO_SPEED_LOW,
     .initially_on = A_FALSE,
 };
 
@@ -22,7 +25,7 @@ aStatus_t appSystemStatusLedInit(aDevLedHandle_t **handle_out)
         return A_STATUS_INVALID_PARAM;
     }
     *handle_out = NULL;
-    status = aDevLedInit(&led_config, &led_handle);
+    status = aDevLedInitStatic(&led_config, &led_handle);
     if (status != A_STATUS_OK) {
         return status;
     }
@@ -30,7 +33,9 @@ aStatus_t appSystemStatusLedInit(aDevLedHandle_t **handle_out)
     return A_STATUS_OK;
 }
 
-/* 系统控制台串口实例，随 Shell 功能一同裁剪。 */
+/* --------------------------------------------------------------------------
+ * 系统控制台：USART0，随 Shell 功能一同裁剪。
+ * -------------------------------------------------------------------------- */
 #if ASHELL_ENABLE
 
 /* 控制台配置、缓冲区和句柄由本文件私有持有。
@@ -62,6 +67,7 @@ static const aDevUsartConfig_t usart_config = {
     },
 };
 
+/* 串口读写仅由 Shell 处理任务调用；后台输出先入 Shell 队列，无需串口锁。 */
 static aDevUsartHandle_t *console_handle;
 
 /* 应用适配：通用流不暴露 USART 类型；接收故障先报告给 Shell 再恢复。 */
@@ -84,7 +90,10 @@ aStatus_t appSystemConsoleInit(void)
 {
     aShellConfig_t config;
     aStatus_t status;
+    aStatus_t cleanup_status;
 
+    /* 保留仍在使用或尚未清理成功的句柄，避免 Create 覆盖所有权。 */
+    if (console_handle != NULL) return A_STATUS_BUSY;
     aShellConfigStructInit(&config);
     status = aDevUsartCreate(
         &usart_config,
@@ -94,17 +103,32 @@ aStatus_t appSystemConsoleInit(void)
     }
     config.stream.read = console_read;
     config.stream.write = console_write;
-    config.stream.flush = NULL; /* Write already submits output to USART. */
+    config.stream.flush = NULL; /* write 已直接提交数据到串口。 */
     config.read_timeout = A_TIMEOUT_MS(20U);
     config.write_timeout = A_TIMEOUT_MS(20U);
 
     status = aShellInit(&config);
     if (status != A_STATUS_OK) {
-        (void)aDevUsartDestroy(console_handle);
+        cleanup_status = aDevUsartDestroy(console_handle);
+        if (cleanup_status != A_STATUS_OK) return cleanup_status;
         console_handle = NULL;
         return status;
     }
     return A_STATUS_OK;
+}
+
+aStatus_t appSystemConsoleDeInit(void)
+{
+    aStatus_t status;
+
+    if (console_handle == NULL) return A_STATUS_NOT_READY;
+    /* 调用者已停止读写；串口仍忙时保留句柄与 Shell，允许稍后重试清理。 */
+    status = aDevUsartDestroy(console_handle);
+    if (status != A_STATUS_OK) return status;
+    console_handle = NULL;
+    status = aShellDeInit();
+    /* Shell 初始化失败后，也允许通过此入口清理遗留串口。 */
+    return status == A_STATUS_NOT_READY ? A_STATUS_OK : status;
 }
 
 #endif

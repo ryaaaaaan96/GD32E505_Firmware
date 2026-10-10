@@ -15,13 +15,6 @@ void vTaskDelete(TaskHandle_t handle)
     if (handle == NULL) longjmp(exited, 1);
 }
 
-void mock_enter(void) {}
-void mock_exit(void) {}
-void *pvTaskGetThreadLocalStoragePointer(TaskHandle_t task, BaseType_t slot)
-{ (void)task; (void)slot; return NULL; }
-void vTaskSetThreadLocalStoragePointer(TaskHandle_t task, BaseType_t slot, void *p)
-{ (void)task; (void)slot; assert(p == NULL); }
-void vPortFree(void *p) { assert(p == NULL); }
 int main(void)
 {
     aOSDeleteTask(NULL);

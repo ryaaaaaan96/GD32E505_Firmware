@@ -1,6 +1,6 @@
 /**
  * @file aLib.h
- * @brief 通用布尔类型、流式结果、errno 映射与纯时间运算。
+ * @brief 通用布尔类型、整数计算、流式结果、errno 映射与纯时间运算。
  * @see docs/interface_contract.md 公共类型、错误、超时与生命周期约定。
  *
  * 本层不读取系统时钟，不保存线程错误状态，也不等待或分配内存。
@@ -29,6 +29,18 @@
 #define ALIB_SECTION(name_)
 #define ALIB_NORETURN
 #endif
+
+/**
+ * @brief 无符号整数除法向上取整，返回容纳 value_ 所需的单元数量。
+ * @param[in] value_ 待划分的总量，允许为 0。
+ * @param[in] divisor_ 每个单元的容量，必须大于 0，不要求为 2 的幂。
+ * @note 使用商和余数计算，避免 value_ + divisor_ - 1 的加法溢出。
+ * 参数会重复求值，须为无副作用且求值期间保持稳定的无符号整数表达式。
+ * 返回单元数量，不返回补齐后的字节数，也不调整内存地址。
+ */
+#define ALIB_DIV_ROUND_UP(value_, divisor_) \
+    (((value_) / (divisor_)) + \
+     (((value_) % (divisor_)) != 0U))
 
 /**
  * @brief 流式 I/O 结果：非负为实际字节数，-1 为失败。

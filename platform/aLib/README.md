@@ -4,6 +4,14 @@
 超时与错误类型、`aStatusToErrno()` 状态映射、编译器属性和纯计算工具。errno
 的任务局部存储仍由 aOS 提供；GCC newlib syscall 不属于 aLib。
 
+## 整数计算
+
+`ALIB_DIV_ROUND_UP(value, divisor)` 对无符号整数除法向上取整，
+例如 `ALIB_DIV_ROUND_UP(1025U, 4U)` 返回 `257` 个单元，
+不会返回补齐后的 `1028` 字节。商和余数的写法避免相加后再除造成溢出。
+除数必须大于零；宏参数会重复求值，须无副作用且求值期间保持稳定。
+FreeRTOS 栈元素类型和默认栈容量仍由 aOS 后端管理。
+
 ## 布尔类型
 
 项目自研代码统一使用 `aBool_t`、`A_TRUE` 和 `A_FALSE`，不在其他层直接暴露

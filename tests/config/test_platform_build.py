@@ -32,12 +32,12 @@ generate_firmware_images(external)
 ''')
     (product / "main.c").write_text('''#include "aOS.h"
 #include "aDrv.h"
-static void task(void *argument) { (void)argument; }
+static void task(void *argument) { (void)argument; aOSTaskExit(); }
 int main(void) {
     if (aDrvInit() != A_STATUS_OK || aOSInit() != A_STATUS_OK) return 1;
     aOSTaskConfig_t config = AOS_TASK_CONFIG_DEFAULT;
     config.function = task;
-    config.name = "return";
+    config.name = "explicit_exit";
     config.stack_bytes = 512;
     if (aOSCreateTask(&config, 0) != A_STATUS_OK) return 1;
     aOSRun();
@@ -47,12 +47,14 @@ int main(void) {
             "-DCMAKE_BUILD_TYPE=Debug", f"-DARM_GCC_ROOT={toolchain}"]
     build = product / "build"
     run(base + ["-B", str(build)])
+    generated = (build / "aOS_config/FreeRTOSConfig.h").read_text()
+    assert "#define configNUM_THREAD_LOCAL_STORAGE_POINTERS 1\n" in generated
     run(["cmake", "--build", str(build), "--parallel", "4"])
     print("External product/library build passed")
     for name, setting, message in (
         ("tick16", "set(FREERTOS_USE_16_BIT_TICKS 1)", "32-bit ticks at 1000 Hz"),
         ("tick100", "set(FREERTOS_TICK_RATE_HZ 100)", "32-bit ticks at 1000 Hz"),
-        ("tls", "set(FREERTOS_NUM_THREAD_LOCAL_STORAGE_POINTERS 1)", "two FreeRTOS TLS slots"),
+        ("tls", "set(FREERTOS_NUM_THREAD_LOCAL_STORAGE_POINTERS 0)", "at least one FreeRTOS TLS slot"),
     ):
         config = product / f"{name}.cmake"
         config.write_text(f'include("{root}/config/freeRTOS_config.cmake")\n{setting}\n')

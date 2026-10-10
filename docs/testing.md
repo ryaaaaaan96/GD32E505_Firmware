@@ -24,6 +24,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | 范围 | 命令 |
 | --- | --- |
 | OS 通知、定时器与工作队列 | `python3 tests/aos/run.py` |
+| LED/GPIO 状态、静态/动态生命周期与接口裁剪 | `python3 tests/led/run.py` |
 | SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |
 | DMA 通道、IRQ/查询交错与真实 USART DMA 适配 | `python3 tests/dma/run.py` |
 | USART、RS485、FIFO 与 IRQ | `python3 tests/usart/run.py` |
@@ -37,7 +38,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | 协议统一入口、启动顺序与功能关闭 | `python3 tests/protocol_tasks/run.py` |
 | Modbus 板级端口、主从、任务调度与生命周期 | `python3 tests/modbus_demo/run.py` |
 | Shell / 日志 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
-| 应用设备与启动编排 | `python3 tests/app_devices/run.py`、`python3 tests/app_startup/run.py` |
+| 应用设备清理、启动编排与 Shell 就绪门控 | `python3 tests/app_devices/run.py`、`python3 tests/app_startup/run.py` |
 | 调试脚本 | `python3 tests/scripts/test_debug.py` |
 
 部分脚本支持通过 `SANITIZE=1` 增加 AddressSanitizer 检查，例如：

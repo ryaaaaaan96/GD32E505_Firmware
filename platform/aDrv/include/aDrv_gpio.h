@@ -5,13 +5,19 @@
  *
  * 配置和生命周期由上层管理，同一实例的操作由调用者串行化。
  * 句柄字段是驱动维护状态，初始化后禁止上层修改；本层不依赖 aOS。
- * 读取返回引脚输入电平，不是输出锁存器；Toggle 为读后写，不保证原子性。
+ * Read 读取输入电平，ReadOutput 读取输出锁存器。
+ * Toggle 按输出锁存值读后写，不保证原子性。
  */
 
 #ifndef ADRV_GPIO_H
 #define ADRV_GPIO_H
 
 #include "aDrv_basic.h"
+
+/* 独立编译时也默认保护 SWD；产品通过顶层 CMake 配置覆盖。 */
+#ifndef ADRV_GPIO_SWD_PROTECT_DISABLE
+#define ADRV_GPIO_SWD_PROTECT_DISABLE 0
+#endif
 
 /** @brief GPIO 模式；当前输入为浮空，不包含上拉/下拉配置。 */
 typedef enum {
@@ -29,9 +35,18 @@ typedef enum {
     ADRV_GPIO_HIGH = 1,
 } aDrvGpioLevel_t;
 
+/** @brief 输出速度等级，不代表实际信号频率；由芯片后端映射。 */
+typedef enum {
+    ADRV_GPIO_SPEED_LOW,    /**< GD32：2MHz。 */
+    ADRV_GPIO_SPEED_MEDIUM, /**< GD32：10MHz。 */
+    ADRV_GPIO_SPEED_HIGH,   /**< GD32：50MHz，默认值。 */
+    ADRV_GPIO_SPEED_MAX,    /**< GD32：极高速，自动开启共享 I/O 补偿。 */
+} aDrvGpioSpeed_t;
+
 /** @brief 板级 GPIO 配置，初始化期间读取。 */
 typedef struct {
     aDrvGpioPin_t pin; /**< ADRV_PIN 编码，不能为 NONE。 */
+    aDrvGpioSpeed_t speed; /**< 输出及复用输出使用，输入/模拟模式忽略。 */
     aDrvGpioMode_t mode; /**< 引脚模式。 */
     aDrvGpioLevel_t initial_level; /**< 普通输出模式切换前预置的电平。 */
 } aDrvGpioConfig_t;
@@ -61,8 +76,13 @@ void aDrvGpioHandleStructInit(aDrvGpioHandle_t *handle);
  * @param[in] config 引脚、模式与初始电平；仅调用期间读取。
  * @param[out] handle 调用方持有的句柄。
  * @retval A_STATUS_OK 初始化成功。
- * @retval A_STATUS_INVALID_PARAM 指针、引脚或模式无效。
+ * @retval A_STATUS_INVALID_PARAM 指针、引脚、模式或速度无效。
+ * @retval A_STATUS_TIMEOUT 极高速补偿在有限轮询内未就绪。
+ * @note 默认速度 HIGH；MAX 补偿就绪后才配置引脚，反初始化不关闭共享补偿。
+ * 超时不修改引脚和句柄，但已开启的 AF 时钟与补偿保持开启。
+ * @retval A_STATUS_UNSUPPORTED SWD 保护开启时使用 PA13/PA14。
  * @note 当前输入模式为浮空输入；不自动检查其他设备是否占用该引脚。
+ * SWD 保护失败不会修改硬件或句柄；关闭保护仅跳过检查，不释放 SWJ 复用。
  */
 aStatus_t aDrvGpioInit(const aDrvGpioConfig_t *config,
                        aDrvGpioHandle_t *handle);
@@ -99,7 +119,17 @@ aStatus_t aDrvGpioRead(const aDrvGpioHandle_t *handle,
                        aDrvGpioLevel_t *level);
 
 /**
- * @brief 按输入电平执行一次取反输出。
+ * @brief 读取软件设置的输出锁存电平。
+ * @param[in] handle 已配置为输出的 GPIO 句柄。
+ * @param[out] level 成功时返回电平，不得为 NULL；失败时不改写。
+ * @return OK、INVALID_PARAM 或 NOT_READY。
+ * @note 不检测引脚实际电平；开漏输出释放后输入电平也可能为低。
+ */
+aStatus_t aDrvGpioReadOutput(const aDrvGpioHandle_t *handle,
+                            aDrvGpioLevel_t *level);
+
+/**
+ * @brief 按输出锁存电平执行一次取反输出。
  * @param[in] handle 已配置为输出的 GPIO 句柄。
  * @retval A_STATUS_OK 已写入相反电平。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。

@@ -9,7 +9,7 @@
 
 aSystemInit 依次初始化 Flash、aMemory 分区，再调用 appDatabaseInit。
 appDatabaseInit 内部调用 aDataBaseInit 后尝试打开已有数据库；空白介质
-提示运行 db init，并继续初始化其他应用服务。Shell 任务最后启动，命令
+提示运行 db init，并继续初始化其他应用服务。Shell 任务等待全部服务就绪，命令
 不会与启动时的数据库打开操作交错。appDatabaseInit 仅在启动时调用一次。
 
 默认启用 ADATABASE_ENABLE，后端为 FLASH25Q。数据库模块本身支持多实例；

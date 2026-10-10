@@ -14,10 +14,14 @@
 ## 日志初始化
 
 `aSystemInit` 在 Shell 初始化完成后单独调用 `appLogInit`，
-全部服务就绪后才启动 Shell 任务。日志初始化不由 `shellInit` 承担。
+Shell 任务已在 `shellInit` 中创建，但等待全部服务就绪后才处理命令和发送队列。
+日志初始化不由 `shellInit` 承担。
 系统启动后业务直接使用 `ALOG_INFO` 等宏，无需再次初始化。
 当前后端使用 `aShellWrite` 将完整日志复制进 Shell 队列，不直接操作 USART。
-没有新增日志任务或日志队列；Shell 任务统一负责发送。
+没有新增日志任务或日志队列；Shell 任务统一负责发送，串口不再创建任务互斥锁。
+Shell 任务创建失败或日志初始化失败时，通过 appSystemConsoleDeInit 清理控制台；
+串口释放失败保留句柄并报告错误。其他服务启动失败不回滚全部系统资源，
+仍按启动失败停止运行处理，不开放 Shell 命令或重新执行系统初始化。
 启动时会看到含等级和启动毫秒数的 `EasyLogger ready` 日志。
 
 ## 板端测试
@@ -89,5 +93,5 @@ sig set 2 1001 0 200
 system 只包含 `protocol.h` 并调用 `protocolInit()`，不读取协议配置或判断角色。
 点表注册和各功能初始化由 `app/protocol/protocol.c` 编排，通信实例与任务也由该文件管理，
 板载端口初始化在 `app/devices/rs485`。
-成功后 system 才启动 Shell 消费任务；失败进入已有启动失败流程。
+成功后 system 才放行 Shell 消费任务；失败时门控保持未就绪，进入启动失败流程。
 任务和扩展步骤见 [协议说明](../../protocol/README.md)。

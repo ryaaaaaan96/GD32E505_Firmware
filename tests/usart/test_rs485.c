@@ -90,15 +90,15 @@ aStatus_t aOSWaitObjectWait(void *p, aTimeout_t t)
 }
 void aOSWaitObjectNotify(void *p) { (void)p; }
 void aOSWaitObjectNotifyFromISR(void *p) { (void)p; }
-aStatus_t aOSMutexCreate(void **p) { ++mutex_count; *p = p; return A_STATUS_OK; }
-void aOSMutexDestroy(void **p) { if (*p) --mutex_count; *p = NULL; }
+aStatus_t aOSMutexCreate(void **p) { assert(0); ++mutex_count; *p = p; return A_STATUS_OK; }
+void aOSMutexDestroy(void **p) { assert(0); if (*p) --mutex_count; *p = NULL; }
 aStatus_t aOSMutexLock(void *p, aTimeout_t t)
-{ assert(p); if (reject_lock) {
+{ assert(0); assert(p); if (reject_lock) {
     assert(t.type == A_TIMEOUT_TYPE_RELATIVE && t.milliseconds == 0U);
     return A_STATUS_BUSY;
   } assert(locks < 4U); ++locks; return A_STATUS_OK; }
 aStatus_t aOSMutexUnlock(void *p)
-{ assert(p); assert(locks > 0U); --locks; return A_STATUS_OK; }
+{ assert(0); assert(p); assert(locks > 0U); --locks; return A_STATUS_OK; }
 aStatus_t aOSTimerCreate(aOSTimer_t *timer, aOSTimerCallback_t callback,
                          void *argument)
 {
@@ -538,10 +538,11 @@ int main(void)
             .callback = async_tx_callback,
             .argument = NULL
         };
-    reject_lock = A_TRUE;
+    /* 活动事务仍返回 BUSY，不依赖任务互斥锁。 */
+    h->tx.state = ADEV_USART_TX_STREAM;
     assert(aDevUsartWriteAsync(h, &tx_request) == A_STATUS_BUSY);
     assert(locks == 0U && h->tx.deadline_timer == NULL);
-    reject_lock = A_FALSE;
+    h->tx.state = ADEV_USART_TX_IDLE;
     timer_create_delay = 101U;
     assert(aDevUsartWriteAsync(h, &tx_request) == A_STATUS_TIMEOUT);
     assert(h->tx.state == ADEV_USART_TX_IDLE && async_tx_callbacks == 0U && locks == 0U);

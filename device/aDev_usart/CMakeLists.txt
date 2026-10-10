@@ -31,7 +31,7 @@ foreach(feature INTERRUPT DIRECT ASYNC RS485 STATIC DYNAMIC)
     )
 endforeach()
 
-# TX/RX implementation sections are compiled by their capability macros.
+# 发送与接收实现按各自的能力宏进行编译裁剪。
 if(ADEV_USART_RS485_ENABLE)
     target_sources(aDevUsart PRIVATE src/aDev_usart_rs485.c)
 endif()

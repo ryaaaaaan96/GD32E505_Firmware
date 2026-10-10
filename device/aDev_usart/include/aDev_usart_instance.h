@@ -50,7 +50,6 @@ typedef struct {
     volatile size_t count;
     volatile size_t dma_active;
     volatile aDevUsartTxState_t state;
-    void *mutex;
     void *wait_object;
     aBool_t draining;
     aTimepoint_t deadline;
@@ -74,7 +73,6 @@ typedef struct {
     volatile size_t dma_consumed;
     volatile aBool_t dma_active;
     volatile aDevUsartRxState_t state;
-    void *mutex;
     void *wait_object;
     uint8_t *snapshot;
     aDevUsartRxCallback_t callback;

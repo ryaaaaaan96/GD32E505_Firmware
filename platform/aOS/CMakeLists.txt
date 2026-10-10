@@ -38,8 +38,8 @@ foreach(required_option
     endif()
 endforeach()
 
-if(FREERTOS_NUM_THREAD_LOCAL_STORAGE_POINTERS LESS 2)
-    message(FATAL_ERROR "aOS errno and task startup require two FreeRTOS TLS slots")
+if(FREERTOS_NUM_THREAD_LOCAL_STORAGE_POINTERS LESS 1)
+    message(FATAL_ERROR "aOS errno requires at least one FreeRTOS TLS slot")
 endif()
 
 if(NOT "${FREERTOS_TICK_RATE_HZ}" MATCHES "^[1-9][0-9]*$")

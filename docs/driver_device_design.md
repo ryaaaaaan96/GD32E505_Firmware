@@ -41,18 +41,63 @@ USART 的 RAM 实例现在按下面的结构组织，各部分直接内嵌，不
 aDevUsartHandle
 ├── drv_handle                 硬件实例状态
 ├── settings                   初始化后固定的模式、缓冲区、字节钩子、DE 配置
-├── tx                         TX 缓冲进度、锁、等待、超时和异步事务
-├── rx                         RX 缓冲进度、锁、等待、订阅和错误
+├── tx                         TX 缓冲进度、等待、超时和异步事务
+├── rx                         RX 缓冲进度、等待、订阅和错误
 ├── de_gpio / rs485_transmitting
 └── dynamic_storage            对象分配的所有权
 ```
 
 `settings` 是句柄内的配置快照，实际位于 RAM；并未宣称它已移入 Flash。
 可运行时修改的波特率等信息由 aDrv 的运行状态维护。
-LED 已统一为业务头中的不透明句柄和独立的实例头；无需为两个字段再套一层结构。
+
+USART 不创建任务互斥锁。同方向 API 的串行化与生命周期协调由应用负责；
+设备内部仍保留 ISR/DMA 临界区、忙状态检查、完成通知和超时。
+当前控制台由 Shell 任务收发，其他任务只向 Shell 队列提交输出；
+RS485 由单一 Modbus 协议任务使用，因而两者均不额外创建串口锁。
+新增共享调用者时，在 app/devices 的统一入口实施互斥，不能绕过该入口。
+全双工可分别设置一个发送者和接收者；RS485 需要协调完整请求响应事务。
+LED 使用业务头中的不透明句柄和独立的实例头，字段直接平铺。
 Flash25Q 已区分共享 Bus 和各 Flash 实例，继续保留现有结构和 SFUD 移植边界。
 
+## LED 实例与状态
+
+`aDevLedConfig_t` 描述引脚、有效电平与初始亮灭状态；初始化期间读取。
+句柄保存 GPIO 运行状态与有效电平，动态分配启用时增加所有权标记。
+就绪状态以 GPIO 为准，亮灭状态从输出锁存器读取，不另存软件缓存。
+
+| 接口 | 行为 |
+| --- | --- |
+| `aDevLedInitStatic(config, handle)` | 初始化调用者提供的对象，无堆分配 |
+| `aDevLedCreate(config, &handle)` | 用 aOS 分配对象，初始化失败自动释放 |
+| `aDevLedDeInit(handle)` | 设置熄灭电平并释放 GPIO，不释放对象存储 |
+| `aDevLedDestroy(handle)` | 反初始化并释放动态对象，拒绝静态对象 |
+| `aDevLedSet/On/Off` | 将逻辑亮灭转换为引脚输出电平 |
+| `aDevLedGet/Toggle` | 读取或翻转输出锁存值，与引脚输入采样分开 |
+
+顶层 `ADEV_LED_STATIC_ENABLE` 和 `ADEV_LED_DYNAMIC_ENABLE` 独立控制分配
+接口；模块启用时至少选择一种。当前产品为静态开启、动态关闭，状态灯仍由
+`app/devices/system/system_device.c` 持有。纯静态 LED 不依赖 aOS。
+旧 `aDevLedInit` 调用改为 `aDevLedInitStatic`。
+
+GPIO 新增 `aDrvGpioReadOutput`；`aDrvGpioRead` 仍读取实际输入电平，
+`aDrvGpioToggle` 改为基于输出锁存值翻转。这使输入受外部电路影响时，
+LED 的 Get/Toggle 仍描述软件设置的输出；不代表已检测到真实发光状态。
+
+活动实例不得复制、移动或重复初始化，重配静态对象前先 DeInit。
+DeInit 之后引脚为浮空输入，实际电平由板级电路决定，不承诺持续熄灭。
+动态对象 DeInit 后仍须 Destroy；释放失败保留句柄供重试。
+
+模块没有内部锁、任务或定时器。应用负责同一实例的访问与生命周期串行化；
+Toggle 为非原子读改写，不能与其他写入并发。闪烁周期继续由状态任务设置。
+
 ## 驱动文件组织
+
+`ADRV_GPIO_SWD_PROTECT_DISABLE` 未配置或为 `OFF` 时，默认保留 SWD 保护。
+此时 GPIO 初始化 PA13/PA14 的所有模式均返回 `A_STATUS_UNSUPPORTED`，
+检查在硬件写入之前执行，驱动句柄保持不变。在顶层 CMake 设为 `ON`
+才关闭这项检查，
+不会自动释放 SWJ 调试复用；如需复用引脚，由板级启动代码显式处理。
+PA15/PB3/PB4 原有的关闭 JTAG、保留 SWD 行为不变。
 
 ```text
 platform/aDrv/
@@ -115,6 +160,8 @@ RS485 的 DE 释放和业务 Async 回调契约沿用原设计；RX 快照检查
 
 ## 验证与参考
 
+`tests/led/run.py` 使用真实 LED/GPIO 实现和模拟硬件，验证有效电平、
+输入与输出锁存值不一致、静态/动态生命周期、失败回收与编译接口裁剪。
 `tests/dma/run.py` 使用真实 DMA 和 USART DMA 实现、模拟硬件寄存器，覆盖通道
 争用、ISR 与查询交错、重装、错误保持、即时完成和停止后通知清理。
 原 USART/RS485、SPI、Flash、Modbus 和启动回归继续验证上层契约。
@@ -126,3 +173,18 @@ RS485 的 DE 释放和业务 Async 回调契约沿用原设计；RX 快照检查
 - [Zephyr Device Driver Model](https://docs.zephyrproject.org/latest/kernel/drivers/index.html)
 - [Zephyr DMA 接口](https://docs.zephyrproject.org/latest/hardware/peripherals/dma.html)
 - [Zephyr GD32 SPI 对通用 DMA 的使用](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/spi/spi_gd32.c)
+
+
+### GPIO 输出速度
+
+应用通过 `aDrvGpioConfig_t.speed` 选择 LOW、MEDIUM、HIGH 或 MAX，
+GD32 分别映射为 2MHz、10MHz、50MHz 和极高速；这些是输出速度等级，
+不是信号频率。`ConfigStructInit` 默认 HIGH，保持原有行为。
+LED 的 `aDevLedConfig_t.speed` 同样向下传递；输入/模拟模式忽略速度，
+但仍检查枚举有效性。已有外设专用引脚配置不受此字段影响。
+
+MAX 在配置输出前开启 AF 时钟和共享 I/O 补偿，检查就绪后配置引脚。
+使用最多 100000 次有限轮询，预算不是毫秒；失败返回 TIMEOUT，
+引脚和句柄不变，已开启的时钟与补偿保持开启。反初始化不关闭共享补偿。
+速度降档会清除该引脚遗留的 SPD 位。板级供电及负载须满足芯片要求，
+最高速率仍由芯片规格与电路决定。

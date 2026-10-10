@@ -47,6 +47,7 @@ void aDrvGpioConfigStructInit(aDrvGpioConfig_t *config)
 
     config->pin = ADRV_PIN_NONE;
     config->mode = ADRV_GPIO_INPUT;
+    config->speed = ADRV_GPIO_SPEED_HIGH;
     config->initial_level = ADRV_GPIO_LOW;
 }
 
@@ -65,6 +66,9 @@ aStatus_t aDrvGpioInit(const aDrvGpioConfig_t *config,
 {
     aDrvPrivateGpio_t gpio;
     uint32_t mode;
+    uint32_t speed;
+    uint32_t remaining;
+    aBool_t output;
 
     if ((config == NULL) || (handle == NULL) ||
         (aDrvResolvePin(config->pin, &gpio) != A_STATUS_OK)) {
@@ -94,13 +98,49 @@ aStatus_t aDrvGpioInit(const aDrvGpioConfig_t *config,
         return A_STATUS_INVALID_PARAM;
     }
 
+    switch (config->speed) {
+    case ADRV_GPIO_SPEED_LOW: speed = GPIO_OSPEED_2MHZ; break;
+    case ADRV_GPIO_SPEED_MEDIUM: speed = GPIO_OSPEED_10MHZ; break;
+    case ADRV_GPIO_SPEED_HIGH: speed = GPIO_OSPEED_50MHZ; break;
+    case ADRV_GPIO_SPEED_MAX: speed = GPIO_OSPEED_MAX; break;
+    default: return A_STATUS_INVALID_PARAM;
+    }
+    output = config->mode != ADRV_GPIO_INPUT &&
+             config->mode != ADRV_GPIO_ANALOG;
+    if (!output) speed = GPIO_OSPEED_50MHZ;
+
+#if !ADRV_GPIO_SWD_PROTECT_DISABLE
+    /* 在任何硬件写入前拒绝占用 SWD；输入、输出及复用模式统一检查。 */
+    if (config->pin == ADRV_PIN(ADRV_GPIO_PORT_A, 13) ||
+        config->pin == ADRV_PIN(ADRV_GPIO_PORT_A, 14)) {
+        return A_STATUS_UNSUPPORTED;
+    }
+#endif
+
+    if (output && config->speed == ADRV_GPIO_SPEED_MAX) {
+        rcu_periph_clock_enable(RCU_AF);
+        if (gpio_compensation_flag_get() == RESET) {
+            gpio_compensation_config(GPIO_COMPENSATION_ENABLE);
+        }
+        /* 启动阶段也可使用；轮询次数有限，不依赖 OS 或系统节拍。
+         * 此预算不是毫秒超时；失败时保留共享补偿，允许后续重试。 */
+        remaining = 100000U;
+        while (gpio_compensation_flag_get() == RESET) {
+            if (--remaining == 0U) return A_STATUS_TIMEOUT;
+        }
+    }
+
     rcu_periph_clock_enable(gpio.clock);
     if ((config->mode == ADRV_GPIO_OUTPUT_PUSH_PULL) ||
         (config->mode == ADRV_GPIO_OUTPUT_OPEN_DRAIN)) {
         gpio_bit_write(gpio.port, gpio.pin_mask,
                        config->initial_level == ADRV_GPIO_HIGH ? SET : RESET);
     }
-    gpio_init(gpio.port, mode, GPIO_OSPEED_50MHZ, gpio.pin_mask);
+    /* 厂商 gpio_init 仅在 MAX 时置位 SPD，降档需显式清除旧状态。 */
+    if (output && config->speed != ADRV_GPIO_SPEED_MAX) {
+        GPIOx_SPD(gpio.port) &= ~gpio.pin_mask;
+    }
+    gpio_init(gpio.port, mode, speed, gpio.pin_mask);
 
     /* 显式用作 GPIO 时释放 JTAG 引脚，PA13/PA14 的 SWD 调试仍保留。
      * 先设置输出电平，再交出引脚控制权，避免 DE 短暂进入发送态。 */
@@ -180,12 +220,33 @@ aStatus_t aDrvGpioRead(const aDrvGpioHandle_t *handle,
     return A_STATUS_OK;
 }
 
+aStatus_t aDrvGpioReadOutput(const aDrvGpioHandle_t *handle,
+                            aDrvGpioLevel_t *level)
+{
+    aDrvPrivateGpio_t gpio;
+
+    if ((handle == NULL) || (level == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (!handle->initialized) {
+        return A_STATUS_NOT_READY;
+    }
+    if (aDrvResolvePin(handle->pin, &gpio) != A_STATUS_OK) {
+        return A_STATUS_INVALID_PARAM;
+    }
+
+    *level = gpio_output_bit_get(gpio.port, gpio.pin_mask) != RESET
+                 ? ADRV_GPIO_HIGH
+                 : ADRV_GPIO_LOW;
+    return A_STATUS_OK;
+}
+
 aStatus_t aDrvGpioToggle(const aDrvGpioHandle_t *handle)
 {
     aDrvGpioLevel_t level;
     aStatus_t status;
 
-    status = aDrvGpioRead(handle, &level);
+    status = aDrvGpioReadOutput(handle, &level);
     if (status != A_STATUS_OK) {
         return status;
     }

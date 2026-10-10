@@ -4,7 +4,6 @@
 #include <assert.h>
 #include <setjmp.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include "../../platform/aOS/backend/freertos/aOS_freertos.c"
 
 static int scheduler, depth, creates, notifications, callbacks;
@@ -23,9 +22,8 @@ BaseType_t xTaskCreate(void (*function)(void *), const char *name,
                       uint16_t stack, void *argument, UBaseType_t priority,
                       TaskHandle_t *out)
 {
-    (void)argument;
-    assert(function == os_task_entry && name != NULL);
-    assert(((aOSTaskStart_t *)argument)->function == work_task);
+    assert(function == work_task && name != NULL);
+    assert(argument == NULL && depth == 0);
     assert(stack == 512 && priority == 4);
     ++creates;
     if (allocation_fails) return pdFALSE;
@@ -70,12 +68,6 @@ static void callback(void *argument)
         assert(aOSWorkSubmit(&first) == A_STATUS_OK);
     }
 }
-static void *bootstrap;
-void *pvPortMalloc(size_t size) { return malloc(size); }
-void vPortFree(void *p) { free(p); }
-void vTaskSetThreadLocalStoragePointer(TaskHandle_t task, BaseType_t index, void *p)
-{ (void)task; assert(index == AOS_START_TLS_INDEX); bootstrap = p; }
-void vTaskDelete(TaskHandle_t task) { (void)task; abort(); }
 int main(void)
 {
     aOSWorkItemInit(&first, callback, NULL);
@@ -130,7 +122,6 @@ int main(void)
     assert(aOSWorkSubmit(&first) == A_STATUS_BUSY);
     first.running = A_FALSE;
     assert(aOSWorkCancel(&first) == A_STATUS_OK);
-    free(bootstrap);
     puts("aOS init/idempotency/coalescing/requeue/sleep-boundary tests passed");
     return 0;
 }

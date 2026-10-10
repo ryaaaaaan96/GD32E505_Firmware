@@ -7,10 +7,12 @@ import tempfile
 
 root = Path(__file__).resolve().parents[2]
 with tempfile.TemporaryDirectory(prefix="aclass-app-devices-") as directory:
-    for scenario in ("NORMAL", "LED_FAILURE", "USART_FAILURE", "SHELL_FAILURE", "SHELL_OFF"):
+    for scenario in ("NORMAL", "LED_FAILURE", "USART_FAILURE", "SHELL_FAILURE",
+                     "SHELL_OFF", "CLEANUP_FAILURE", "SHELL_CLEANUP_FAILURE"):
         executable = str(Path(directory) / scenario)
         command = [
             "cc", "-std=c11",
+            "-DADEV_LED_STATIC_ENABLE=1",
         "-DADEV_USART_STATIC_ENABLE=1", "-DADEV_USART_DYNAMIC_ENABLE=1", "-O2", "-Wall", "-Wextra", "-Werror",
             "-Wno-unused-variable", f"-D{scenario}",
             "-DASHELL_ENABLE=" + ("0" if scenario == "SHELL_OFF" else "1"),
@@ -23,6 +25,8 @@ with tempfile.TemporaryDirectory(prefix="aclass-app-devices-") as directory:
         ]
         if os.environ.get("SANITIZE"):
             command[1:1] = ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
+        if scenario == "SHELL_CLEANUP_FAILURE":
+            command[1:1] = ["-DSHELL_FAILURE", "-DCLEANUP_FAILURE"]
         subprocess.run(command, cwd=root, check=True)
         subprocess.run([executable], check=True)
         print(scenario, "passed")

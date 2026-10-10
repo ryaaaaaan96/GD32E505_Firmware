@@ -211,7 +211,7 @@ aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
     return status;
 }
 
-/* Stream reads. */
+/* 流式读取。 */
 static aSSize_t polling_read(aDevUsartHandle_t *handle, void *buffer,
                              size_t buffer_size, const aTimepoint_t *end,
                              aTimeout_t original_timeout)
@@ -262,7 +262,7 @@ static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
 
             if (length > available) length = available;
             if (length > buffer_size - count) length = buffer_size - count;
-            /* rx_mutex 保证单消费者；复制完成前不释放占用，ISR 只能
+            /* 调用者保证单消费者；复制完成前不释放占用，ISR 只能
              * 写空闲位置，满时丢弃新字节。因此复制期间无需屏蔽中断。 */
             memcpy((uint8_t *)buffer + count,
                    handle->settings.rx_buffer + tail, length);
@@ -312,13 +312,9 @@ static aSSize_t dma_buffered_read(aDevUsartHandle_t *handle, void *buffer,
             return aOSFailWithStatus(status);
         }
         if (handle->rx.wait_object != NULL) {
-            (void)aOSMutexUnlock(handle->rx.mutex);
+
             status = wait_for_event(handle->rx.wait_object, end);
-            const aStatus_t lock_status = aOSMutexLock(
-                handle->rx.mutex, A_TIMEOUT_FOREVER);
-            if (lock_status != A_STATUS_OK) {
-                return aOSFailWithStatus(lock_status);
-            }
+
             if (status != A_STATUS_OK) {
                 return fail_with_wait_status(status, original_timeout);
             }
@@ -335,7 +331,6 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
                        size_t buffer_size, aTimeout_t timeout)
 {
     aTimepoint_t end;
-    aStatus_t status;
     aSSize_t result;
 
     if ((handle == NULL) || !aTimeoutIsValid(timeout) ||
@@ -356,14 +351,8 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
         return aOSFailWithStatus(handle->rx.error);
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
-    status = aOSMutexLock(
-        handle->rx.mutex,
-        aTimepointRemaining(&end, aOSGetUptimeMs()));
-    if (status != A_STATUS_OK) {
-        return fail_with_wait_status(status, timeout);
-    }
+
     if (handle->rx.state != ADEV_USART_RX_IDLE) {
-        (void)aOSMutexUnlock(handle->rx.mutex);
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
 
@@ -373,7 +362,7 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
         ADEV_USART_RX_DMA_BUFFERED) {
         if (!handle->rx.dma_active) {
             handle->rx.state = ADEV_USART_RX_IDLE;
-            (void)aOSMutexUnlock(handle->rx.mutex);
+
             return aOSFailWithStatus(A_STATUS_UNSUPPORTED);
         }
         result = dma_buffered_read(handle, buffer, buffer_size, &end, timeout);
@@ -389,14 +378,13 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
         result = polling_read(handle, buffer, buffer_size, &end, timeout);
     }
     handle->rx.state = ADEV_USART_RX_IDLE;
-    (void)aOSMutexUnlock(handle->rx.mutex);
+
     return result;
 }
 
-
 #if ADEV_USART_DMA_BACKEND_ENABLE
-/* Shared circular DMA buffer. */
-/* Updates the DMA producer count and preserves the newest ring contents. */
+/* 共享 DMA 环形缓冲区。 */
+/* 更新 DMA 已生产字节计数，保留环形缓冲区中的最新数据。 */
 aStatus_t aDevUsartDmaRxRefresh(aDevUsartHandle_t *handle)
 {
     aDrvUsartRxProgress_t progress;
@@ -416,10 +404,9 @@ aStatus_t aDevUsartDmaRxRefresh(aDevUsartHandle_t *handle)
     return A_STATUS_OK;
 }
 
-
-/* CPU locks do not stop DMA. Copy then validate the producer against the
- * original cursor before publishing any bytes. Never lend the live DMA ring.
- * Caller holds rx_mutex; DMA IRQ must remain enabled during this operation. */
+/* CPU 加锁不会停止 DMA。先复制，再根据原始读取位置检查生产进度，
+ * 确认未被覆盖后才交付数据；不直接借出正在被 DMA 写入的环形缓冲区。
+ * 调用者须保证接收操作串行化，操作期间必须保持 DMA 中断使能。 */
 aStatus_t aDevUsartDmaRxCopy(aDevUsartHandle_t *handle, void *buffer,
                              size_t capacity, size_t *copied)
 {
@@ -438,8 +425,7 @@ aStatus_t aDevUsartDmaRxCopy(aDevUsartHandle_t *handle, void *buffer,
     status = aDevUsartDmaRxRefresh(handle);
     if (status != A_STATUS_OK) return status;
     if (handle->rx.dma_produced - start > handle->settings.rx_buffer_size) {
-        /* The copied span may be torn. Report no bytes, keep overflow latched.
-         * */
+        /* 复制的数据可能已被覆盖而不一致；不报告有效字节，保留溢出锁存状态。 */
         return A_STATUS_ERROR;
     }
     handle->rx.dma_consumed = start + length;
@@ -463,10 +449,10 @@ void aDevUsartRxDmaComplete(void *argument)
     aDevUsartRxDmaNotifyFromISR(argument);
 }
 
-#endif /* DMA buffer backend */
+#endif /* DMA 缓冲后端 */
 
 #if ADEV_USART_DIRECT_ENABLE && ADEV_USART_DMA_BACKEND_ENABLE
-/* DMA implementation of synchronous user-buffer RX. */
+/* 直接接收到用户缓冲区的同步 DMA 实现。 */
 static void direct_rx_complete(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
@@ -504,12 +490,6 @@ static aSSize_t dma_read_direct(aDevUsartHandle_t *handle, void *buffer,
     }
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
-    status = aOSMutexLock(
-        handle->rx.mutex,
-        aTimepointRemaining(&end, aOSGetUptimeMs()));
-    if (status != A_STATUS_OK) {
-        return fail_with_wait_status(status, timeout);
-    }
 
     aDrvUsartDisableInterrupt(&handle->drv_handle);
     if ((handle->rx.state != ADEV_USART_RX_IDLE) ||
@@ -517,7 +497,7 @@ static aSSize_t dma_read_direct(aDevUsartHandle_t *handle, void *buffer,
         handle->rx.dma_active ||
         (handle->rx.count != 0U)) {
         aDrvUsartEnableInterrupt(&handle->drv_handle);
-        (void)aOSMutexUnlock(handle->rx.mutex);
+
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
     handle->rx.state = ADEV_USART_RX_DIRECT;
@@ -575,7 +555,7 @@ static aSSize_t dma_read_direct(aDevUsartHandle_t *handle, void *buffer,
 
     direct_rx_interrupt_set(handle, A_TRUE);
     handle->rx.state = ADEV_USART_RX_IDLE;
-    (void)aOSMutexUnlock(handle->rx.mutex);
+
     if (count != 0U) return (aSSize_t)count;
     return status == A_STATUS_TIMEOUT
                ? aOSFailWithTimeout(timeout)
@@ -608,15 +588,13 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
         return aOSFailWithStatus(A_STATUS_UNSUPPORTED);
 
     const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
-    aStatus_t status = aOSMutexLock(handle->rx.mutex,
-        aTimepointRemaining(&end, aOSGetUptimeMs()));
-    if (status != A_STATUS_OK) return fail_with_wait_status(status, timeout);
+    aStatus_t status = A_STATUS_OK;
     aOSCriticalEnter();
     if (handle->rx.state != ADEV_USART_RX_IDLE || handle->rx.dispatching ||
         handle->rx.dma_active ||
         handle->rx.count != 0U) {
         aOSCriticalExit();
-        (void)aOSMutexUnlock(handle->rx.mutex);
+
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
     handle->rx.state = ADEV_USART_RX_DIRECT;
@@ -656,7 +634,7 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
 #endif
     handle->rx.state = ADEV_USART_RX_IDLE;
     aOSCriticalExit();
-    (void)aOSMutexUnlock(handle->rx.mutex);
+
     if (count != 0U) return (aSSize_t)count;
     return status == A_STATUS_TIMEOUT ? aOSFailWithTimeout(timeout)
                                       : aOSFailWithStatus(status);
@@ -664,8 +642,8 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
 #endif
 
 #if ADEV_USART_ASYNC_ENABLE
-/* Only IRQ paths publish RX events. Snapshot storage is exclusively owned by
- * this subscription; DMA never writes it, including while callback runs. */
+/* 仅中断路径交付 RX 事件。快照缓冲区由当前订阅独占，
+ * DMA 不会写入该区域，回调执行期间也不例外。 */
 static void async_rx_dispatch(aDevUsartHandle_t *handle)
 {
     aOSCriticalState_t key = aOSCriticalEnterFromISR();
@@ -693,8 +671,8 @@ static void async_rx_dispatch(aDevUsartHandle_t *handle)
                 .buffer = handle->settings.rx_buffer + start,
                 .length = length, .status = A_STATUS_OK,
             };
-            /* Keep these slots occupied until callback returns. The IRQ
-             * producer drops on full instead of overwriting occupied slots. */
+            /* 回调返回前保持这些缓冲位置被占用；中断接收方在缓冲区满时
+             * 丢弃新字节，不覆盖已占用的位置。 */
             callback(handle, &event, argument);
             key = aOSCriticalEnterFromISR();
             handle->rx.tail =
@@ -724,8 +702,8 @@ static void async_rx_dispatch(aDevUsartHandle_t *handle)
         if (status == A_STATUS_OK &&
             handle->rx.dma_produced - start > handle->settings.rx_buffer_size)
             status = A_STATUS_ERROR;
-        /* Under the documented DMA IRQ latency bound, publish only after
-         * validating that DMA did not overwrite the source during copy. */
+        /* 在接口约定的 DMA 中断延迟上限内，先验证复制期间源数据未被
+         * DMA 覆盖，再交付数据。 */
         if (status == A_STATUS_OK) {
             handle->rx.dma_consumed = start + available;
             handle->rx.tail =
@@ -774,7 +752,7 @@ aStatus_t aDevUsartReadAsync(aDevUsartHandle_t *handle,
         if (request->buffer == NULL ||
             request->buffer_size < handle->settings.rx_buffer_size)
             return A_STATUS_INVALID_PARAM;
-        /* Integer differences avoid overflow and unrelated pointer ordering. */
+        /* 使用整数差值，避免地址加法溢出及无关联指针的大小比较。 */
         const uintptr_t snapshot = (uintptr_t)request->buffer;
         const uintptr_t ring = (uintptr_t)handle->settings.rx_buffer;
         if (snapshot >= ring ? snapshot - ring < handle->settings.rx_buffer_size
@@ -782,8 +760,7 @@ aStatus_t aDevUsartReadAsync(aDevUsartHandle_t *handle,
             return A_STATUS_INVALID_PARAM;
     }
     if (handle->rx.dispatching) return A_STATUS_BUSY;
-    aStatus_t status = aOSMutexLock(handle->rx.mutex, A_TIMEOUT_NO_WAIT);
-    if (status != A_STATUS_OK) return status;
+    aStatus_t status = A_STATUS_OK;
     aOSCriticalEnter();
     if (handle->rx.state != ADEV_USART_RX_IDLE || handle->rx.dispatching) {
         status = A_STATUS_BUSY;
@@ -791,8 +768,7 @@ aStatus_t aDevUsartReadAsync(aDevUsartHandle_t *handle,
 #if ADEV_USART_DMA_BACKEND_ENABLE
         if (handle->rx.dma_active) status = aDevUsartDmaRxRefresh(handle);
 #endif
-        /* Never silently discard existing stream bytes when changing consumer.
-         * */
+        /* 切换接收数据的消费者时，不得静默丢弃流中已有的字节。 */
         if (status == A_STATUS_OK && (handle->rx.count != 0U ||
             handle->rx.dma_produced != handle->rx.dma_consumed))
             status = A_STATUS_BUSY;
@@ -806,7 +782,7 @@ aStatus_t aDevUsartReadAsync(aDevUsartHandle_t *handle,
         }
     }
     aOSCriticalExit();
-    (void)aOSMutexUnlock(handle->rx.mutex);
+
     return status;
 }
 
@@ -815,8 +791,7 @@ aStatus_t aDevUsartReadAsyncCancel(aDevUsartHandle_t *handle)
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (!handle->drv_handle.initialized) return A_STATUS_NOT_READY;
     if (handle->rx.dispatching) return A_STATUS_BUSY;
-    aStatus_t status = aOSMutexLock(handle->rx.mutex, A_TIMEOUT_NO_WAIT);
-    if (status != A_STATUS_OK) return status;
+    aStatus_t status = A_STATUS_OK;
     aOSCriticalEnter();
     if (handle->rx.state != ADEV_USART_RX_ASYNC || handle->rx.dispatching ||
         handle->rx.cancel_pending) {
@@ -824,12 +799,12 @@ aStatus_t aDevUsartReadAsyncCancel(aDevUsartHandle_t *handle)
                   handle->rx.state != ADEV_USART_RX_IDLE)
             ? A_STATUS_BUSY : A_STATUS_NOT_READY;
         aOSCriticalExit();
-        (void)aOSMutexUnlock(handle->rx.mutex);
+
         return status;
     }
     handle->rx.cancel_pending = A_TRUE;
     aOSCriticalExit();
-    (void)aOSMutexUnlock(handle->rx.mutex);
+
     (void)aDrvUsartPendInterrupt(&handle->drv_handle);
     return A_STATUS_OK;
 }

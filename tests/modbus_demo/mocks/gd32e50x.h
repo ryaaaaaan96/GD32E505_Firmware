@@ -25,11 +25,20 @@ enum {
     USART_STB_2BIT, USART_STB_1BIT, USART_TRANSMIT_ENABLE,
     USART_RECEIVE_ENABLE, USART_FLAG_TBE, USART_FLAG_RBNE, USART_FLAG_TC
 };
+#define GPIO_OSPEED_2MHZ 102U
+#define GPIO_OSPEED_10MHZ 110U
+#define GPIO_OSPEED_MAX 150U
+#define GPIO_COMPENSATION_ENABLE 1U
+extern uint32_t test_gpio_spd[7];
+#define GPIOx_SPD(port) test_gpio_spd[(port) - GPIOA]
+void gpio_compensation_config(uint32_t enable);
+unsigned gpio_compensation_flag_get(void);
 void rcu_periph_clock_enable(rcu_periph_enum clock);
 void gpio_pin_remap_config(uint32_t remap, unsigned enable);
 void gpio_init(uint32_t port, uint32_t mode, uint32_t speed, uint32_t pin);
 void gpio_bit_write(uint32_t port, uint32_t pin, unsigned value);
 unsigned gpio_input_bit_get(uint32_t port, uint32_t pin);
+unsigned gpio_output_bit_get(uint32_t port, uint32_t pin);
 void usart_deinit(uint32_t instance);
 void usart_disable(uint32_t instance);
 void usart_enable(uint32_t instance);

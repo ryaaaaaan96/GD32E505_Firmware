@@ -84,27 +84,6 @@ static void wait_objects_destroy(aDevUsartHandle_t *handle)
     aOSWaitObjectDestroy(&handle->tx.wait_object);
 }
 
-static aStatus_t mutexes_create(aDevUsartHandle_t *handle)
-{
-    aStatus_t status = aOSMutexCreate(&handle->tx.mutex);
-
-    if (status != A_STATUS_OK) {
-        return status;
-    }
-    status = aOSMutexCreate(&handle->rx.mutex);
-    if (status != A_STATUS_OK) {
-        aOSMutexDestroy(&handle->tx.mutex);
-        return status;
-    }
-    return status;
-}
-
-static void mutexes_destroy(aDevUsartHandle_t *handle)
-{
-    aOSMutexDestroy(&handle->rx.mutex);
-    aOSMutexDestroy(&handle->tx.mutex);
-}
-
 void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
 {
     if (config == NULL) {
@@ -156,12 +135,11 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
         (config->rs485.mode != ADEV_USART_RS485_UART_DE)) {
         return A_STATUS_INVALID_PARAM;
     }
-    /* Automatic DE requires a backend implementation before it can be used. */
+    /* 外设自动 DE 功能必须由后端实现后才能使用。 */
     if (config->rs485.mode == ADEV_USART_RS485_UART_DE) {
         return A_STATUS_UNSUPPORTED;
     }
-    /* Product capabilities are checked before allocating or touching hardware.
-     * */
+    /* 分配资源或操作硬件前，先检查当前产品配置支持的能力。 */
     const aDevUsartMode_t tx = config->mode & ADEV_USART_TX_MASK;
     const aDevUsartMode_t rx = config->mode & ADEV_USART_RX_MASK;
     if (((tx == ADEV_USART_TX_INTERRUPT_BUFFERED) &&
@@ -207,13 +185,9 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
     handle->settings.mode = config->mode;
     handle->settings.interrupt_priority = config->interrupt_priority;
 
-
 #if ADEV_USART_RS485_ENABLE
     status = aDevUsartRS485Init(handle, &config->rs485);
 #endif
-    if (status == A_STATUS_OK) {
-        status = mutexes_create(handle);
-    }
     if (status == A_STATUS_OK) {
         status = wait_objects_create(handle);
     }
@@ -236,7 +210,6 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
         (void)aDevUsartRS485DeInit(handle);
 #endif
         wait_objects_destroy(handle);
-        mutexes_destroy(handle);
         const aBool_t dynamic = handle->dynamic_storage;
         handle_struct_init(handle, dynamic);
     }
@@ -290,7 +263,7 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
     if (handle == NULL) {
         return A_STATUS_INVALID_PARAM;
     }
-    /* A worker must never wait on another item in its own serialized queue. */
+    /* 工作线程不得等待同一串行队列中的其他工作项，避免自锁。 */
     if (handle->rx.dispatching) return A_STATUS_BUSY;
 
     if (!handle->drv_handle.initialized) {
@@ -316,7 +289,7 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
 
 #endif
 
-    /* First quiesce timer callbacks, then drain any work they submitted. */
+    /* 先停止并等待定时器回调结束，再等待其提交的工作项完成。 */
     status = aOSTimerDestroy(&handle->tx.deadline_timer);
     if (status != A_STATUS_OK) return status;
 
@@ -326,7 +299,6 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
         status = aDevUsartRS485DeInit(handle);
 #endif
         wait_objects_destroy(handle);
-        mutexes_destroy(handle);
         const aBool_t dynamic = handle->dynamic_storage;
         handle_struct_init(handle, dynamic);
     }

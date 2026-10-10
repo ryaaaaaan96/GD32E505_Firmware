@@ -10,6 +10,10 @@ void rcu_periph_clock_enable(rcu_periph_enum clock)
 { (void)clock; effects++; }
 void rcu_periph_clock_disable(rcu_periph_enum clock)
 { (void)clock; effects++; }
+uint32_t test_gpio_spd[7];
+void gpio_compensation_config(uint32_t enable) { (void)enable; }
+unsigned gpio_compensation_flag_get(void) { return SET; }
+
 void gpio_pin_remap_config(uint32_t remap, unsigned enable)
 { (void)remap; (void)enable; effects++; }
 void gpio_init(uint32_t port, uint32_t mode, uint32_t speed, uint32_t pin)

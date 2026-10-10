@@ -1,6 +1,9 @@
 if(NOT ADEV_LED_ENABLE)
     message(FATAL_ERROR "Status LED requires ADEV_LED_ENABLE=ON")
 endif()
+if(NOT ADEV_LED_STATIC_ENABLE)
+    message(FATAL_ERROR "Status LED requires ADEV_LED_STATIC_ENABLE=ON")
+endif()
 
 target_sources(
     ${APP_TARGET}

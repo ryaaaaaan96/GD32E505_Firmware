@@ -38,4 +38,9 @@ with tempfile.TemporaryDirectory(prefix="aclass-system-") as directory:
     for master in (0, 1):
         subprocess.run(command + [f"-DAPP_MODBUS_MASTER_ENABLE={master}"],
                        cwd=root, check=True)
-        subprocess.run([executable], check=True)
+        # 每个场景使用新进程，符合系统仅初始化一次的契约。
+        for failure in range(10):
+            subprocess.run([executable, str(failure)], check=True)
+        for failure in (4, 5):
+            subprocess.run([executable, str(failure), "cleanup_failure"],
+                           check=True)

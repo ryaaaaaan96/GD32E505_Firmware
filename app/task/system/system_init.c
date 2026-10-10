@@ -14,13 +14,16 @@
 #endif
 #if APP_LOG_ENABLE
 #include "log_service.h"
-#include "aLog.h"
 #endif
 #if ASHELL_ENABLE
 #include "aDrv_basic.h"
 #include "aShell.h"
+#include <stdatomic.h>
 #endif
 
+/* --------------------------------------------------------------------------
+ * 系统状态指示灯：设备初始化与周期闪烁任务。
+ * -------------------------------------------------------------------------- */
 static const uint32_t status_blink_period_ms = 500U;
 
 static void statusTask(void *argument)
@@ -50,7 +53,7 @@ static aStatus_t statusInit(void)
     aOSTaskConfigStructInit(&task_config);
     task_config.name = "status";
     task_config.function = statusTask;
-    task_config.stack_bytes = 1024U;
+    task_config.stack_bytes = 256U;
     task_config.priority = AOS_TASK_PRIO_NORMAL;
     task_config.argument = led;
     status = aOSCreateTask(&task_config, NULL);
@@ -61,12 +64,21 @@ static aStatus_t statusInit(void)
     return A_STATUS_OK;
 }
 
-/* 应用任务统一驱动 Shell 输入处理和输出队列发送。 */
+/* --------------------------------------------------------------------------
+ * 系统控制台：Shell 初始化、输入处理与输出队列发送任务。
+ * -------------------------------------------------------------------------- */
 #if ASHELL_ENABLE
+
+/* 初始化期间允许日志入队，服务全部就绪后才处理命令。 */
+static atomic_bool shell_services_ready = ATOMIC_VAR_INIT(0);
 
 static void shellTask(void *argument)
 {
     (void)argument;
+    while (!atomic_load_explicit(&shell_services_ready,
+                                 memory_order_acquire)) {
+        aOSDelayMs(1U);
+    }
     for (;;) {
         /* Process 同时消费输出；无输入或 I/O 错误时短暂退避。 */
         if (aShellProcess() != A_STATUS_OK) {
@@ -77,7 +89,9 @@ static void shellTask(void *argument)
 
 static aStatus_t shellInit(void)
 {
+    aOSTaskConfig_t task_config;
     aStatus_t status;
+    aStatus_t cleanup_status;
     uint32_t core_clock_hz;
 
     status = appSystemConsoleInit();
@@ -90,27 +104,24 @@ static aStatus_t shellInit(void)
                 (unsigned long)core_clock_hz);
     ASHELL_PRINT("system peripherals initialized\r\n");
 
-    return A_STATUS_OK;
-}
-
-/* 所有命令依赖的服务就绪后才启动消费者，避免与初始化交错。 */
-static aStatus_t shellTaskStart(void)
-{
-    aOSTaskConfig_t task_config;
-    aStatus_t status;
-
     aOSTaskConfigStructInit(&task_config);
     task_config.name = "shell";
     task_config.function = shellTask;
     task_config.stack_bytes = 2048U;
     task_config.priority = AOS_TASK_PRIO_LOW;
     status = aOSCreateTask(&task_config, NULL);
+    if (status != A_STATUS_OK) {
+        cleanup_status = appSystemConsoleDeInit();
+        if (cleanup_status != A_STATUS_OK) return cleanup_status;
+    }
     return status;
 }
 
 #endif
 
-/* 基础服务编排：各功能在自己的初始化函数中完成具体配置。 */
+/* --------------------------------------------------------------------------
+ * 系统初始化编排：各功能内部完成具体配置，服务就绪后允许 Shell 任务处理命令。
+ * -------------------------------------------------------------------------- */
 aStatus_t aSystemInit(void)
 {
     aStatus_t status;
@@ -132,7 +143,9 @@ aStatus_t aSystemInit(void)
     status = appLogInit();
     if (status != A_STATUS_OK) {
 #if ASHELL_ENABLE
-        (void)aShellDeInit();
+        /* Shell 任务仍在就绪门控之前，日志初始化失败未产生后台使用者。 */
+        const aStatus_t cleanup_status = appSystemConsoleDeInit();
+        if (cleanup_status != A_STATUS_OK) return cleanup_status;
 #endif
         return status;
     }
@@ -166,14 +179,8 @@ aStatus_t aSystemInit(void)
     }
 
 #if ASHELL_ENABLE
-    status = shellTaskStart();
-    if (status != A_STATUS_OK) {
-#if APP_LOG_ENABLE
-        (void)aLogDeInit();
-#endif
-        (void)aShellDeInit();
-        return status;
-    }
+    /* 发布服务初始化结果，允许已创建的 Shell 任务开始处理命令。 */
+    atomic_store_explicit(&shell_services_ready, 1, memory_order_release);
 #endif
 
     return A_STATUS_OK;

@@ -31,6 +31,10 @@ uint16_t usart_data_receive(uint32_t instance)
     return 0x5aU;
 }
 void rcu_periph_clock_enable(rcu_periph_enum clock) { (void)clock; }
+uint32_t test_gpio_spd[7];
+void gpio_compensation_config(uint32_t enable) { (void)enable; }
+unsigned gpio_compensation_flag_get(void) { return SET; }
+
 void gpio_pin_remap_config(uint32_t remap, unsigned enable)
 {
     ++changes;
