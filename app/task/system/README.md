@@ -7,15 +7,17 @@
 产品输出适配和存储配置统一由 `app/devices/system` 提供。
 日志相关内容按职责分布：
 
-- `app/devices/system/log_config.c`：产品日志配置及输出适配。
-- `log_service.c`：使用设备层配置初始化日志服务。
+- `app/devices/system/system_device.c` 的日志输出段：产品日志配置及输出适配。
+- `system_init.c` 的私有 `logInit()`：使用设备层配置初始化日志并处理失败清理。
 - `log_command.c`：注册 `log` 调试命令。
 
 ## 日志初始化
 
-`aSystemInit` 在 Shell 初始化完成后单独调用 `appLogInit`，
+`aSystemInit` 在 Shell 初始化完成后调用同文件内的私有 `logInit()`，
 Shell 任务已在 `shellInit` 中创建，但等待全部服务就绪后才处理命令和发送队列。
 日志初始化不由 `shellInit` 承担。
+`logInit` 集中完成配置装配、aLog 初始化、失败清理和启动日志；顶层只负责顺序和
+返回状态检查。日志没有独立的 service 文件或对外初始化入口。
 系统启动后业务直接使用 `ALOG_INFO` 等宏，无需再次初始化。
 当前后端直接调用 `app_system_console_stream.write`，不经过 Shell 队列。
 没有新增日志任务或日志队列；Shell 与日志共用 console_write 的 TX 锁。
@@ -61,7 +63,7 @@ I/flash           [1234 ms] Flash backend can be added later
 ## 后续后端
 
 通用接口在 [aLog.h](../../../func/aLog/aLog.h)，应用可在
-`app/devices/system/log_config.c` 中将输出回调替换为：
+`app/devices/system/system_device.c` 的日志输出段中将输出回调替换为：
 
 - Flash 队列：复制日志，应用后台任务调用 TSDB。
 - Linux 输出：终端、文件或其他日志设施。

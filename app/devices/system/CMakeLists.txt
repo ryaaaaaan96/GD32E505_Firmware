@@ -36,7 +36,6 @@ if(ASHELL_ENABLE)
 endif()
 
 if(app_log_enable)
-    target_sources(${APP_TARGET} PRIVATE log_config.c)
     target_link_libraries(${APP_TARGET} PRIVATE aLog)
 endif()
 

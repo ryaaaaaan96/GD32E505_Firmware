@@ -13,7 +13,7 @@
 #include "database_service.h"
 #endif
 #if APP_LOG_ENABLE
-#include "log_service.h"
+#include "aLog.h"
 #endif
 #if ASHELL_ENABLE
 #include "aDrv_basic.h"
@@ -120,6 +120,33 @@ static aStatus_t shellInit(void)
 #endif
 
 /* --------------------------------------------------------------------------
+ * 系统日志：配置装配、初始化与启动日志，不创建独立任务。
+ * -------------------------------------------------------------------------- */
+#if APP_LOG_ENABLE
+
+static aStatus_t logInit(void)
+{
+    aLogConfig_t config;
+    aStatus_t status;
+    aStatus_t cleanup_status;
+
+    /* 控制台已就绪；日志直接提交串口，不受 Shell 消费者门控影响。 */
+    appSystemLogConfigInit(&config);
+    status = aLogInit(&config);
+    if (status != A_STATUS_OK) {
+        /* 日志尚未就绪，Shell 仍在等待；此时可清理未使用的控制台。 */
+        cleanup_status = appSystemConsoleDeInit();
+        if (cleanup_status != A_STATUS_OK) return cleanup_status;
+        return status;
+    }
+    /* 初始化成功不以启动日志是否成功提交串口作为判据。 */
+    (void)ALOG_INFO("system", "EasyLogger ready");
+    return A_STATUS_OK;
+}
+
+#endif
+
+/* --------------------------------------------------------------------------
  * 系统初始化编排：各功能内部完成具体配置，服务就绪后允许 Shell 任务处理命令。
  * -------------------------------------------------------------------------- */
 aStatus_t aSystemInit(void)
@@ -139,14 +166,8 @@ aStatus_t aSystemInit(void)
 #endif
 
 #if APP_LOG_ENABLE
-    /* 控制台已就绪；日志直接提交串口，不受 Shell 消费者门控影响。 */
-    status = appLogInit();
+    status = logInit();
     if (status != A_STATUS_OK) {
-#if ASHELL_ENABLE
-        /* Shell 任务仍在就绪门控之前，日志初始化失败未产生后台使用者。 */
-        const aStatus_t cleanup_status = appSystemConsoleDeInit();
-        if (cleanup_status != A_STATUS_OK) return cleanup_status;
-#endif
         return status;
     }
 #endif

@@ -1,7 +1,6 @@
 #include "aLog.h"
 #include "aShell.h"
 #include "aShell_config.h"
-#include "log_service.h"
 #include "system_device.h"
 #include "aDev_usart.h"
 #include "os_mock.h"
@@ -116,6 +115,7 @@ static void *log_worker(void *argument)
 
 int main(void)
 {
+    aLogConfig_t log_config;
     aLogStats_t log_stats;
     aShellOutputStats_t shell_stats;
     char full[ASHELL_OUTPUT_BUFFER_SIZE];
@@ -128,7 +128,9 @@ int main(void)
     assert(aShellWrite(NULL, 0U) == A_STATUS_OK);
     assert(aShellProcess() == A_STATUS_BUSY);
     reset_output();
-    assert(appLogInit() == A_STATUS_OK);
+    appSystemLogConfigInit(&log_config);
+    assert(aLogInit(&log_config) == A_STATUS_OK);
+    assert(ALOG_INFO("system", "EasyLogger ready") == A_STATUS_OK);
     assert(write_calls == 1U); /* 日志直接提交，不等待 Shell 消费。 */
     assert(aShellProcess() == A_STATUS_BUSY);
     assert(strstr(output, "I/system") != NULL);

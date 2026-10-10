@@ -5,7 +5,7 @@ target_sources(
 )
 
 if(app_log_enable)
-    target_sources(${APP_TARGET} PRIVATE log_service.c log_command.c)
+    target_sources(${APP_TARGET} PRIVATE log_command.c)
 endif()
 
 if(ABUS_ENABLE)

@@ -15,6 +15,9 @@
 #if ASHELL_ENABLE
 #include "aStream.h"
 #endif
+#if APP_LOG_ENABLE
+#include "aLog.h"
+#endif
 
 /**
  * @brief 初始化状态灯并取得共享句柄。
@@ -56,5 +59,12 @@ aStatus_t appSystemConsoleInit(void);
  * 串口释放失败保留句柄、TX 锁与 Shell，允许重试；成功后丢弃排队输出。
  */
 aStatus_t appSystemConsoleDeInit(void);
+#endif
+
+#if APP_LOG_ENABLE
+/* 填充日志配置，不创建资源；使用输出回调前须完成 appSystemConsoleInit。
+ * 回调直接共享控制台，使用 20 ms 总发送预算，部分提交返回 ERROR，不重试。
+ * 日志锁由 aLog 管理，串口 TX 锁由控制台管理；此处不增加互斥对象。 */
+void appSystemLogConfigInit(aLogConfig_t *config);
 #endif
 #endif

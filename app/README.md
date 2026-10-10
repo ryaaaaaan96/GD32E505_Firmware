@@ -9,11 +9,11 @@
 | 职责 | 文件名示例 |
 | --- | --- |
 | 业务测点清单 | `sig/IDU_sig.inc`、`sig/FAN_sig.inc` |
-| 系统服务配置与生命周期 | `database_service.c`、`log_service.c`、`data_bus_service.c` |
+| 系统服务配置与生命周期 | `system_init.c`、`database_service.c`、`data_bus_service.c` |
 | 协议映射及采集清单 | `mapping/FAN_modbus_master.inc`、`mapping/IDU_modbus_slave.inc` |
 | 协议角色和服务参数 | `FAN_modbus_master.c`、`IDU_modbus_slave.c` |
 | 任务创建与运行循环 | `protocol.c`、`sig_task.c` |
-| 板级资源配置与注册 | `rs485_device.c`、`memory_config.c`、`log_config.c` |
+| 板级资源配置与注册 | `rs485_device.c`、`memory_config.c`、`system_device.c` |
 | 设备实例与访问入口 | `system_device.c`、`flash_device.c` |
 | Shell 命令 | `data_bus_command.c`、`database_command.c`、`log_command.c` |
 | 测点标识与共享数据类型 | `IDU_sig_table.h`、`FAN_sig_table.h` |
@@ -63,11 +63,10 @@ app/
 
 - 系统 console 实例随 ASHELL_ENABLE 启用或裁剪，不再单独设置应用 USART 开关。
 - devices/system/system_device.h：系统设备的 LED 句柄、console 流专用初始化接口。
-- devices/system/system_device.c：统一管理系统设备的 LED 与 USART 配置结构、缓冲区和私有句柄；参数直接在本文件中配置。
-- task/system/system_init.c：统一管理 LED 状态任务和 Shell 任务，内部逐项初始化设备、服务并创建任务；对外仅提供 aSystemInit。
+- devices/system/system_device.c：统一管理 LED、控制台串口及日志输出适配；配置、缓冲区和私有句柄按功能分段组织。
+- task/system/system_init.c：统一管理 LED、Shell 任务和日志初始化，内部逐项初始化设备、服务并创建任务；对外仅提供 aSystemInit。
 - task/system/system_init.h：声明系统服务启动入口 aSystemInit。
-- devices/system/log_config.c：日志输出适配与配置，当前直接共享控制台串口。
-- task/system/log_service.c：日志服务初始化；log_command.c 提供调试命令。
+- task/system/log_command.c：日志调试命令，服务初始化由 system_init.c 的私有 logInit 完成。
 - devices/system/database_config.c：数据库分区选择、超时和记录容量配置。
 - task/system/database_service.c：数据库实例管理和读写；database_command.c 提供调试命令。
 - app_config.h：aBus 绑定实例号、调试角色和站号配置，默认 Modbus 从站 1。
@@ -96,7 +95,8 @@ app/
 func 不创建/删除任务，不配置任务优先级和栈大小。
 协议配置、注册和扩展步骤见 [protocol 说明](protocol/README.md)。
 
-日志由 aSystemInit 在 Shell 初始化完成后单独调用 appLogInit，
+日志由 aSystemInit 在 Shell 初始化完成后调用同文件内的私有 logInit，
+该函数负责装配配置、初始化、失败清理和启动日志，顶层只检查返回状态。
 Shell 任务在 shellInit 中创建，等待全部服务就绪后才处理命令及输出，
 不创建单独日志任务。
 Flash 探测、aMemory 分区注册、数据库和 protocolInit 由 aSystemInit 显式编排；

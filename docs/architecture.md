@@ -189,9 +189,11 @@ aMemory 分区、数据库、SIG 服务及测试任务，再初始化 Modbus 和
 aOSDeleteTask(handle) 仍用于删除指定任务，传入 NULL 保持空操作语义。
 system_init.c 内部的静态函数 statusInit 调用 appSystemStatusLedInit 并创建状态任务；
 同文件内 shellInit 初始化控制台、Shell 并创建任务，
-aSystemInit 随后单独调用 appLogInit；
-日志输出适配及配置位于 app/devices/system/log_config.c，初始化入口和
-调试命令位于 app/task/system/log_service.c、log_command.c。
+aSystemInit 随后调用同文件内的私有 logInit，完成配置装配、日志初始化、
+失败清理与启动日志；顶层编排只调用并检查返回值。
+日志输出适配及配置合并在 app/devices/system/system_device.c 的独立日志段，
+由 system_device.h 声明配置入口；调试命令位于
+app/task/system/log_command.c；不再提供独立日志服务初始化接口。
 日志直接调用公开只读 app_system_console_stream，与 Shell 共用 console_write
 中的 TX 锁；日志可能先于仍在 Shell 队列中的启动文字输出。
 Shell 任务通过原子就绪标志等待，服务全部就绪前不调用 Process。

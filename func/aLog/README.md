@@ -14,10 +14,11 @@ aLog 封装 EasyLogger，提供单例日志、等级过滤、十六进制输出�
 
 aLog 不依赖 Shell、Flash25q 或 aDataBase，也不创建业务任务。
 应用通过 `aLogConfig_t.output` 注入后端，`context` 可以关联后端状态。
-当前输出适配与配置在 `app/devices/system/log_config.c`，
+当前输出适配与配置在 `app/devices/system/system_device.c` 的日志输出段，
 这里直接调用 `app_system_console_stream.write`，与 Shell 共用控制台 TX 锁。
 不经过 Shell 队列，不受 Shell 长命令或队列满影响；调用者可能等待串口。
-初始化入口和调试命令在 `app/task/system/`。
+产品初始化由 `app/task/system/system_init.c` 的私有 `logInit()` 完成，
+同目录 `log_command.c` 提供调试命令。
 Flash 日志后端尚未实现；后续可由应用回调复制入队，再在任务中写 TSDB。
 
 回调在日志调用者任务中持日志锁执行，不能重入 aLog。
@@ -32,7 +33,7 @@ Flash 日志后端尚未实现；后续可由应用回调复制入队，再在�
 ## 初始化与调用
 
 ```c
-#include "log_config.h"
+#include "system_device.h"
 
 aLogConfig_t config;
 /* 产品控制台已由 appSystemConsoleInit 初始化。 */

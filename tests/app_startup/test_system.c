@@ -5,7 +5,7 @@
 #include "flash_device.h"
 #include "memory_config.h"
 #include "database_service.h"
-#include "log_service.h"
+#include "aLog.h"
 #include "protocol.h"
 #include "aShell.h"
 #include "aDrv_basic.h"
@@ -18,6 +18,7 @@
 
 static unsigned stage, failure, shell_tasks, cleanup_calls;
 static unsigned blocked_probes, processed_probes;
+static unsigned log_messages;
 static aBool_t console_owned, expect_commands, cleanup_failure;
 static aOSTaskFunction_t shell_entry;
 static void *shell_argument;
@@ -103,7 +104,38 @@ aStatus_t appSystemConsoleDeInit(void)
     return A_STATUS_OK;
 }
 
-aStatus_t appLogInit(void) { assert(stage == 4U); return step(); }
+static aStatus_t log_output(void *context, const char *data, size_t size)
+{
+    (void)context;
+    (void)data;
+    (void)size;
+    assert(0); /* 初始化编排测试不访问真实输出端。 */
+    return A_STATUS_ERROR;
+}
+
+void appSystemLogConfigInit(aLogConfig_t *config)
+{
+    assert(stage == 4U && console_owned);
+    aLogConfigStructInit(config);
+    config->output = log_output;
+}
+
+aStatus_t aLogInit(const aLogConfig_t *config)
+{
+    assert(stage == 4U && config->output == log_output);
+    return step();
+}
+
+aStatus_t aLogWrite(aLogLevel_t level, const char *tag,
+                   const char *format, ...)
+{
+    assert(stage == 5U && failure != 5U && console_owned);
+    assert(level == ALOG_LEVEL_INFO && strcmp(tag, "system") == 0);
+    assert(strcmp(format, "EasyLogger ready") == 0);
+    ++log_messages;
+    /* 启动日志丢弃不应使已完成的服务初始化失败。 */
+    return A_STATUS_BUSY;
+}
 aStatus_t appSystemFlashInit(void) { assert(stage == 5U); return step(); }
 aStatus_t appSystemMemoryInit(void) { assert(stage == 6U); return step(); }
 aStatus_t appDatabaseInit(void) { assert(stage == 7U); return step(); }
@@ -158,6 +190,7 @@ int main(int argc, char **argv)
     assert(stage == (failure == 0U ? 9U : failure));
     assert(shell_tasks == (failure == 0U || failure >= 4U ? 1U : 0U));
     assert(cleanup_calls == (failure == 4U || failure == 5U ? 1U : 0U));
+    assert(log_messages == (failure == 0U || failure > 5U ? 1U : 0U));
     if (cleanup_calls) assert(console_owned == cleanup_failure);
     probe_shell(status == A_STATUS_OK);
     assert(processed_probes == (failure == 0U ? 1U : 0U));

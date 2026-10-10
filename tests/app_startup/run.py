@@ -29,10 +29,12 @@ with tempfile.TemporaryDirectory(prefix="aclass-system-") as directory:
         "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
         *["-I" + path for path in includes],
         *["-D" + feature + "=1" for feature in (
-            "ASHELL_ENABLE", "APP_LOG_ENABLE", "ADEV_FLASH25Q_ENABLE",
+            "ASHELL_ENABLE", "APP_LOG_ENABLE", "ALOG_ENABLE",
+            "ADEV_FLASH25Q_ENABLE",
             "AMEMORY_ENABLE", "APP_DATABASE_ENABLE", "ABUS_ENABLE",
             "APP_MODBUS_ENABLE")],
         "app/task/system/system_init.c", "tests/app_startup/test_system.c",
+        "func/aLog/aLog_config.c", "-DALOG_OUTPUT_LEVEL=5",
         "-o", executable,
     ]
     for master in (0, 1):
