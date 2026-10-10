@@ -8,35 +8,35 @@ aLog 封装 EasyLogger，提供单例日志、等级过滤、十六进制输出�
 ## 输出边界
 
 ```text
-业务任务 → aLog → 应用输出回调 → Shell 队列 → Shell 任务 → 串口
+业务任务 → aLog → 应用输出回调 → console_write（TX 锁）→ 串口
                           └─ 后续可接 Flash 队列 / 文件 / 多后端分发
 ```
 
 aLog 不依赖 Shell、Flash25q 或 aDataBase，也不创建业务任务。
 应用通过 `aLogConfig_t.output` 注入后端，`context` 可以关联后端状态。
 当前输出适配与配置在 `app/devices/system/log_config.c`，
-这里只调用 Shell 原始字节入队接口。
+这里直接调用 `app_system_console_stream.write`，与 Shell 共用控制台 TX 锁。
+不经过 Shell 队列，不受 Shell 长命令或队列满影响；调用者可能等待串口。
 初始化入口和调试命令在 `app/task/system/`。
 Flash 日志后端尚未实现；后续可由应用回调复制入队，再在任务中写 TSDB。
 
 回调在日志调用者任务中持日志锁执行，不能重入 aLog。
 `data` 仅在回调期间有效，不保证以 NUL 结尾，必须按 `size` 消费或复制。
-返回 OK 表示完整接收；同步后端可已完成写入，异步后端仅表示成功入队。
+返回 OK 表示完整接收；当前串口后端表示整条提交到发送缓冲区，不表示线路完成。
+当前后端每次提交使用 20 ms 总预算，包含 TX 锁等待与串口写入。
+部分提交返回 ERROR，可能已经输出前缀，不读取旧 errno、不重试整条日志。
+无进展失败按 errno 返回 BUSY、TIMEOUT、NOT_READY 等错误。
 后端失败直接返回，不重试；多个后端需要应用自行定义部分成功的处理方式。
 耗时后端若直接写 Flash，仍会阻塞日志调用者，应按业务需求提供后台队列。
 
 ## 初始化与调用
 
 ```c
-static aStatus_t output(void *context, const char *data, size_t size)
-{
-    (void)context;
-    return aShellWrite(data, size);
-}
+#include "log_config.h"
 
 aLogConfig_t config;
-aLogConfigStructInit(&config);
-config.output = output;
+/* 产品控制台已由 appSystemConsoleInit 初始化。 */
+appSystemLogConfigInit(&config);
 config.level = ALOG_LEVEL_INFO;
 aStatus_t status = aLogInit(&config);
 ```
@@ -58,10 +58,15 @@ Init/DeInit 要求外部串行化；销毁前停止所有调用者。
 ## 同步、长度与返回值
 
 aOS 外层互斥锁覆盖等级过滤、正文格式化、上游处理和输出回调。
+保护的对象包括共享正文缓冲区、EasyLogger 单例、时间文本、输出结果和统计。
+它不能替代设备锁：其他模块并不持有日志锁；设备锁也不能保护发送前的格式化。
 官方内部锁关闭，相关钩子为空实现，避免同一互斥锁重复获取。
 上游头文件只在模块内部可见；业务不得绕过 aLog 直接调用 `elog_*`。
 默认锁忙返回 BUSY，可以配置有限等待或 FOREVER。
-`lock_timeout` 仅控制日志锁等待，不控制回调中的存储等待。
+`lock_timeout` 仅控制日志锁等待，不控制输出回调的等待。
+固定获取顺序为日志锁 → 控制台 TX 锁；控制台适配和底层驱动不得反向调用 aLog。
+Shell 发送前已释放自己的队列锁，因此命令中调用日志不形成反向锁依赖。
+Init/DeInit 不由这些锁自动保护，仍须停止使用者后串行执行。
 
 正文先由 `vsnprintf` 格式化；官方没有 `va_list` 输出入口，再通过 `%s`
 交给 EasyLogger 增加头部。正文不需要自行追加换行。
@@ -101,7 +106,8 @@ set(ALOG_LINE_BUFFER_SIZE 256)
 静态最高等级：1 ERROR、2 WARN、3 INFO、4 DEBUG、5 VERBOSE。
 运行阈值不能恢复已编译裁剪的等级，实际输出受两个阈值共同限制。
 `ALOG_LINE_BUFFER_SIZE` 范围为 256..4096，容量含头部、颜色和 CRLF。
-当前 Shell 队列只有 1024 字节，更大的单条日志需要相应的后端容量。
+当前后端按串口发送能力和 20 ms 预算提交；增大日志行容量可能增加部分发送失败，
+需要同时评估波特率、发送缓冲区及后端超时，不受 Shell 队列容量限制。
 关闭日志后保留 target 和空实现，打印宏不求值参数，不编译上游和 OS 锁。
 模块及官方核心继承项目告警和优化参数，没有局部告警豁免。
 
@@ -116,7 +122,8 @@ cmake --build build/Debug --parallel 4
 ```
 
 主机测试编译真实 EasyLogger，并验证生命周期、配置复制、边界、过滤、
-后端错误、四线程并发、关闭宏、实际 Shell 队列与命令处理。
-使用 256 / 512 字节两种行容量，512 字节场景检查超过 Shell printf 容量的
-日志仍可通过原始字节队列输出。Release 矩阵验证关闭、独立后端、等级裁剪和行容量。
+后端错误、四线程并发、关闭宏、真实控制台适配与 Shell 命令处理。
+共享控制台测试以串口替身检查并发发送互斥、Shell 队列满不阻塞日志、部分写入
+不误报成功，以及 256 / 512 字节行容量。Release 矩阵验证关闭、独立后端、
+等级裁剪和行容量；主机测试不代表板端串口时序验证。
 板端操作见 [系统任务与日志调试](../../app/task/system/README.md)。

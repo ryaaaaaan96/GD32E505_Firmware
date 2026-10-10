@@ -2,6 +2,7 @@
 #include "aDev_led_instance.h"
 #if ASHELL_ENABLE
 #include "aDev_usart.h"
+#include "aOS.h"
 #include "aShell.h"
 #endif
 
@@ -67,8 +68,9 @@ static const aDevUsartConfig_t usart_config = {
     },
 };
 
-/* 串口读写仅由 Shell 处理任务调用；后台输出先入 Shell 队列，无需串口锁。 */
+/* RX 由 Shell 独占；TX 由 Shell 和日志共享，只在统一发送入口加锁。 */
 static aDevUsartHandle_t *console_handle;
+static aOSMutex_t console_tx_mutex;
 
 /* 应用适配：通用流不暴露 USART 类型；接收故障先报告给 Shell 再恢复。 */
 static aSSize_t console_read(void *buffer, size_t size,
@@ -83,8 +85,46 @@ static aSSize_t console_read(void *buffer, size_t size,
 static aSSize_t console_write(const void *buffer, size_t size,
                              aTimeout_t timeout)
 {
-    return aDevUsartWrite(console_handle, buffer, size, timeout);
+    aTimepoint_t deadline;
+    aTimeout_t remaining;
+    aStatus_t status;
+    aSSize_t count;
+
+    if (!aTimeoutIsValid(timeout) || size > (size_t)PTRDIFF_MAX ||
+        (buffer == NULL && size != 0U)) {
+        return aOSFailWithStatus(A_STATUS_INVALID_PARAM);
+    }
+    if (console_handle == NULL) {
+        return aOSFailWithStatus(A_STATUS_NOT_READY);
+    }
+    if (size == 0U) return 0;
+
+    deadline = aTimepointCalc(timeout, aOSGetUptimeMs());
+    status = aOSMutexLock(console_tx_mutex, timeout);
+    if (status != A_STATUS_OK) return aOSFailWithStatus(status);
+
+    /* 锁等待与串口写入共用预算；NO_WAIT 仍允许尝试立即提交。 */
+    remaining = aTimepointRemaining(&deadline, aOSGetUptimeMs());
+    if (timeout.type == A_TIMEOUT_TYPE_RELATIVE &&
+        timeout.milliseconds != 0U && remaining.milliseconds == 0U) {
+        count = aOSFailWithStatus(A_STATUS_TIMEOUT);
+    } else {
+        count = aDevUsartWrite(
+            console_handle, buffer, size, remaining);
+    }
+    status = aOSMutexUnlock(console_tx_mutex);
+    /* 已提交的字节必须返回实际进度，不能因解锁错误诱发整段重发。 */
+    if (count == 0 && status != A_STATUS_OK) {
+        return aOSFailWithStatus(status);
+    }
+    return count;
 }
+
+const aStream_t app_system_console_stream = {
+    .read = console_read,
+    .write = console_write,
+    .flush = NULL, /* write 已提交发送；不等同于线路发送完成。 */
+};
 
 aStatus_t appSystemConsoleInit(void)
 {
@@ -95,15 +135,16 @@ aStatus_t appSystemConsoleInit(void)
     /* 保留仍在使用或尚未清理成功的句柄，避免 Create 覆盖所有权。 */
     if (console_handle != NULL) return A_STATUS_BUSY;
     aShellConfigStructInit(&config);
+    status = aOSMutexCreate(&console_tx_mutex);
+    if (status != A_STATUS_OK) return status;
     status = aDevUsartCreate(
         &usart_config,
         &console_handle);
     if (status != A_STATUS_OK) {
+        aOSMutexDestroy(&console_tx_mutex);
         return status;
     }
-    config.stream.read = console_read;
-    config.stream.write = console_write;
-    config.stream.flush = NULL; /* write 已直接提交数据到串口。 */
+    config.stream = app_system_console_stream;
     config.read_timeout = A_TIMEOUT_MS(20U);
     config.write_timeout = A_TIMEOUT_MS(20U);
 
@@ -112,6 +153,7 @@ aStatus_t appSystemConsoleInit(void)
         cleanup_status = aDevUsartDestroy(console_handle);
         if (cleanup_status != A_STATUS_OK) return cleanup_status;
         console_handle = NULL;
+        aOSMutexDestroy(&console_tx_mutex);
         return status;
     }
     return A_STATUS_OK;
@@ -126,6 +168,7 @@ aStatus_t appSystemConsoleDeInit(void)
     status = aDevUsartDestroy(console_handle);
     if (status != A_STATUS_OK) return status;
     console_handle = NULL;
+    aOSMutexDestroy(&console_tx_mutex);
     status = aShellDeInit();
     /* Shell 初始化失败后，也允许通过此入口清理遗留串口。 */
     return status == A_STATUS_NOT_READY ? A_STATUS_OK : status;

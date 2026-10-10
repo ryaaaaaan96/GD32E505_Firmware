@@ -12,7 +12,7 @@ set(ABUS_LOCK_GRANULARITY BUS)
 set(ASHELL_ENABLE ON)
 # Shell command history entries (1..255).
 set(ASHELL_HISTORY_COUNT 10)
-# 日志核心不依赖 Shell；当前应用将日志接入 Shell 队列。
+# 日志核心不依赖 Shell；当前应用直接共享随 Shell 初始化的控制台串口。
 set(ALOG_ENABLE ON)
 # 静态最高等级：1 ERROR、2 WARN、3 INFO、4 DEBUG、5 VERBOSE。
 set(ALOG_OUTPUT_LEVEL 5)

@@ -37,8 +37,8 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | Modbus 协议、aBus 映射与通用 RTU 多实例/时序 | `python3 tests/modbus/run.py` |
 | 协议统一入口、启动顺序与功能关闭 | `python3 tests/protocol_tasks/run.py` |
 | Modbus 板级端口、主从、任务调度与生命周期 | `python3 tests/modbus_demo/run.py` |
-| Shell / 日志 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
-| 应用设备清理、启动编排与 Shell 就绪门控 | `python3 tests/app_devices/run.py`、`python3 tests/app_startup/run.py` |
+| Shell / 日志、共享控制台发送互斥及部分写入 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
+| 应用设备清理、TX 锁超时、启动编排与 Shell 就绪门控 | `python3 tests/app_devices/run.py`、`python3 tests/app_startup/run.py` |
 | 调试脚本 | `python3 tests/scripts/test_debug.py` |
 
 部分脚本支持通过 `SANITIZE=1` 增加 AddressSanitizer 检查，例如：

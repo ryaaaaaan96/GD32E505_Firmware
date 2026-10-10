@@ -3,6 +3,8 @@
  * @brief 基于流的单例命令控制台；由应用任务调用 Process。
  * Init/DeInit 必须外部串行化；销毁前退出所有 API 用户。
  * 除配置初始化和 IsEnabled 外，仅允许任务上下文调用。
+ * 内部锁仅保护输出队列，不保护 stream；共享设备由应用流适配器串行化。
+ * Process 必须单任务调用，解析器、历史和命令执行不通过队列锁保护。
  */
 #ifndef A_SHELL_H
 #define A_SHELL_H

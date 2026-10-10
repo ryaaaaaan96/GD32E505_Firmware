@@ -9,6 +9,7 @@ _Static_assert(ATOMIC_INT_LOCK_FREE == 2,
 _Static_assert(ASHELL_OUTPUT_BUFFER_SIZE >= ASHELL_PRINT_BUFFER_SIZE,
                "Output queue must hold a complete formatted message");
 
+/* 仅保护多生产者队列；调用 stream.write 前释放，不能充当硬件发送锁。 */
 static struct {
     aOSMutex_t mutex;
     char data[ASHELL_OUTPUT_BUFFER_SIZE];
@@ -67,9 +68,9 @@ aStatus_t aShellOutputWrite(const char *data, size_t size)
     return A_STATUS_OK;
 }
 
-/* Exactly one Process caller consumes. Bytes remain occupied while write is
- * running, so producers cannot overwrite the span passed to the stream.
- * Drain only the initial snapshot to bound work under continuous producers.
+/* 只有 Process 单一消费者。发送期间字节保持占用，生产者不能覆盖它们。
+ * 实际 I/O 在队列锁外执行，完成后再加锁提交消费进度。
+ * 每次仅发送初始快照，避免持续生产导致本轮无法结束。
  */
 static aStatus_t output_drain(const aTimepoint_t *deadline)
 {

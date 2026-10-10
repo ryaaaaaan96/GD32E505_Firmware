@@ -69,7 +69,7 @@ static aStatus_t statusInit(void)
  * -------------------------------------------------------------------------- */
 #if ASHELL_ENABLE
 
-/* 初始化期间允许日志入队，服务全部就绪后才处理命令。 */
+/* 初始化期间允许 Shell 文字入队，服务全部就绪后才消费并处理命令。 */
 static atomic_bool shell_services_ready = ATOMIC_VAR_INIT(0);
 
 static void shellTask(void *argument)
@@ -139,7 +139,7 @@ aStatus_t aSystemInit(void)
 #endif
 
 #if APP_LOG_ENABLE
-    /* 当前日志输出依赖 Shell 队列，由系统在消费者启动前单独初始化。 */
+    /* 控制台已就绪；日志直接提交串口，不受 Shell 消费者门控影响。 */
     status = appLogInit();
     if (status != A_STATUS_OK) {
 #if ASHELL_ENABLE

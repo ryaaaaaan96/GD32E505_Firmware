@@ -16,6 +16,8 @@ _Static_assert(ALOG_LEVEL_ERROR == ELOG_LVL_ERROR &&
                ALOG_LEVEL_VERBOSE == ELOG_LVL_VERBOSE,
                "Log level mapping changed");
 
+/* 此锁保护格式化、上游单例和统计，不代替输出设备的共享访问锁。
+ * 输出回调在锁内执行，以保证传入的数据在回调返回前不被其他日志覆盖。 */
 static struct {
     aOSMutex_t mutex;
     aLogConfig_t config;

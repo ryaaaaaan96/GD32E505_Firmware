@@ -66,7 +66,7 @@ app/
 - devices/system/system_device.c：统一管理系统设备的 LED 与 USART 配置结构、缓冲区和私有句柄；参数直接在本文件中配置。
 - task/system/system_init.c：统一管理 LED 状态任务和 Shell 任务，内部逐项初始化设备、服务并创建任务；对外仅提供 aSystemInit。
 - task/system/system_init.h：声明系统服务启动入口 aSystemInit。
-- devices/system/log_config.c：日志输出适配与配置，当前接 Shell 字节队列。
+- devices/system/log_config.c：日志输出适配与配置，当前直接共享控制台串口。
 - task/system/log_service.c：日志服务初始化；log_command.c 提供调试命令。
 - devices/system/database_config.c：数据库分区选择、超时和记录容量配置。
 - task/system/database_service.c：数据库实例管理和读写；database_command.c 提供调试命令。
@@ -116,6 +116,7 @@ system 设备公开 appSystemStatusLedInit 与 appSystemConsoleInit，保留按�
 
 控制台通过 `appSystemConsoleInit(void)` 初始化 USART、绑定 Stream 并初始化 aShell 单例，
 USART 类型、私有控制台句柄指针和适配回调只在 app/devices 内部使用；
+公开只读 `app_system_console_stream`，Shell 和日志统一通过它访问串口；
 流接口不携带 context，回调直接访问已绑定的控制台句柄。aStream_t 定义在
 platform/aLib/include/aStream.h；Shell 配置在设备初始化函数内构造，任务层创建并运行 Shell 任务。
 flush 非空时表示显式提交缓冲输出；NULL 表示 write 已直接提交，无需刷新。
@@ -123,13 +124,16 @@ flush 不等待线路完成、不丢弃输入；Shell 不自动调用。
 
 当前控制台使用 aDevUsartCreate 动态分配对象，Shell 初始化失败时调用
 aDevUsartDestroy 回收；产品必须开启 ADEV_USART_DYNAMIC_ENABLE。
-创建 Shell 任务或初始化日志失败时，统一释放控制台串口及 Shell 队列；
-清理失败返回清理错误并保留串口句柄，允许在独占条件下重试清理。
+创建 Shell 任务或初始化日志失败时，统一释放控制台串口、TX 锁及 Shell 队列；
+串口清理失败保留句柄和 TX 锁，允许在独占条件下重试清理。
 日志就绪后的服务初始化失败仍进入 appFatal，Shell 门控不放行，
 不尝试回滚可能已有使用者的全部服务，也不支持重试整个系统初始化。
 
-控制台串口只由 Shell 消费任务读写，后台日志通过 Shell 队列入队；
-RS485 只由选定的 Modbus 协议任务调用。两者无额外串口互斥锁。
+控制台接收由 Shell 独占，不加 RX 锁；发送由 Shell 和日志共享，
+`console_write` 使用一把 TX 锁覆盖单次写入，锁等待与发送共用超时预算。
+aLog 锁保护共享格式化和统计，Shell 锁保护输出队列；两者都不代替 TX 锁。
+日志绕过 Shell 队列，不保证与排队的启动文字、命令回显按调用顺序显示。
+RS485 只由选定的 Modbus 协议任务调用，不额外创建串口互斥锁。
 若新增直接访问者，应用设备入口须协调同方向 API 及完整 RS485 事务，
 关闭设备前须先停止所有使用者。设备层的 BUSY 检查不能替代应用互斥。
 

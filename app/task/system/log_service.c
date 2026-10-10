@@ -10,7 +10,7 @@ aStatus_t appLogInit(void)
     appSystemLogConfigInit(&config);
     status = aLogInit(&config);
     if (status != A_STATUS_OK) return status;
-    /* 初始化成功不以欢迎日志是否成功入队作为判据。 */
+    /* 初始化成功不以欢迎日志是否成功提交串口作为判据。 */
     (void)ALOG_INFO("system", "EasyLogger ready");
     return A_STATUS_OK;
 }

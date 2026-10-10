@@ -17,12 +17,14 @@
 Shell 任务已在 `shellInit` 中创建，但等待全部服务就绪后才处理命令和发送队列。
 日志初始化不由 `shellInit` 承担。
 系统启动后业务直接使用 `ALOG_INFO` 等宏，无需再次初始化。
-当前后端使用 `aShellWrite` 将完整日志复制进 Shell 队列，不直接操作 USART。
-没有新增日志任务或日志队列；Shell 任务统一负责发送，串口不再创建任务互斥锁。
+当前后端直接调用 `app_system_console_stream.write`，不经过 Shell 队列。
+没有新增日志任务或日志队列；Shell 与日志共用 console_write 的 TX 锁。
+aLog 保留格式化状态锁，Shell 保留输出队列锁，实际串口操作不持 Shell 队列锁。
 Shell 任务创建失败或日志初始化失败时，通过 appSystemConsoleDeInit 清理控制台；
-串口释放失败保留句柄并报告错误。其他服务启动失败不回滚全部系统资源，
+串口释放失败保留句柄及 TX 锁并报告错误。其他服务启动失败不回滚全部系统资源，
 仍按启动失败停止运行处理，不开放 Shell 命令或重新执行系统初始化。
 启动时会看到含等级和启动毫秒数的 `EasyLogger ready` 日志。
+日志不等待 Shell 就绪门控，因此可能先于仍在 Shell 队列中的欢迎信息输出。
 
 ## 板端测试
 
@@ -50,9 +52,11 @@ log level info
 I/flash           [1234 ms] Flash backend can be added later
 ```
 
-日志接收成功表示进入 Shell 队列，不代表串口已经发送完成。
-队列满或锁争用时整条丢弃，可通过 `log info` 查看累计次数。
-这些命令只验证当前 Shell 后端，不擦除或写入 Flash。
+日志接收成功表示整条已提交串口发送缓冲区，不代表线路发送完成。
+发送使用 20 ms 总预算，包含 TX 锁等待；日志锁等待由 aLog 的 lock_timeout 控制。
+锁争用、超时和部分发送会计入 dropped，可通过 `log info` 查看；
+部分发送可能已输出前缀，不重试整条日志。Shell 队列满不会阻止日志输出。
+这些命令只验证当前控制台后端，不擦除或写入 Flash。
 
 ## 后续后端
 
@@ -61,7 +65,7 @@ I/flash           [1234 ms] Flash backend can be added later
 
 - Flash 队列：复制日志，应用后台任务调用 TSDB。
 - Linux 输出：终端、文件或其他日志设施。
-- 多后端：应用分发到 Shell 和 Flash，并明确部分成功策略。
+- 多后端：应用分发到控制台和 Flash，并明确部分成功策略。
 
 Flash 后端须在回调返回前复制数据，不能保存上游静态缓冲区的指针。
 

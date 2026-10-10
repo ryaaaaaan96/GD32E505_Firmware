@@ -7,7 +7,8 @@ import tempfile
 
 root = Path(__file__).resolve().parents[2]
 with tempfile.TemporaryDirectory(prefix="aclass-app-devices-") as directory:
-    for scenario in ("NORMAL", "LED_FAILURE", "USART_FAILURE", "SHELL_FAILURE",
+    for scenario in ("NORMAL", "LED_FAILURE", "MUTEX_FAILURE",
+                     "USART_FAILURE", "SHELL_FAILURE",
                      "SHELL_OFF", "CLEANUP_FAILURE", "SHELL_CLEANUP_FAILURE"):
         executable = str(Path(directory) / scenario)
         command = [

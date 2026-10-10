@@ -11,7 +11,7 @@ if(ADEV_USART_ENABLE)
     target_link_libraries(${APP_TARGET} PRIVATE aDevUsart)
 endif()
 
-# 当前产品的日志输出使用 Shell，设备配置与系统服务共用此启用条件。
+# 当前控制台随 Shell 初始化和裁剪，日志直接共享控制台串口。
 set(app_log_enable OFF)
 if(ALOG_ENABLE AND ASHELL_ENABLE)
     set(app_log_enable ON)

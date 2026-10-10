@@ -126,7 +126,7 @@ static aBool_t record_print(const aDataBaseTsRecord_t *record, void *context)
     size_t output_bound = record->size * 3U + 80U;
     char time[21];
 
-    /* 给提示和并发日志预留空间，避免一次列表压满输出队列。 */
+    /* 给提示和后台 ASHELL_PRINT 预留空间，避免一次列表压满输出队列。 */
     if (print->output_bytes + output_bound > 900U) {
         print->limited = A_TRUE;
         return A_FALSE;

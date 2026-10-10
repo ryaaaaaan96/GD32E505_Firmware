@@ -19,9 +19,10 @@ mode 的 TX/RX 字段分别决定收发后端。普通、Direct、Async 共用�
 Write 返回表示数据已提交，DMA 搬运完成也不代表线路完成；需要排空时
 使用 `aDevUsartWaitTransmitComplete()`，以 TC 为准。
 
-USART 不创建任务互斥锁。当前 Shell 与 Modbus 各自独占一个串口，应用不额外
-创建串口锁；后台日志先进入 Shell 队列。共享端口时，由 app/devices 的统一
-入口协调同方向调用、发送完成等待和生命周期，锁等待计入总超时预算。
+USART 不创建任务互斥锁。当前控制台由 Shell 独占接收，Shell 与日志共享发送；
+app/devices 的 console_write 创建统一的 TX 互斥边界，锁等待计入写入总预算。
+日志直接提交串口，不经过 Shell 队列。Modbus 仍独占 RS485，不额外创建锁。
+共享端口时，由 app/devices 协调同方向调用、发送完成等待和生命周期。
 忙状态检查不保证多任务入口竞争安全，ISR 临界区也不能替代任务互斥。
 
 DMA 中断入口、标志消费和循环计数集中在通用 aDrvDma；USART DMA 文件只负责

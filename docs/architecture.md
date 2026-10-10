@@ -192,9 +192,11 @@ system_init.c 内部的静态函数 statusInit 调用 appSystemStatusLedInit 并
 aSystemInit 随后单独调用 appLogInit；
 日志输出适配及配置位于 app/devices/system/log_config.c，初始化入口和
 调试命令位于 app/task/system/log_service.c、log_command.c。
+日志直接调用公开只读 app_system_console_stream，与 Shell 共用 console_write
+中的 TX 锁；日志可能先于仍在 Shell 队列中的启动文字输出。
 Shell 任务通过原子就绪标志等待，服务全部就绪前不调用 Process。
 日志初始化或 Shell 任务创建失败时，通过 appSystemConsoleDeInit 统一释放
-控制台串口与 Shell 队列。清理失败保留串口句柄，返回清理错误。
+控制台串口、TX 锁与 Shell 队列。串口清理失败保留句柄和 TX 锁，返回清理错误。
 中途失败向 main 返回错误，Shell 门控不放行，不自动重试；
 已成功初始化的其他服务保留，仍按启动失败停机策略处理。
 不存在集中初始化全部实例的注册表、链接段或分散加载。
@@ -212,7 +214,9 @@ Shell 任务通过原子就绪标志等待，服务全部就绪前不调用 Proc
 - 不做运行时跨设备资源冲突检查；构建期资源告警尚未实现，设备参数/能力检查仍保留。
 
 tests/app_devices/run.py 验证独立初始化、错误传递、参数检查和 Shell 裁剪，使用硬件替身，
-并覆盖控制台清理失败后的句柄保留及重试。tests/app_startup/run.py 调用真实
+并覆盖 TX 锁分配失败、总超时预算和清理失败后的资源保留及重试。
+tests/log/run.py 使用真实控制台适配验证 Shell 与日志并发发送、部分写入及队列隔离。
+tests/app_startup/run.py 调用真实
 Shell 任务入口，验证服务初始化间隙及失败后均不处理命令，成功后才放行。
 这些检查不代表上板验证。通用契约见[接口规范](interface_contract.md)，USART 细节见
 [USART 设计](usart_design.md)。

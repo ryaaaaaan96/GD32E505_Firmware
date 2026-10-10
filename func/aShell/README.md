@@ -58,6 +58,12 @@ status = aShellInit(&config);
 耗时业务应由命令复制参数后提交给业务任务。销毁前停止所有 API 用户。
 Init/DeInit 由调用方串行化，不支持中断上下文调用。
 不再持锁执行命令；普通互斥锁只保护队列索引和短时复制，实际 I/O 在锁外执行。
+这个锁不保护硬件，也不保护解析器、历史和命令执行；Process 仍必须单任务调用。
+当前产品的 Shell 与日志共享 `app_system_console_stream`，发送互斥由
+`app/devices/system/system_device.c` 中的 `console_write` 负责。
+日志直接写控制台，Shell 队列仍支持其他任务的 ASHELL_PRINT/aShellWrite，
+因此保留队列锁。仅仅增加串口锁不能删除多生产者队列的同步。
+控制台 TX 锁只覆盖一次 write；分段回复与日志可能交错，不保证整条命令输出独占。
 后台 Print/Write 生产者 NO_WAIT 获取队列锁，争用也整条拒绝；
 命令 Reply 在需要空间时推进实际发送，长回复无需加大队列。
 
