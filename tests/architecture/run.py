@@ -15,7 +15,7 @@ vendors = tuple(root / path for path in (
 app_headers = {path.name for path in (root / "app").rglob("*.h")}
 for folder in ("app", "device", "func", "platform/aLib"):
     for path in (root / folder).rglob("*"):
-        if path.suffix not in (".c", ".h") or any(
+        if path.suffix not in (".c", ".h", ".inc") or any(
                 path.is_relative_to(vendor) for vendor in vendors):
             continue
         text = path.read_text(encoding="utf-8")
@@ -61,13 +61,24 @@ headers = ("aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
            "aDrv_dma.h", "aDev_led.h", "aDev_led_instance.h",
            "aBus.h", "aMemory.h", "aDataBase.h", "aShell.h", "aLog.h",
            "aModbus.h", "aModbus_rtu.h", "aModbus_rtu_instance.h",
-           "protocol.h")
+           "protocol.h", "IDU_sig_table.h", "FAN_sig_table.h")
 command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
            "-fsyntax-only", *["-I" + path for path in includes],
            "-x", "c", "-"]
 for header in headers:
     subprocess.run(command, input=f'#include "{header}"\n',
                    text=True, cwd=root, check=True)
+# 应用入口和设备数据头不需要 aBus、aModbus 的头文件搜索路径。
+subprocess.run([
+    "cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only",
+    "-Iplatform/aLib/include", "-Iapp/protocol/inc",
+    "-DAPP_MODBUS_ENABLE=1", "-DABUS_ENABLE=1", "-x", "c", "-",
+], input=('#include "protocol.h"\n#include "IDU_sig_table.h"\n'
+          '#include "FAN_sig_table.h"\n'
+          '#if defined(ABUS_SIG) || defined(ABUS_PARAMS)\n'
+          '#error "SIG expansion macros leaked into application headers"\n'
+          '#endif\n'),
+    text=True, cwd=root, check=True)
 # 只读定义与数据库不消费 aBus 的分配/锁配置。
 subprocess.run(command + ["-DABUS_STATIC_ENABLE=0", "-DABUS_DYNAMIC_ENABLE=0",
                           "-DABUS_LOCK_MODE=99"],

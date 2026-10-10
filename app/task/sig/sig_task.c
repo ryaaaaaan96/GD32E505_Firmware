@@ -1,10 +1,16 @@
 #include "sig_task.h"
-#include "IDU_sig_ids.h"
 #include "IDU_sig_table.h"
+#include "app_config.h"
+#include "aBus.h"
 #include "aOS.h"
+
 /* 变量属于任务，通过链接段注册绑定，aBus 不为它另分配数据区。 */
 static uint32_t counter;
-IDU_SIG_BIND(counter_binding, IDU_SIG_COUNTER, counter);
+ABUS_RAM_BIND_EXPORT(counter_binding,
+                     PROTOCOL_BUS_INSTANCE_ID,
+                     IDU_SIG_DEVICE_ID,
+                     IDU_SIG_COUNTER,
+                     counter);
 
 static void sigTask(void *argument)
 {

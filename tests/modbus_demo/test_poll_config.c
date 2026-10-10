@@ -1,8 +1,7 @@
 /* 使用不同请求对象验证轮转；映射相同便于复用真实线路回归。 */
 #include "aModbus.h"
-#include "protocol.h"
 #include "app_config.h"
-#include "FAN_sig_ids.h"
+#include "FAN_sig_table.h"
 
 #if APP_MODBUS_MASTER_ENABLE
 #if !AMODBUS_CLIENT_ENABLE

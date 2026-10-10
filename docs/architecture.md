@@ -142,8 +142,10 @@ aModbus 在模块内部提供地址段、SIG 映射及编码转换，不设置�
 
 当前板级[产品协议](../app/protocol/README.md)使用 USART2 和 PA15 手动 DE，
 默认 RTU 从站 1，可通过应用宏切换为主站。应用协议配置位于
-app/protocol 根目录，点表分别位于 IDU_sig_table.c 和 FAN_sig_table.c，端口配置和初始化位于
-app/devices/rs485。system 只调用 protocolInit，由 protocol.c 统一挂载
+app/protocol 根目录，测点清单位于 sig/IDU_sig.inc 和 sig/FAN_sig.inc，
+由 X-Macro 生成索引、固定 Key 常量和只读描述，点表无需跨文件 extern。
+端口配置和初始化位于 app/devices/rs485。system 只调用 protocolInit，
+由 protocol.c 统一挂载
 IDU/FAN 两张表、初始化协议并创建任务；主从文件仅提供只读业务配置。
 func/aModbus 通过 aStream 收发，通用 RTU 实例负责分帧、时序与事务收尾；
 app/devices/rs485/rs485_device.c 只持有串口，提供 ISR、DWT 和线路完成操作，

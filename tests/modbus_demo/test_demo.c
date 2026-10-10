@@ -21,7 +21,11 @@ void testAdvanceTime(uint32_t ms);
 unsigned testAllocations(void);
 void testFailAllocation(aBool_t fail);
 static uint32_t counter;
-IDU_SIG_BIND(counter_binding, IDU_SIG_COUNTER, counter);
+ABUS_RAM_BIND_EXPORT(counter_binding,
+                     PROTOCOL_BUS_INSTANCE_ID,
+                     IDU_SIG_DEVICE_ID,
+                     IDU_SIG_COUNTER,
+                     counter);
 static uint8_t input[600], output[600];
 static size_t input_size, input_pos, output_size;
 static unsigned opened, closed, waits;

@@ -3,16 +3,54 @@
 #if ABUS_ENABLE
 #include "IDU_sig_table.h"
 #include "FAN_sig_table.h"
+#include "aBus.h"
 #include "data_bus_service.h"
 #include "sig_task.h"
+#include <stddef.h>
 #if !ABUS_DYNAMIC_ENABLE
 #include "aBus_instance.h"
 #endif
 
-/* 表描述在初始化时装配一次，生命周期覆盖整个 aBus 实例。
- * 各表的字段、范围、默认值仍由自己的 const 定义保存在 Flash。
+/* 清单在头文件生成标识，在此生成只读描述；字段数量由数组推导。
+ * 文件作用域的 const 复合字面量用于默认值和规则，生命周期覆盖实例。
  */
-static aBusTable_t tables[2];
+#define ABUS_PARAMS(...) \
+    .params = (const aBusParam_t[]){__VA_ARGS__}, \
+    .param_count = sizeof((const aBusParam_t[]){__VA_ARGS__}) / \
+                   sizeof(aBusParam_t)
+#define ABUS_SIG(name, key_value, ...) \
+    {.sigKey = (key_value), __VA_ARGS__},
+
+static const aBusSig_t IDU_sigs[] = {
+#include "sig/IDU_sig.inc"
+};
+static const aBusSig_t FAN_sigs[] = {
+#include "sig/FAN_sig.inc"
+};
+#undef ABUS_SIG
+#undef ABUS_PARAMS
+
+/* 直接借用 Flash 中的连续表描述，不在初始化时复制到 RAM。 */
+static const aBusTable_t tables[] = {
+    {
+        .sigs = IDU_sigs,
+        .sig_count = IDU_SIG_COUNT,
+        .deviceID = IDU_SIG_DEVICE_ID
+    },
+    {
+        .sigs = FAN_sigs,
+        .sig_count = FAN_SIG_COUNT,
+        .deviceID = FAN_SIG_DEVICE_ID
+    }
+};
+
+/* FAN 本地副本由协议模块持有；Counter 继续绑定任务自己的变量。 */
+static FANMotor_t motor_storage;
+ABUS_RAM_BIND_EXPORT(motor_binding,
+                     PROTOCOL_BUS_INSTANCE_ID,
+                     FAN_SIG_DEVICE_ID,
+                     FAN_SIG_MOTOR,
+                     motor_storage);
 #if !ABUS_DYNAMIC_ENABLE
 static aBusHandle_t bus_instance;
 static aBusSigState_t bus_states[IDU_SIG_COUNT + FAN_SIG_COUNT];
@@ -21,12 +59,7 @@ static aBusSigState_t bus_states[IDU_SIG_COUNT + FAN_SIG_COUNT];
 static aStatus_t tablesInit(void)
 {
     dataBusConfig_t config;
-    aStatus_t status;
 
-    status = IDUSigTableInit(&tables[0]);
-    if (status != A_STATUS_OK) return status;
-    status = FANSigTableInit(&tables[1]);
-    if (status != A_STATUS_OK) return status;
     dataBusConfigStructInit(&config);
     config.instanceID = PROTOCOL_BUS_INSTANCE_ID;
     config.tables = tables;
@@ -53,10 +86,15 @@ static aStatus_t tablesInit(void)
 #include "aShell.h"
 #endif
 
+/* 只读配置在设备 .c 中定义，按当前角色声明并装配。 */
 #if APP_MODBUS_MASTER_ENABLE
+extern const aModbusServiceConfig_t FAN_modbus_master_config;
+
 static const aModbusServiceConfig_t *const settings =
     &FAN_modbus_master_config;
 #else
+extern const aModbusServiceConfig_t IDU_modbus_slave_config;
+
 static const aModbusServiceConfig_t *const settings =
     &IDU_modbus_slave_config;
 #endif

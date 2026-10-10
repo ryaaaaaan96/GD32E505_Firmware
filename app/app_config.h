@@ -1,6 +1,11 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
+/* IDU 与 FAN 点表共用的 aBus 实例号，挂载和 RAM 绑定必须一致。 */
+enum {
+    PROTOCOL_BUS_INSTANCE_ID = 1U
+};
+
 /* 应用调试角色：0 为从站，1 为主站；USART2 同时只运行一种角色。
  * 正常调试直接修改本文件；自动化测试可通过编译宏覆盖默认值。
  * 模块能力与 Demo 总开关仍由 config/aclass_config.cmake 控制。 */

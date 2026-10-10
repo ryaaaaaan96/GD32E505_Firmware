@@ -1,7 +1,6 @@
 #include "aModbus.h"
-#include "protocol.h"
 #include "app_config.h"
-#include "FAN_sig_ids.h"
+#include "FAN_sig_table.h"
 
 #if APP_MODBUS_MASTER_ENABLE
 #if !AMODBUS_CLIENT_ENABLE

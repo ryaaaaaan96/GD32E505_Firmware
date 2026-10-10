@@ -67,8 +67,9 @@ Flash 后端须在回调返回前复制数据，不能保存上游静态缓冲�
 - `data_bus_command.c`：注册 `sig` 命令，只依赖服务和 aBus 元信息。
 - `data_bus_modbus.h`：应用协议装配入口，供主从示例借用私有总线实例。
 
-产品点表分别在 IDU_sig_table.c 和 FAN_sig_table.c，各自填充表描述。
-protocol.c 用 dataBusConfig_t 统一挂载，不增加独立总线任务。
+产品点表来自 protocol/sig 的 IDU_sig.inc 和 FAN_sig.inc 清单。
+protocol.c 展开为 static const 数组，再用 dataBusConfig_t 统一挂载。
+数据总线不增加独立任务，RAM 绑定在变量所属的 .c 中注册。
 命令以 deviceID + sigKey 定位，内部按解析后的 sigIndex 访问：
 
 ```text

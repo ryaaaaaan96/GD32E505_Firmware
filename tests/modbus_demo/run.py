@@ -11,7 +11,6 @@ sources = [
     "app/protocol/FAN_modbus_master.c",
     "app/protocol/IDU_modbus_slave.c",
     "app/devices/rs485/rs485_device.c",
-    "app/protocol/IDU_sig_table.c", "app/protocol/FAN_sig_table.c",
     "app/task/system/data_bus_service.c",
     "func/aModbus/aModbus.c", "func/aModbus/aModbus_bus.c",
     "func/aModbus/aModbus_rtu.c",
