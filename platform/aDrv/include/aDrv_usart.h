@@ -9,6 +9,10 @@
  * INTERRUPT_ENABLE/DMA_ENABLE 为 0 时对应声明被裁剪，无 stub；调用方同步裁剪。
  * ADRV_USART_DMA_ENABLE 只控制硬件 DMA 操作，不启用 device 的业务异步 API。
  * DMA 缓冲区需硬件可达并满足 cache 一致性；本 port 不提供跨平台 cache 维护。
+ * 后端须串行派发同一实例的 USART/DMA 回调；除关闭外的操作不得阻塞，
+ * 不在操作函数调用栈中直接调用登记回调，也不得持有回调需要再次获取的内部锁。
+ * 当前 GD32 用单核、USART/DMA 同优先级实现派发顺序；SMP/线程后端尚未实现，
+ * 移植时须同步硬件/登记状态并维持这些保证，不能依赖上层状态保护代替驱动同步。
  */
 
 #ifndef ADRV_USART_H
@@ -148,12 +152,15 @@ aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *config,
                               aDrvUsartHandle_t *handle);
 
 /**
- * @brief 关闭中断/DMA 和 USART，释放实例登记。
+ * @brief 停止 USART/DMA、结束驱动回调访问并释放实例登记。
  * @param[in,out] handle 已初始化的原始句柄。
- * @retval A_STATUS_OK 已反初始化。
+ * @retval A_STATUS_OK 已反初始化；驱动不再访问回调参数或 DMA 缓冲区。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
- * @warning 调用方先停止全部上层访问；本函数不等待业务回调退出。
+ * @warning 仅任务/启动上下文；调用方独占生命周期，不得从驱动或业务回调中调用。
+ *          等待时不得持有回调需要的保护；调用方另行停止软件定时器等外部访问源。
+ * @note 当前单核后端关闭 USART/DMA 事件源并清除登记，任务关闭时无并行在途 ISR。
+ *       将来 SMP/线程后端须在成功返回前等待在途驱动回调退出，当前未实现该后端。
  */
 aStatus_t aDrvUsartDeInitStatic(aDrvUsartHandle_t *handle);
 

@@ -7,7 +7,7 @@
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
-#include <stdatomic.h>
+#include "aAtomic.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -18,7 +18,7 @@ static const char *input;
 static char device_storage;
 static size_t write_limit = SIZE_MAX;
 static aStatus_t write_error = A_STATUS_OK;
-static atomic_uint writers;
+static aAtomicUint_t writers;
 
 aStatus_t aDevLedInitStatic(const aDevLedConfig_t *config,
                            aDevLedHandle_t *handle)
@@ -66,11 +66,11 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
     (void)timeout;
     assert(handle == (aDevUsartHandle_t *)(void *)&device_storage);
     /* 主机强制让出执行权，检查真实 console_write 是否允许发送者重叠。 */
-    assert(atomic_fetch_add(&writers, 1U) == 0U);
+    assert(aAtomicFetchAdd(&writers, 1U) == 0U);
     sched_yield();
     ++write_calls;
     if (write_error != A_STATUS_OK) {
-        assert(atomic_fetch_sub(&writers, 1U) == 1U);
+        assert(aAtomicFetchSub(&writers, 1U) == 1U);
         return aOSFailWithStatus(write_error);
     }
     if (size > write_limit) size = write_limit;
@@ -78,7 +78,7 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
     memcpy(output + output_size, data, size);
     output_size += size;
     output[output_size] = '\0';
-    assert(atomic_fetch_sub(&writers, 1U) == 1U);
+    assert(aAtomicFetchSub(&writers, 1U) == 1U);
     return (aSSize_t)size;
 }
 
@@ -215,7 +215,7 @@ int main(void)
     }
     assert(pthread_join(worker, NULL) == 0);
     assert(aShellProcess() == A_STATUS_BUSY);
-    assert(atomic_load(&writers) == 0U);
+    assert(aAtomicLoad(&writers) == 0U);
 
     assert(appSystemConsoleDeInit() == A_STATUS_OK);
     assert(ALOG_ERROR("test", "backend closed") == A_STATUS_NOT_READY);

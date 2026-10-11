@@ -218,12 +218,15 @@ aStatus_t aDrvUsartDeInitStatic(aDrvUsartHandle_t *handle)
         return A_STATUS_NOT_READY;
     }
 
+    /* 当前单核后端仅允许任务/启动上下文关闭：此时不存在并行执行的 ISR。
+     * 先停止 USART 派发，再停 DMA 并清除登记，返回后不再访问借用资源。
+     * 线程/SMP 后端须在这里等待在途回调退出，不能仅屏蔽本核中断。 */
+#if ADRV_USART_INTERRUPT_ENABLE
+    aDrvUsartPauseDispatch(handle);
+#endif
 #if ADRV_USART_DMA_ENABLE
     (void)aDrvUsartAsyncTxAbort(handle);
     (void)aDrvUsartAsyncRxAbort(handle);
-#endif
-#if ADRV_USART_INTERRUPT_ENABLE
-    aDrvUsartPauseDispatch(handle);
 #endif
     aDrvPrivateUsartHandleSet(handle->id, NULL);
     usart_disable((uint32_t)handle->instance);

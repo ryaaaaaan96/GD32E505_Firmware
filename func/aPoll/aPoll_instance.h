@@ -3,18 +3,18 @@
 #define A_POLL_INSTANCE_H
 
 #include "aPoll.h"
-#include <stdatomic.h>
+#include "aAtomic.h"
 
 typedef struct {
     size_t step_index;
     uint32_t cycle_started;
     aTimepoint_t delay;
     aBool_t cycle_active;
-    atomic_bool triggered;
+    aAtomicBool_t triggered;
 } aPollJobState_t;
 
 typedef struct {
-    atomic_bool pending;
+    aAtomicBool_t pending;
 } aPollEventState_t;
 
 struct aPollHandle {
@@ -33,7 +33,7 @@ struct aPollHandle {
     size_t job_cursor;
     size_t event_cursor;
     unsigned class_cursor;
-    atomic_bool active;
+    aAtomicBool_t active;
     aBool_t ready;
     aBool_t dynamic;
 };

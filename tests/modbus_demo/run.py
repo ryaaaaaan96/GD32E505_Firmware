@@ -50,6 +50,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
         subprocess.run([
             "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
             "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+            "-DADRV_USART_INTERRUPT_ENABLE=1", "-DADRV_USART_DMA_ENABLE=1",
             f"-DADRV_USART_INTERRUPT_PRIORITY_MIN={minimum}",
             f"-DADRV_USART_INTERRUPT_PRIORITY_MAX={maximum}",
             "-Itests/modbus_demo/mocks", "-Iplatform/aDrv/src",

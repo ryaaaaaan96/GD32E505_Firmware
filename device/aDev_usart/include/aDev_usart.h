@@ -12,7 +12,10 @@
  * 包括同步收发、异步提交/取消、发送完成等待及接收状态操作。
  * 全双工时 TX 与 RX 可分别由一个任务操作；RS485 事务由协议层协调。
  * Init/DeInit/Destroy 必须独占实例，禁止与其他调用并发；回调不得重入。
- * ISR/DMA 临界区、忙状态检查和等待对象仍由模块维护；BUSY 不代替外部互斥。
+ * 状态保护通过 aOS 临界区接口，硬件操作与事件派发通过 aDrv 接口，具体实现由平台提供。
+ * 当前 GD32 使用 volatile 标量快照，依赖平台的自然对齐单次访问和串行回调保证；
+ * 这不是标准 C 线程同步，Linux/SMP 移植还需适配这些访问，见 todo.md 第 6 项。
+ * 忙状态检查和等待对象仍由模块维护；BUSY 不代替外部互斥。
  * timeout 只覆盖设备调用内的等待，应用加锁耗时须自行扣除后传入剩余预算。
  *
  * 配置中的缓冲区均由调用者提供，模块不管理这些 DMA/ring 缓冲区的内存。
@@ -271,7 +274,8 @@ aStatus_t aDevUsartCreate(const aDevUsartConfig_t *config,
 /**
  * @brief 停止传输并反初始化 USART 设备。
  *
- * 函数会终止已启用的 TX/RX DMA、关闭中断和底层 USART。调用期间不得有其他任务
+ * 函数先销毁定时器并确认其回调退出，再由 aDrv 停止设备及驱动回调，
+ * 成功后才释放等待对象、重置实例。调用期间不得有其他任务
  * 或异步订阅正在访问该 handle；活动操作或回调在途时返回 BUSY。
  * 不可从该 handle 自身的 callback 内调用。成功后静态存储可
  * 再次传给 InitStatic；动态句柄 DeInit 后仍须 Destroy 释放其存储。
@@ -526,6 +530,7 @@ aStatus_t aDevUsartReadAsyncCancel(aDevUsartHandle_t *handle);
  *
  * 仅启用 ADEV_USART_OPTION_RX_IDLE 时具有业务意义。计数用于观察事件变化，
  * 不代表 RX 环形缓冲区当前字节数，并允许自然回绕。handle 为 NULL 时返回 0。
+ * 直接读取观察快照，不进入临界区；并发 IDLE 事件可能体现在本次或下次读取。
  * @param[in] handle USART 句柄。
  * @return 累计 IDLE 事件数，不是协议帧数。
  */

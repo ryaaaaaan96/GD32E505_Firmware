@@ -26,6 +26,32 @@ aDev 通过 `aDrvUsartEvent_t` 和事件回调与驱动交互：`SetEventEnabled
 暂停和恢复 USART 事件派发。它们不包含 DMA 回调，也不提供任务互斥。
 具体 IRQ 操作留在 aDrv；当前 `FromISR` 上下文约束及中断/DMA 模式开关仍保留。
 
+aDev 的独立 RX 错误、溢出锁存和 IDLE 计数使用 `volatile` 标量快照，直接读写，
+不使用原子或临界区。IDLE 只由 aDrv 串行派发的回调递增，任务只读，计数按
+uint32_t 回绕。当前依赖 GD32 自然对齐标量的单次访问保证，不承担其他数据发布。
+这不提供标准 C 多线程同步；Linux/SMP 移植须重新适配这些访问。
+ring 计数提交和异步请求交接的关联字段通过 aOS 保护：任务侧使用
+`aOSCriticalEnter/Exit`，ISR 侧使用 `aOSCriticalEnterFromISR/ExitFromISR`，
+配对恢复令牌。应用回调、等待及批量复制均在保护区外。
+RX 异步消费在取得 dispatching 后独占游标，期间不重复进入临界区；aDrv
+串行派发同实例回调，任务侧在订阅活动时拒绝切换消费者。
+Read、Write、WriteAsync、WaitTransmitComplete 和 DeInit 的只读忙快照不进入
+临界区；应用串行化保证没有新事务并发提交，旧忙值允许保守拒绝。
+普通串口轮询的发送及完成等待不进入临界区；轮询 WriteDirect 复用 Write，
+不另设忙状态，RS485 的方向切换仍受保护。关闭完成仍由 aOS/aDrv 保证。
+初始化先准备回调需要的状态，再启动接收，不用临界区包住整个模式初始化。
+运行期间不变的配置直接读取；同步 DMA 接收的消费进度由接收任务独占，
+不额外加临界区。DMA 复制仍检查前后进度，拒绝交付被覆盖的数据。
+同步 Read/Write/WaitTransmitComplete 不发布额外的 STREAM 忙状态，ReadDirect
+也不发布接收忙状态；应用保证同方向串行调用及生命周期独占。事务状态只用于
+异步订阅、发送完成交接及 DMA TX Direct 的回调分流。异步 TX 的完成、超时、取消
+在同一保护域检查 TX_ASYNC 并切换终态，不再维护重复的完成原子标志。
+TX_CALLBACK 期间完成事件和回调参数保持稳定，派发读取不加临界区；回调返回
+后清理字段及发布下一状态仍受保护。
+同步机制由 aOS 后端实现，硬件及同实例回调串行派发由 aDrv 实现；aDev 不按
+CPU 核数选择同步方式。当前 FreeRTOS/GD32 后端仍只支持单核，后续迁移安排见
+[USART 设计](../../docs/usart_design.md)。
+
 - 轮询：普通与 Direct 可用；不支持 Async。
 - 中断缓冲：普通收发、持续 ReadAsync 可用；当前不实现中断 Direct/TX Async，返回 UNSUPPORTED。
 - DMA：提供 ring 时支持普通缓冲收发；TX Direct/Async 使用用户 buffer。
@@ -36,6 +62,9 @@ aDev 通过 `aDrvUsartEvent_t` 和事件回调与驱动交互：`SetEventEnabled
 
 设备缓冲区由 app 提供，有效至 DeInit 完成。静态设备对象并不意味着内部 OS 对象
 完全不用堆；TX 超时定时器目前仍按需创建。生命周期由 app 串行管理。
+DeInit 检查活动事务后，先通过 aOS 销毁定时器并确认其回调退出，再通过
+aDrv 停止设备。aDrv 成功返回后 DMA/驱动回调不再访问借用资源，此后才销毁
+等待对象并重置设备；这些关闭操作不持有 aDev 状态临界区。
 
 ## Async 与接收字节回调
 
@@ -208,8 +237,10 @@ Shell 初始化失败时调用 Destroy。分配失败返回 A_STATUS_NO_MEMORY�
 
 ## 缓冲读取性能
 
-中断缓冲 Read 按连续区间复制，复制期间不屏蔽中断；只在取得游标与提交
-消费结果时进入临界区。未提交的数据保持占用，ISR 满缓冲时丢弃新字节，
+中断缓冲 Read 按连续区间复制，复制期间不屏蔽中断；tail 由接收任务独占，
+count 读取允许少读，只在提交消费结果时进入临界区。DMA buffered TX 同理，
+head 由发送任务独占，空闲量快照允许少写，提交计数仍受保护。
+未提交的数据保持占用，ISR 满缓冲时丢弃新字节，
 不会覆盖正在复制的数据。RX/TX 的 ISR 单步游标通过边界比较回绕，支持
 任意合法容量，不要求缓冲大小为 2 的幂。DMA 与 Async 的契约不变。
 

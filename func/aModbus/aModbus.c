@@ -493,7 +493,7 @@ static aStatus_t instance_init(const aModbusConfig_t *config,
     nmbs_platform_conf platform;
     nmbs_error error = NMBS_ERROR_INVALID_ARGUMENT;
     memset(handle, 0, sizeof(*handle));
-    atomic_init(&handle->active, A_FALSE);
+    aAtomicInit(&handle->active, A_FALSE);
     handle->config = *config;
     if (handle->config.snapshot == NULL) {
         handle->config.snapshot = handle->snapshot;
@@ -550,7 +550,7 @@ aStatus_t aModbusDeInitStatic(aModbusHandle_t *handle)
 {
     if (handle == NULL || handle->dynamic) return A_STATUS_INVALID_PARAM;
     if (!handle->ready) return A_STATUS_NOT_READY;
-    if (atomic_load(&handle->active) || handle->plan_count != 0U) {
+    if (aAtomicLoad(&handle->active) || handle->plan_count != 0U) {
         return A_STATUS_BUSY;
     }
     handle->ready = A_FALSE;
@@ -583,7 +583,7 @@ aStatus_t aModbusDestroy(aModbusHandle_t *handle)
 {
     if (handle == NULL) return A_STATUS_OK;
     if (!handle->dynamic) return A_STATUS_INVALID_PARAM;
-    if (atomic_load(&handle->active) || handle->plan_count != 0U) {
+    if (aAtomicLoad(&handle->active) || handle->plan_count != 0U) {
         return A_STATUS_BUSY;
     }
     handle->ready = A_FALSE;
@@ -601,9 +601,9 @@ static aStatus_t operation_begin(aModbusHandle_t *handle,
     }
     if (!handle->ready) return A_STATUS_NOT_READY;
     if (handle->config.role != role) return A_STATUS_UNSUPPORTED;
-    if (atomic_exchange(&handle->active, A_TRUE)) return A_STATUS_BUSY;
+    if (aAtomicExchange(&handle->active, A_TRUE)) return A_STATUS_BUSY;
     if (handle->fault) {
-        atomic_store(&handle->active, A_FALSE);
+        aAtomicStore(&handle->active, A_FALSE);
         return A_STATUS_NOT_READY;
     }
     handle->deadline = aTimepointCalc(timeout, aOSGetUptimeMs());
@@ -639,7 +639,7 @@ static aStatus_t operation_end(aModbusHandle_t *handle, nmbs_error error,
     if (handle->config.transport.finish != NULL) {
         handle->config.transport.finish(handle->config.transport.context);
     }
-    atomic_store(&handle->active, A_FALSE);
+    aAtomicStore(&handle->active, A_FALSE);
     return status;
 }
 
@@ -736,7 +736,7 @@ aStatus_t aModbusClientRead(aModbusHandle_t *handle,
     if (status != A_STATUS_OK) return status;
     status = destination_check(handle, request->unit_id, A_FALSE);
     if (status != A_STATUS_OK) {
-        atomic_store(&handle->active, A_FALSE);
+        aAtomicStore(&handle->active, A_FALSE);
         return status;
     }
     /* 官方位读取会清零完整 nmbs_bitfield，不能直接传应用的小缓冲区。 */
@@ -766,7 +766,7 @@ aStatus_t aModbusClientWrite(aModbusHandle_t *handle,
     if (status != A_STATUS_OK) return status;
     status = destination_check(handle, request->unit_id, A_TRUE);
     if (status != A_STATUS_OK) {
-        atomic_store(&handle->active, A_FALSE);
+        aAtomicStore(&handle->active, A_FALSE);
         return status;
     }
     error = client_write(handle, request->unit_id, access->area,
@@ -815,7 +815,7 @@ aStatus_t aModbusClientReadBatch(aModbusHandle_t *handle,
     if (count == 0U || status != A_STATUS_OK) {
         /* 无效项在启动检查时应已拒绝，运行期失败也允许调用方前进。 */
         *request->completed = count + 1U;
-        atomic_store(&handle->active, A_FALSE);
+        aAtomicStore(&handle->active, A_FALSE);
         return status == A_STATUS_OK ? A_STATUS_INVALID_PARAM : status;
     }
     *request->completed = count;
@@ -999,7 +999,7 @@ static aStatus_t plan_init(aModbusHandle_t *handle,
 static aStatus_t plan_deinit(aModbusPlan_t *plan)
 {
     if (!plan->ready) return A_STATUS_NOT_READY;
-    if (atomic_load(&plan->owner->active)) return A_STATUS_BUSY;
+    if (aAtomicLoad(&plan->owner->active)) return A_STATUS_BUSY;
     plan->owner->plan_count--;
     plan->owner = NULL;
     plan->ready = A_FALSE;

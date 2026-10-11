@@ -8,7 +8,7 @@
 #include <pthread.h>
 #include <errno.h>
 #include <sched.h>
-#include <stdatomic.h>
+#include "aAtomic.h"
 
 static unsigned allocations, mutexes, calls;
 static _Thread_local unsigned lock_depth;
@@ -230,7 +230,7 @@ ASHELL_CMD_EXPORT(burst, burst_command, "Fill output queue");
 #define PRODUCERS 4U
 #define MESSAGES 200U
 static aBool_t accepted[PRODUCERS][MESSAGES];
-static atomic_uint finished;
+static aAtomicUint_t finished;
 
 static void *producer(void *argument)
 {
@@ -243,7 +243,7 @@ static void *producer(void *argument)
         accepted[id][i] = status == A_STATUS_OK;
         sched_yield();
     }
-    (void)atomic_fetch_add(&finished, 1U);
+    (void)aAtomicFetchAdd(&finished, 1U);
     return NULL;
 }
 
@@ -262,14 +262,14 @@ static void test_producers(void)
     write_limit = 3U;
     assert(aShellGetOutputStats(&stats) == A_STATUS_OK);
     before = stats.dropped_messages;
-    atomic_init(&finished, 0U);
+    aAtomicInit(&finished, 0U);
     for (size_t i = 0U; i < PRODUCERS; ++i) {
         assert(pthread_create(&threads[i], NULL, producer, (void *)i) == 0);
     }
     do {
         status = aShellProcess();
         assert(status == A_STATUS_BUSY || status == A_STATUS_TIMEOUT);
-    } while (atomic_load(&finished) != PRODUCERS);
+    } while (aAtomicLoad(&finished) != PRODUCERS);
     for (unsigned i = 0U; i < PRODUCERS; ++i) {
         assert(pthread_join(threads[i], NULL) == 0);
         for (unsigned j = 0U; j < MESSAGES; ++j) total += accepted[i][j];

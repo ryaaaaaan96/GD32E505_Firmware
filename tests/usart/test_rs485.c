@@ -24,6 +24,11 @@ static void *direct_rx_target;
 static unsigned int rx_dma_stops;
 static unsigned int poll_waits;
 static unsigned int rx_waits;
+static unsigned int rx_notifications;
+static aBool_t rx_ready_on_enable;
+static aBool_t rx_notify_on_start;
+static aBool_t rx_notify_on_progress;
+static aStatus_t rx_start_status = A_STATUS_OK;
 static unsigned int mutex_count;
 static unsigned int locks;
 static aBool_t reject_lock;
@@ -54,10 +59,26 @@ static size_t async_rx_length;
 static uint32_t uptime_ms;
 static unsigned critical_entries, critical_depth;
 static unsigned inject_on_exit;
+static aBool_t inject_during_copy;
 static aDevUsartHandle_t *inject_handle;
 static aDrvUsartEvent_t inject_event = ADRV_USART_EVENT_RX_READY;
 static uint8_t rx_byte = 42U;
 static void fire(aDevUsartHandle_t *h, aDrvUsartEvent_t event);
+
+void *__real_memcpy(void *destination, const void *source, size_t size);
+void *__wrap_memcpy(void *destination, const void *source, size_t size)
+{
+    if (!inject_during_copy || size == 0U)
+        return __real_memcpy(destination, source, size);
+    inject_during_copy = A_FALSE;
+    assert(critical_depth == 0U);
+    const size_t first = size / 2U;
+    __real_memcpy(destination, source, first);
+    fire(inject_handle, inject_event);
+    __real_memcpy((uint8_t *)destination + first,
+                  (const uint8_t *)source + first, size - first);
+    return destination;
+}
 typedef struct {
     aOSTimerCallback_t callback;
     void *argument;
@@ -72,6 +93,7 @@ aStatus_t aOSWaitObjectCreate(void **p) { *p = p; return A_STATUS_OK; }
 void aOSWaitObjectDestroy(void **p) { *p = NULL; }
 aStatus_t aOSWaitObjectWait(void *p, aTimeout_t t)
 {
+    assert(critical_depth == 0U);
     (void)p; ++rx_waits;
     if (error_on_wait != NULL) {
         hardware_rx_error = A_TRUE;
@@ -96,7 +118,8 @@ aStatus_t aOSWaitObjectWait(void *p, aTimeout_t t)
     return A_STATUS_TIMEOUT;
 }
 void aOSWaitObjectNotify(void *p) { (void)p; }
-void aOSWaitObjectNotifyFromISR(void *p) { (void)p; }
+void aOSWaitObjectNotifyFromISR(void *p)
+{ assert(critical_depth == 0U); (void)p; ++rx_notifications; }
 aStatus_t aOSMutexCreate(void **p) { assert(0); ++mutex_count; *p = p; return A_STATUS_OK; }
 void aOSMutexDestroy(void **p) { assert(0); if (*p) --mutex_count; *p = NULL; }
 aStatus_t aOSMutexLock(void *p, aTimeout_t t)
@@ -121,7 +144,7 @@ aStatus_t aOSTimerStart(aOSTimer_t timer, uint32_t milliseconds)
 { (void)timer; timer_duration = milliseconds; return A_STATUS_OK; }
 aStatus_t aOSTimerStop(aOSTimer_t timer) { (void)timer; return A_STATUS_OK; }
 aStatus_t aOSTimerDestroy(aOSTimer_t *timer)
-{ free(*timer); *timer = NULL; return A_STATUS_OK; }
+{ assert(critical_depth == 0U); free(*timer); *timer = NULL; return A_STATUS_OK; }
 void aOSCriticalEnter(void) { ++critical_entries; ++critical_depth; }
 void aOSCriticalExit(void)
 {
@@ -132,8 +155,17 @@ void aOSCriticalExit(void)
         fire(inject_handle, inject_event);
     }
 }
-aOSCriticalState_t aOSCriticalEnterFromISR(void) { return 0U; }
-void aOSCriticalExitFromISR(aOSCriticalState_t state) { (void)state; }
+aOSCriticalState_t aOSCriticalEnterFromISR(void)
+{
+    const aOSCriticalState_t previous = critical_depth;
+    ++critical_depth;
+    return previous;
+}
+void aOSCriticalExitFromISR(aOSCriticalState_t state)
+{
+    assert(critical_depth == state + 1U);
+    critical_depth = (unsigned)state;
+}
 aErrno_t aOSGetErrno(void) { return aStatusToErrno(last_error); }
 aSSize_t aOSFailWithStatus(aStatus_t s)
 { assert(isr_depth == 0U); last_error = s; return -1; }
@@ -146,7 +178,8 @@ void aDrvGpioConfigStructInit(aDrvGpioConfig_t *p) { memset(p, 0, sizeof(*p)); }
 void aDrvGpioHandleStructInit(aDrvGpioHandle_t *p) { memset(p, 0, sizeof(*p)); }
 aStatus_t aDrvGpioInit(const aDrvGpioConfig_t *c, aDrvGpioHandle_t *h)
 { h->pin = c->pin; h->initialized = A_TRUE; levels[h->pin] = c->initial_level; return A_STATUS_OK; }
-aStatus_t aDrvGpioDeInit(aDrvGpioHandle_t *h) { ++driver_deinit_count; h->initialized = A_FALSE; return A_STATUS_OK; }
+aStatus_t aDrvGpioDeInit(aDrvGpioHandle_t *h)
+{ ++driver_deinit_count; h->initialized = A_FALSE; return A_STATUS_OK; }
 aStatus_t aDrvGpioWrite(const aDrvGpioHandle_t *h, aDrvGpioLevel_t l)
 { assert(h->initialized); levels[h->pin] = l; return A_STATUS_OK; }
 void aDrvUsartConfigStructInit(aDrvUsartConfig_t *p)
@@ -160,14 +193,34 @@ aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *c, aDrvUsartHandle_t *h)
   h->id = c->id; h->irq_priority = c->interrupt_priority;
   h->initialized = A_TRUE; return A_STATUS_OK; }
 aStatus_t aDrvUsartDeInitStatic(aDrvUsartHandle_t *h)
-{ ++driver_deinit_count; h->initialized = A_FALSE; return A_STATUS_OK; }
+{
+    assert(critical_depth == 0U);
+    ++driver_deinit_count;
+    (void)aDrvUsartAsyncTxAbort(h);
+    (void)aDrvUsartAsyncRxAbort(h);
+    memset(h->callbacks, 0, sizeof(h->callbacks));
+    h->interrupt_enabled_mask = 0U;
+    h->software_pending = A_FALSE;
+    h->initialized = A_FALSE;
+    return A_STATUS_OK;
+}
 aBool_t aDrvUsartEventIsSupported(void) { return irq_supported; }
 void aDrvUsartPauseDispatch(aDrvUsartHandle_t *h) { (void)h; }
 void aDrvUsartResumeDispatch(aDrvUsartHandle_t *h) { (void)h; }
 aStatus_t aDrvUsartSetEventEnabled(aDrvUsartHandle_t *h, aDrvUsartEvent_t i, aBool_t en)
 { if(en) h->interrupt_enabled_mask |= 1U << i; else h->interrupt_enabled_mask &= ~(1U << i); return A_STATUS_OK; }
 aStatus_t aDrvUsartRegisterCallback(aDrvUsartHandle_t *h, const aDrvUsartCallbackConfig_t *c)
-{ h->callbacks[c->event].function = c->callback; h->callbacks[c->event].argument = c->argument; return aDrvUsartSetEventEnabled(h,c->event,c->enabled); }
+{
+    h->callbacks[c->event].function = c->callback;
+    h->callbacks[c->event].argument = c->argument;
+    const aStatus_t status = aDrvUsartSetEventEnabled(h, c->event, c->enabled);
+    if (rx_ready_on_enable && c->event == ADRV_USART_EVENT_RX_READY && c->enabled) {
+        /* 模拟事件使能后立刻被接收 ISR 抢占。 */
+        rx_ready_on_enable = A_FALSE;
+        fire(c->argument, c->event);
+    }
+    return status;
+}
 aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *h, uint8_t b)
 { (void)h; (void)b; if (!byte_budget) return A_STATUS_BUSY; --byte_budget; tc = A_FALSE; return A_STATUS_OK; }
 aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *h, uint8_t *b)
@@ -196,7 +249,15 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *h, void *p, size_t n,
 { (void)h; rx_ring = p;
   rx_dma_circular = A_TRUE; rx_dma_produced = 0U;
   rx_dma_size = n; rx_dma_callback = callback; rx_dma_argument = argument;
-  return A_STATUS_OK; }
+  if (rx_notify_on_start) {
+      /* 模拟 DMA 启动后、驱动函数返回前发生中断。 */
+      rx_notify_on_start = A_FALSE;
+      assert(critical_depth == 0U);
+      ++isr_depth;
+      callback(argument);
+      --isr_depth;
+  }
+  return rx_start_status; }
 aStatus_t aDrvUsartRxDmaStart(aDrvUsartHandle_t *h, void *p, size_t n,
                               aDrvUsartDmaCallback_t callback,
                               void *argument)
@@ -219,6 +280,13 @@ aStatus_t aDrvUsartAsyncRxGetProgress(aDrvUsartHandle_t *h,
                                                       &progress->received);
     progress->position = rx_dma_position != SIZE_MAX ? rx_dma_position :
                          progress->received % rx_dma_size;
+    if (rx_notify_on_progress) {
+        rx_notify_on_progress = A_FALSE;
+        assert(critical_depth == 0U);
+        ++isr_depth;
+        rx_dma_callback(rx_dma_argument);
+        --isr_depth;
+    }
     if (status == A_STATUS_OK && advance_after_progress != 0U) {
         /* DMA 在 CPU 临界区内也会前进，快照后的数据必须保留。 */
         rx_dma_produced += advance_after_progress;
@@ -239,7 +307,7 @@ aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *h, size_t *n)
 static void async_tx_callback(aDevUsartHandle_t *handle,
                               const aDevUsartTxEvent_t *event,
                               void *argument)
-{ (void)handle; (void)argument; assert(isr_depth > 0U); assert(locks == 0U); ++async_tx_callbacks;
+{ (void)handle; (void)argument; assert(isr_depth > 0U); assert(locks == 0U && critical_depth == 0U); ++async_tx_callbacks;
   async_tx_status = event->status; }
 
 static void async_rx_callback(aDevUsartHandle_t *handle,
@@ -247,7 +315,7 @@ static void async_rx_callback(aDevUsartHandle_t *handle,
                               void *argument)
 { (void)handle; (void)argument;
   assert(isr_depth > 0U);
-  assert(locks == 0U);
+  assert(locks == 0U && critical_depth == 0U);
   if (event->type == ADEV_USART_RX_EVENT_DATA_READY) {
       assert(event->offset == 0U);
       assert(handle->rx.dma_active ? event->buffer == handle->rx.snapshot
@@ -268,6 +336,7 @@ static void async_rx_callback(aDevUsartHandle_t *handle,
 
 static void fire(aDevUsartHandle_t *h, aDrvUsartEvent_t event)
 {
+    assert(critical_depth == 0U);
     assert(h->drv_handle.interrupt_enabled_mask & (1U << event));
     if (event == ADRV_USART_EVENT_TX_COMPLETE) tc = A_TRUE;
     ++isr_depth;
@@ -288,6 +357,45 @@ static void service_pending(aDevUsartHandle_t *h)
     fire(h, ADRV_USART_EVENT_DISPATCH);
 }
 
+static void rx_startup_tests(void)
+{
+    aDevUsartConfig_t config;
+    aDevUsartHandle_t handle;
+    uint8_t ring[7], output[7];
+    aDevUsartConfigStructInit(&config);
+    config.mode = ADEV_USART_RX_INTERRUPT_BUFFERED;
+    config.rx_buffer = ring;
+    config.rx_buffer_size = sizeof(ring);
+    rx_ready_on_enable = A_TRUE;
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    assert(!rx_ready_on_enable && handle.rx.count == 1U);
+    assert(aDevUsartRead(&handle, output, 1U, A_TIMEOUT_NO_WAIT) == 1);
+    assert(output[0] == rx_byte);
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+
+    config.mode = ADEV_USART_RX_DMA_BUFFERED;
+    rx_notify_on_start = A_TRUE;
+    const unsigned notifications = rx_notifications;
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    assert(!rx_notify_on_start && rx_notifications == notifications + 1U);
+    ring[0] = 0x12U;
+    ring[1] = 0x34U;
+    rx_dma_produced = 2U;
+    rx_notify_on_progress = A_TRUE;
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == 2);
+    assert(!rx_notify_on_progress && handle.rx.dma_consumed == 2U);
+    assert(output[0] == 0x12U && output[1] == 0x34U);
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+
+    /* 启动失败仍须先关闭驱动，再重置预先发布的接收状态。 */
+    rx_start_status = A_STATUS_ERROR;
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_ERROR);
+    assert(!handle.drv_handle.initialized && !handle.rx.dma_active);
+    assert(rx_dma_callback == NULL && !rx_dma_circular);
+    assert(handle.rx.wait_object == NULL);
+    rx_start_status = A_STATUS_OK;
+}
+
 /* 非 2 的幂容量、满缓冲、回绕、部分读取及复制窗口内的 ISR。 */
 static void buffered_rx_tests(void)
 {
@@ -306,11 +414,11 @@ static void buffered_rx_tests(void)
         fire(&handle, ADRV_USART_EVENT_RX_READY);
     assert(handle.rx.head == 0U && handle.rx.count == 7U);
     inject_handle = &handle;
-    inject_on_exit = 1U;
+    inject_during_copy = A_TRUE;
     before = critical_entries;
     assert(aDevUsartRead(&handle, output, sizeof(output),
                         A_TIMEOUT_NO_WAIT) == -1);
-    assert(critical_entries - before == 2U);
+    assert(critical_entries - before <= 6U); /* 按批次保护，不按字节加锁。 */
     assert(aOSGetErrno() == A_EIO && handle.rx.state == ADEV_USART_RX_IDLE);
     /* 满缓冲的复制窗口中丢了字节：已复制的数据也不能作为成功结果交付。 */
     assert(aDevUsartHasRxOverflowed(&handle));
@@ -324,10 +432,10 @@ static void buffered_rx_tests(void)
     for (rx_byte = 15U; rx_byte < 18U; ++rx_byte)
         fire(&handle, ADRV_USART_EVENT_RX_READY);
     /* 快照后再来一个字节，提交必须保留 ISR 新增的 rx_count。 */
-    inject_on_exit = 1U;
+    inject_during_copy = A_TRUE;
     before = critical_entries;
     assert(aDevUsartRead(&handle, output, 6U, A_TIMEOUT_NO_WAIT) == 6);
-    assert(critical_entries - before == 4U);
+    assert(critical_entries - before <= 8U);
     for (size_t i = 0U; i < 6U; ++i) assert(output[i] == 13U + i);
     assert(handle.rx.count == 0U && !aDevUsartHasRxOverflowed(&handle));
     assert(aDevUsartRead(&handle, output, 1U, A_TIMEOUT_NO_WAIT) == -1);
@@ -378,7 +486,7 @@ static void read_overflow_tests(void)
     for (rx_byte = 0U; rx_byte < sizeof(ring); ++rx_byte)
         fire(&handle, ADRV_USART_EVENT_RX_READY);
     inject_handle = &handle;
-    inject_on_exit = 1U;
+    inject_during_copy = A_TRUE;
     assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == -1);
     assert(aOSGetErrno() == A_EIO && handle.rx.state == ADEV_USART_RX_IDLE);
     assert(aDevUsartHasRxOverflowed(&handle));
@@ -470,9 +578,7 @@ static void discard_rx_tests(void)
     fire(&handle, ADRV_USART_EVENT_RX_ERROR);
     assert(aDevUsartHasRxOverflowed(&handle));
     assert(aDevUsartGetRxError(&handle) == A_STATUS_ERROR);
-    handle.rx.state = ADEV_USART_RX_STREAM;
-    expect_discard_failure(&handle, A_STATUS_BUSY);
-    handle.rx.state = ADEV_USART_RX_DIRECT;
+    handle.rx.state = ADEV_USART_RX_ASYNC;
     expect_discard_failure(&handle, A_STATUS_BUSY);
     handle.rx.state = ADEV_USART_RX_IDLE;
     handle.rx.dispatching = A_TRUE;
@@ -549,6 +655,70 @@ static void discard_rx_tests(void)
     rx_byte = 42U;
 }
 
+static void rx_status_snapshot_tests(void)
+{
+    aDevUsartConfig_t config;
+    aDevUsartHandle_t handle;
+    uint8_t ring[2];
+    aDevUsartConfigStructInit(&config);
+    config.mode = ADEV_USART_RX_INTERRUPT_BUFFERED | ADEV_USART_OPTION_RX_IDLE;
+    config.rx_buffer = ring;
+    config.rx_buffer_size = sizeof(ring);
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    assert(aDevUsartGetIdleEventCount(&handle) == 0U);
+    handle.rx.idle_event_count = UINT32_MAX;
+    fire(&handle, ADRV_USART_EVENT_RX_IDLE);
+    assert(aDevUsartGetIdleEventCount(&handle) == 0U);
+    fire(&handle, ADRV_USART_EVENT_RX_IDLE);
+    hardware_rx_error = A_TRUE;
+    fire(&handle, ADRV_USART_EVENT_RX_ERROR);
+    for (unsigned i = 0U; i <= sizeof(ring); ++i)
+        fire(&handle, ADRV_USART_EVENT_RX_READY);
+
+    /* 独立状态的查询、清除不进入任务临界区，也不修改 ring。 */
+    const unsigned before = critical_entries;
+    assert(aDevUsartGetIdleEventCount(&handle) == 1U);
+    assert(aDevUsartHasRxOverflowed(&handle));
+    assert(aDevUsartGetRxError(&handle) == A_STATUS_ERROR);
+    aDevUsartClearRxOverflow(&handle);
+    aDevUsartClearRxError(&handle);
+    assert(!aDevUsartHasRxOverflowed(&handle));
+    assert(aDevUsartGetRxError(&handle) == A_STATUS_OK);
+    assert(handle.rx.count == sizeof(ring) && critical_entries == before);
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+}
+
+static void tx_publish_tests(void)
+{
+    aDevUsartConfig_t config;
+    aDevUsartHandle_t handle;
+    uint8_t ring[7];
+    const uint8_t first[] = {1U, 2U, 3U, 4U};
+    const uint8_t next[] = {5U, 6U, 7U};
+    aDevUsartConfigStructInit(&config);
+    config.mode = ADEV_USART_TX_DMA_BUFFERED;
+    config.tx_buffer = ring;
+    config.tx_buffer_size = sizeof(ring);
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    assert(aDevUsartWrite(&handle, first, sizeof(first), A_TIMEOUT_NO_WAIT) == 4);
+    assert(handle.tx.count == 4U && handle.tx.dma_active == 4U);
+
+    /* 在取得空闲区之后完成上一批 DMA；提交必须保留回调的消费结果。 */
+    inject_handle = &handle;
+    inject_event = ADRV_USART_EVENT_TX_COMPLETE;
+    inject_during_copy = A_TRUE;
+    assert(aDevUsartWrite(&handle, next, sizeof(next), A_TIMEOUT_NO_WAIT) == 3);
+    assert(!inject_during_copy);
+    assert(handle.tx.count == 3U && handle.tx.dma_active == 3U);
+    assert(handle.tx.tail == 4U && handle.tx.head == 0U);
+    assert(dma_source == ring + 4U && memcmp(ring + 4U, next, sizeof(next)) == 0);
+    fire(&handle, ADRV_USART_EVENT_TX_COMPLETE);
+    assert(handle.tx.count == 0U && handle.tx.dma_active == 0U);
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+    inject_handle = NULL;
+    inject_event = ADRV_USART_EVENT_RX_READY;
+}
+
 int main(void)
 {
     aDevUsartConfig_t c;
@@ -563,11 +733,28 @@ int main(void)
     assert(aDevUsartIsSupported(h, ADEV_USART_CAP_RX_DIRECT));
     dma_source = NULL;
     direct_rx_target = NULL;
+    const unsigned polling_critical_before = critical_entries;
     byte_budget = 2U;
     assert(aDevUsartWriteDirect(h, data, sizeof(data), A_TIMEOUT_NO_WAIT) == 2);
     assert(dma_source == NULL && h->tx.count == 0U);
     assert(aDevUsartWriteDirect(h, data, 1U, A_TIMEOUT_NO_WAIT) == -1);
     assert(last_error == A_STATUS_TIMEOUT);
+    byte_budget = 1U;
+    assert(aDevUsartWrite(h, data, sizeof(data), A_TIMEOUT_NO_WAIT) == 1);
+    assert(h->tx.state == ADEV_USART_TX_IDLE);
+    assert(aDevUsartWaitTransmitComplete(h, A_TIMEOUT_NO_WAIT) == A_STATUS_BUSY);
+    assert(aDevUsartWaitTransmitComplete(h, A_TIMEOUT_MS(5U)) == A_STATUS_TIMEOUT);
+    tc = A_TRUE;
+    assert(aDevUsartWaitTransmitComplete(h, A_TIMEOUT_NO_WAIT) == A_STATUS_OK);
+    h->tx.error = A_STATUS_ERROR;
+    assert(aDevUsartWrite(h, data, 1U, A_TIMEOUT_NO_WAIT) == -1);
+    assert(last_error == A_STATUS_ERROR);
+    assert(aDevUsartWriteDirect(h, data, 1U, A_TIMEOUT_NO_WAIT) == -1);
+    assert(last_error == A_STATUS_ERROR);
+    assert(aDevUsartWaitTransmitComplete(h, A_TIMEOUT_NO_WAIT) == A_STATUS_ERROR);
+    h->tx.error = A_STATUS_OK;
+    /* 普通轮询的发送、Direct 及完成等待均不屏蔽中断。 */
+    assert(critical_entries == polling_critical_before && critical_depth == 0U);
     uint8_t polled[4] = {0};
     rx_byte_budget = 2U;
     assert(aDevUsartReadDirect(h, polled, sizeof(polled), A_TIMEOUT_MS(5U)) == 2);
@@ -633,6 +820,24 @@ int main(void)
         fire(h, ADRV_USART_EVENT_TX_COMPLETE);
         assert(!h->rs485_transmitting && levels[8] == ADRV_GPIO_LOW);
         assert(levels[7] == ADRV_GPIO_HIGH);
+
+        if (i == 0) {
+            /* 轮询 Direct 复用普通发送：部分成功保留 DE，线路发完后才能释放。 */
+            byte_budget = 1U;
+            assert(aDevUsartWriteDirect(h, data, 2U, A_TIMEOUT_NO_WAIT) == 1);
+            assert(h->tx.state == ADEV_USART_TX_IDLE);
+            assert(h->rs485_transmitting && levels[8] == ADRV_GPIO_HIGH);
+            assert(aDevUsartWaitTransmitComplete(h, A_TIMEOUT_NO_WAIT) == A_STATUS_BUSY);
+            assert(levels[8] == ADRV_GPIO_HIGH);
+            tc = A_TRUE; /* 硬件发完，TC 回调尚未执行，由等待接口收尾。 */
+            assert(aDevUsartWaitTransmitComplete(h, A_TIMEOUT_NO_WAIT) == A_STATUS_OK);
+            assert(!h->rs485_transmitting && levels[8] == ADRV_GPIO_LOW);
+            byte_budget = 100U;
+            assert(aDevUsartWriteDirect(h, data, 2U, A_TIMEOUT_NO_WAIT) == 2);
+            assert(levels[8] == ADRV_GPIO_HIGH);
+            fire(h, ADRV_USART_EVENT_TX_COMPLETE);
+            assert(!h->rs485_transmitting && levels[8] == ADRV_GPIO_LOW);
+        }
 
         if (i == 2) {
             /* Move tail, then wrap the next write into two DMA spans. */
@@ -763,7 +968,7 @@ int main(void)
             .argument = NULL
         };
     /* 活动事务仍返回 BUSY，不依赖任务互斥锁。 */
-    h->tx.state = ADEV_USART_TX_STREAM;
+    h->tx.state = ADEV_USART_TX_DIRECT;
     assert(aDevUsartWriteAsync(h, &tx_request) == A_STATUS_BUSY);
     assert(locks == 0U && h->tx.deadline_timer == NULL);
     h->tx.state = ADEV_USART_TX_IDLE;
@@ -779,6 +984,10 @@ int main(void)
     assert(dma_source == data && h->tx.state == ADEV_USART_TX_ASYNC);
     fire(h, ADRV_USART_EVENT_TX_COMPLETE);
     assert(async_tx_callbacks == 1U && async_tx_status == A_STATUS_OK);
+    MockTimer *completed_timer = h->tx.deadline_timer;
+    completed_timer->callback(completed_timer->argument);
+    assert(aDevUsartWriteAsyncCancel(h) == A_STATUS_NOT_READY);
+    assert(async_tx_callbacks == 1U); /* 完成后到达的超时/取消不能重复回调。 */
 
     tx_request = (aDevUsartWriteRequest_t) {
         .buffer = data, .size = 3U, .timeout = A_TIMEOUT_MS(10U),
@@ -960,9 +1169,12 @@ int main(void)
     fire(h, ADRV_USART_EVENT_RX_READY);
     assert(aDevUsartRead(h, read_buffer, 1U, A_TIMEOUT_NO_WAIT) == 1);
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
+    rx_startup_tests();
     buffered_rx_tests();
     discard_rx_tests();
     read_overflow_tests();
+    rx_status_snapshot_tests();
+    tx_publish_tests();
     puts("RS485 USART tests passed");
     return 0;
 }

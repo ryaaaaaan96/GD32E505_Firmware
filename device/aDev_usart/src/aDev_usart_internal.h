@@ -4,13 +4,14 @@
 #include "aDev_usart_instance.h"
 #include "aOS.h"
 
-#include <stdatomic.h>
+#include "aAtomic.h"
 #define ADEV_USART_DMA_BACKEND_ENABLE (ADRV_USART_DMA_ENABLE && \
     ADRV_USART_INTERRUPT_ENABLE)
 #define ADEV_USART_NEEDS_EVENTS (ADEV_USART_INTERRUPT_ENABLE || \
     ADEV_USART_DMA_BACKEND_ENABLE || ADEV_USART_RS485_ENABLE)
 
-/* Begin/Complete 仅由 USART 回调或已暂停 USART 事件派发的 TX 路径调用。 */
+/* Begin/Complete/ArmComplete 的调用方持有任务或 ISR 临界区；
+ * Init/DeInit 在生命周期独占期间调用。 */
 aStatus_t aDevUsartRS485Init(aDevUsartHandle_t *handle,
                            const aDevUsartRS485Config_t *config);
 aStatus_t aDevUsartRS485DeInit(aDevUsartHandle_t *handle);
@@ -28,6 +29,8 @@ aStatus_t aDevUsartRegisterDriverCallback(
     aDrvUsartEventCallback_t callback, aBool_t enabled);
 aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
                               const aDevUsartConfig_t *config);
+/* Refresh 由消费进度的独占者调用，或在临界区内调用；
+ * Copy 仅供无异步订阅时的接收任务使用，保留复制前后 DMA 覆盖检查。 */
 aStatus_t aDevUsartDmaRxRefresh(aDevUsartHandle_t *handle);
 aStatus_t aDevUsartDmaRxCopy(aDevUsartHandle_t *handle, void *buffer,
                              size_t capacity, size_t *copied);

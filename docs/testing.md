@@ -25,6 +25,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | --- | --- |
 | 可选布局断言与 SIG 参数长度求和（需要 C/C++ 编译器） | `python3 tests/layout/run.py` |
 | aLib CRC32（C11/C++11、标准向量及 zlib 对照） | `python3 tests/crc/run.py` |
+| aLib GCC 原子封装（并发、内存序及生成代码对照） | `python3 tests/atomic/run.py` |
 | OS 通知、定时器与工作队列 | `python3 tests/aos/run.py` |
 | LED/GPIO 状态、静态/动态生命周期与接口裁剪 | `python3 tests/led/run.py` |
 | SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |

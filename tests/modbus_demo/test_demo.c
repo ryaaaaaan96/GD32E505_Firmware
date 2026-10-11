@@ -769,7 +769,7 @@ static void temporary_tests(void)
     state->step_index = 0U;
     state->cycle_started = aOSGetUptimeMs();
     state->delay = aTimepointCalc(A_TIMEOUT_NO_WAIT, aOSGetUptimeMs());
-    atomic_store(&state->triggered, A_FALSE);
+    aAtomicStore(&state->triggered, A_FALSE);
     expected_poll = 0U;
     protocolModbusRequestStructInit(&temporary_request);
     temporary_request.access.read.access.address = 34U;
@@ -890,8 +890,8 @@ static void reset_poll(void)
     state->step_index = 0U;
     state->cycle_active = A_FALSE;
     state->delay = aTimepointCalc(A_TIMEOUT_NO_WAIT, aOSGetUptimeMs());
-    atomic_store(&state->triggered, A_TRUE);
-    atomic_store(&rs485_link.poll->active, A_FALSE);
+    aAtomicStore(&state->triggered, A_TRUE);
+    aAtomicStore(&rs485_link.poll->active, A_FALSE);
     expected_poll = 0U;
 }
 #endif

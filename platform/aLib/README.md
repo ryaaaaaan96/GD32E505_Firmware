@@ -1,8 +1,57 @@
 # aLib
 
 不依赖 MCU、RTOS、链接脚本或 C 运行库的纯 C 基础层，提供统一布尔、状态、
-超时与错误类型、`aStatusToErrno()` 状态映射、编译器属性和纯计算工具。errno
+超时与错误类型、`aStatusToErrno()` 状态映射、编译器属性、原子接口和纯计算工具。errno
 的任务局部存储仍由 aOS 提供；GCC newlib syscall 不属于 aLib。
+
+## 原子接口
+
+自有代码统一包含 `aAtomic.h`，不直接使用 `<stdatomic.h>`。当前仅实现
+GCC C11 后端，映射集中在 `include/atomic/aAtomic_gcc.h`；Keil、IAR、Clang
+后端尚未实现，不会在未知编译器上静默退化为普通变量或空操作。
+接口为宏映射，保留类型和内存序，不增加对象、函数调用或 CPU 核数判断。
+
+| 内容 | 接口 |
+| --- | --- |
+| 常用类型 | `aAtomicBool_t`、`aAtomicInt_t`、`aAtomicUint_t`、`aAtomicFlag_t` |
+| 其他原子类型 | `A_ATOMIC_TYPE(T)`，例如 `A_ATOMIC_TYPE(uint32_t)` |
+| 初始化 | `A_ATOMIC_VAR_INIT(value)`、`A_ATOMIC_FLAG_INIT`、`aAtomicInit(p, value)` |
+| 读写、交换 | `aAtomicLoad`、`aAtomicStore`、`aAtomicExchange` |
+| 比较交换 | `aAtomicCompareExchangeStrong`、`aAtomicCompareExchangeWeak` |
+| 计数、位操作 | `aAtomicFetchAdd/Sub/And/Or/Xor`，返回旧值 |
+| 原子标志 | `aAtomicFlagTestAndSet`、`aAtomicFlagClear` |
+| 屏障 | `aAtomicThreadFence`、`aAtomicSignalFence`、`aAtomicKillDependency` |
+| 无锁能力 | `aAtomicIsLockFree(p)`、`A_ATOMIC_*_LOCK_FREE` |
+
+读写、交换、比较交换、Fetch 和 Flag 操作均有 `Explicit` 后缀版本，末尾
+指定内存序；默认使用 `A_ATOMIC_SEQ_CST`。比较交换的 Explicit 版本分别指定
+成功和失败的内存序，失败时更新 `*expected`，Weak 允许伪失败。
+内存序为 `A_ATOMIC_RELAXED/CONSUME/ACQUIRE/RELEASE/ACQ_REL/SEQ_CST`，类型为
+`aAtomicMemoryOrder_t`；合法组合见头文件契约。
+
+```c
+#include "aAtomic.h"
+
+static aAtomicUint_t dropped = A_ATOMIC_VAR_INIT(0U);
+
+/* 独立计数，不承担其他数据的发布。 */
+(void)aAtomicFetchAddExplicit(&dropped, 1U, A_ATOMIC_RELAXED);
+unsigned snapshot = aAtomicLoadExplicit(&dropped, A_ATOMIC_RELAXED);
+```
+
+初始化必须在共享对象前完成，初始化不提供并发保护。RELAXED 只保证单次
+原子访问；发布其他数据需要匹配的 release/acquire 或其他同步机制。
+对象保持自然对齐，不得 packed、在活动期间复制或通过普通指针访问。
+单核仍存在任务/ISR 抢占，不按核数去掉读改写保护；多个关联字段仍需 aOS
+临界区等机制维持整体一致，DMA cache 维护也不由本接口完成。
+
+ISR 使用的类型必须始终无锁（对应能力宏为 2）。GCC 对其他类型可能生成
+`libatomic` 调用，应用需提供链接支持，但不能把这种库锁路径用于 ISR。
+当前日志和 Shell 保留编译期无锁检查；不引入基于 aOS 的后备锁。
+
+验证：`SANITIZE=1 python3 tests/atomic/run.py`。覆盖宏单次求值、初始化、
+旧值返回、比较交换失败回写、计数回绕、多线程计数与发布可见性；对比主机
+GCC `-O2` 下封装与原生 C11 的生成指令。测试不代表 Keil/IAR 或 ARM 板上验证。
 
 ## 整数计算
 

@@ -118,6 +118,7 @@ static aStatus_t rx_callback_configure(aDrvPrivateUsartDmaState_t *state,
     uint8_t priority, aDrvUsartDmaCallback_t callback, void *argument,
     aBool_t circular)
 {
+    /* 调用方传入 USART 绑定的优先级，保证同实例 USART/DMA 回调不互相抢占。 */
     aDrvDmaInterruptConfig_t config = {
         .callback = rx_dma_event,
         .argument = state,

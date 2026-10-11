@@ -47,22 +47,21 @@ static void rx_ready_callback(void *argument)
             data, A_STATUS_OK);
         return;
     }
-    if (handle->rx.count >= handle->settings.rx_buffer_size) {
+    aOSCriticalState_t key = aOSCriticalEnterFromISR();
+    const aBool_t full = handle->rx.count >= handle->settings.rx_buffer_size;
+    if (full) {
         handle->rx.overflow = A_TRUE;
-#if ADEV_USART_ASYNC_ENABLE
-        async_rx_dispatch(handle);
-#endif
-        return;
+    } else {
+        handle->settings.rx_buffer[handle->rx.head] = data;
+        if (++handle->rx.head == handle->settings.rx_buffer_size)
+            handle->rx.head = 0U;
+        ++handle->rx.count;
     }
-
-    handle->settings.rx_buffer[handle->rx.head] = data;
-    if (++handle->rx.head == handle->settings.rx_buffer_size)
-        handle->rx.head = 0U;
-    ++handle->rx.count;
+    aOSCriticalExitFromISR(key);
 #if ADEV_USART_ASYNC_ENABLE
     async_rx_dispatch(handle);
 #endif
-    aOSWaitObjectNotifyFromISR(handle->rx.wait_object);
+    if (!full) aOSWaitObjectNotifyFromISR(handle->rx.wait_object);
 }
 
 #endif
@@ -165,13 +164,12 @@ aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
         }
         handle->settings.rx_buffer = config->rx_buffer;
         handle->settings.rx_buffer_size = config->rx_buffer_size;
+        /* 启动后回调即可执行；先备好状态，关闭驱动后才允许重置。 */
+        handle->rx.dma_active = A_TRUE;
         status = aDrvUsartAsyncRxCircularStart(
             &handle->drv_handle, handle->settings.rx_buffer,
                 handle->settings.rx_buffer_size,
             aDevUsartRxDmaComplete, handle);
-        if (status == A_STATUS_OK) {
-            handle->rx.dma_active = A_TRUE;
-        }
         break;
 #endif
 
@@ -242,11 +240,10 @@ static aSSize_t buffered_read(aDevUsartHandle_t *handle, void *buffer,
         size_t tail;
         aStatus_t status = A_STATUS_OK;
 
-        aOSCriticalEnter();
+        /* 当前任务独占 tail，回调只增加 count；旧快照只会少读。 */
         status = handle->rx.error;
         available = handle->rx.count;
         tail = handle->rx.tail;
-        aOSCriticalExit();
 
         if (status != A_STATUS_OK)
             return count != 0U ? (aSSize_t)count : aOSFailWithStatus(status);
@@ -293,10 +290,11 @@ static aSSize_t dma_buffered_read(aDevUsartHandle_t *handle, void *buffer,
 
     while (count < buffer_size) {
         size_t copied = 0U;
-        if (handle->rx.error != A_STATUS_OK)
+        aStatus_t status = aDevUsartGetRxError(handle);
+        if (status != A_STATUS_OK)
             return count != 0U ? (aSSize_t)count :
-                   aOSFailWithStatus(handle->rx.error);
-        aStatus_t status = aDevUsartDmaRxCopy(
+                   aOSFailWithStatus(status);
+        status = aDevUsartDmaRxCopy(
             handle, (uint8_t *)buffer + count, buffer_size - count, &copied);
         count += copied;
 
@@ -341,26 +339,25 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
     if ((handle->settings.mode & ADEV_USART_RX_MASK) ==
         ADEV_USART_RX_INTERRUPT_CALLBACK)
         return aOSFailWithStatus(A_STATUS_UNSUPPORTED);
-    if (handle->rx.overflow)
-        return aOSFailWithStatus(A_STATUS_ERROR);
-    if (handle->rx.error != A_STATUS_OK)
-        return aOSFailWithStatus(handle->rx.error);
-
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
+    aStatus_t status = handle->rx.overflow
+        ? A_STATUS_ERROR : handle->rx.error;
+#if ADEV_USART_ASYNC_ENABLE
+    /* 无新订阅并发提交；旧忙状态只会保守返回 BUSY。 */
+    if (status == A_STATUS_OK && handle->rx.state != ADEV_USART_RX_IDLE)
+        status = A_STATUS_BUSY;
+#endif
+#if ADEV_USART_DMA_BACKEND_ENABLE
+    if (status == A_STATUS_OK &&
+        (handle->settings.mode & ADEV_USART_RX_MASK) == ADEV_USART_RX_DMA_BUFFERED &&
+        !handle->rx.dma_active)
+        status = A_STATUS_UNSUPPORTED;
+#endif
+    if (status != A_STATUS_OK) return aOSFailWithStatus(status);
 
-    if (handle->rx.state != ADEV_USART_RX_IDLE) {
-        return aOSFailWithStatus(A_STATUS_BUSY);
-    }
-
-    handle->rx.state = ADEV_USART_RX_STREAM;
 #if ADEV_USART_DMA_BACKEND_ENABLE
     if ((handle->settings.mode & ADEV_USART_RX_MASK) ==
         ADEV_USART_RX_DMA_BUFFERED) {
-        if (!handle->rx.dma_active) {
-            handle->rx.state = ADEV_USART_RX_IDLE;
-
-            return aOSFailWithStatus(A_STATUS_UNSUPPORTED);
-        }
         result = dma_buffered_read(handle, buffer, buffer_size, &end, timeout);
     } else
 #endif
@@ -373,17 +370,16 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
     {
         result = polling_read(handle, buffer, buffer_size, &end, timeout);
     }
-    handle->rx.state = ADEV_USART_RX_IDLE;
-
+    const aBool_t overflow = handle->rx.overflow;
     /* 流已丢字节：即使本次复制了部分数据，也不能按成功交付。 */
-    if (handle->rx.overflow)
+    if (overflow)
         return aOSFailWithStatus(A_STATUS_ERROR);
     return result;
 }
 
 #if ADEV_USART_DMA_BACKEND_ENABLE
 /* 共享 DMA 环形缓冲区。 */
-/* 更新 DMA 已生产字节计数，保留环形缓冲区中的最新数据。 */
+/* 调用方独占 DMA 消费进度，或持有任务/ISR 临界区。 */
 aStatus_t aDevUsartDmaRxRefresh(aDevUsartHandle_t *handle)
 {
     aDrvUsartRxProgress_t progress;
@@ -405,33 +401,36 @@ aStatus_t aDevUsartDmaRxRefresh(aDevUsartHandle_t *handle)
 
 /* CPU 加锁不会停止 DMA。先复制，再根据原始读取位置检查生产进度，
  * 确认未被覆盖后才交付数据；不直接借出正在被 DMA 写入的环形缓冲区。
+ * 无异步订阅的同步读取期间，仅当前任务更新消费进度，回调只通知，不消费。
  * 调用者须保证接收操作串行化，操作期间必须保持 DMA 中断使能。 */
 aStatus_t aDevUsartDmaRxCopy(aDevUsartHandle_t *handle, void *buffer,
                              size_t capacity, size_t *copied)
 {
     *copied = 0U;
     aStatus_t status = aDevUsartDmaRxRefresh(handle);
-    if (status != A_STATUS_OK) return status;
     const size_t start = handle->rx.dma_consumed;
     size_t length = handle->rx.dma_produced - start;
     if (length > capacity) length = capacity;
     const size_t offset = handle->rx.tail;
     if (length > handle->settings.rx_buffer_size - offset)
         length = handle->settings.rx_buffer_size - offset;
+    if (status != A_STATUS_OK) return status;
     if (length == 0U) return A_STATUS_OK;
     memcpy(buffer, handle->settings.rx_buffer + offset, length);
-    atomic_thread_fence(memory_order_seq_cst);
+    aAtomicThreadFence(A_ATOMIC_SEQ_CST);
     status = aDevUsartDmaRxRefresh(handle);
-    if (status != A_STATUS_OK) return status;
-    if (handle->rx.dma_produced - start > handle->settings.rx_buffer_size) {
+    if (status == A_STATUS_OK &&
+        handle->rx.dma_produced - start > handle->settings.rx_buffer_size) {
         /* 复制的数据可能已被覆盖而不一致；不报告有效字节，保留溢出锁存状态。 */
-        return A_STATUS_ERROR;
+        status = A_STATUS_ERROR;
     }
-    handle->rx.dma_consumed = start + length;
-    handle->rx.tail = offset + length == handle->settings.rx_buffer_size ?
-                      0U : offset + length;
-    *copied = length;
-    return A_STATUS_OK;
+    if (status == A_STATUS_OK) {
+        handle->rx.dma_consumed = start + length;
+        handle->rx.tail = offset + length == handle->settings.rx_buffer_size ?
+                          0U : offset + length;
+        *copied = length;
+    }
+    return status;
 }
 
 void aDevUsartRxDmaNotifyFromISR(aDevUsartHandle_t *handle)
@@ -458,16 +457,6 @@ static void direct_rx_complete(void *argument)
     aOSWaitObjectNotifyFromISR(handle->rx.wait_object);
 }
 
-static void direct_rx_event_set(aDevUsartHandle_t *handle,
-                                    aBool_t enabled)
-{
-    if ((handle->settings.mode & ADEV_USART_RX_MASK) ==
-        ADEV_USART_RX_INTERRUPT_BUFFERED) {
-        (void)aDrvUsartSetEventEnabled(
-            &handle->drv_handle, ADRV_USART_EVENT_RX_READY, enabled);
-    }
-}
-
 static aSSize_t dma_read_direct(aDevUsartHandle_t *handle, void *buffer,
                              size_t buffer_size, aTimeout_t timeout)
 {
@@ -490,18 +479,11 @@ static aSSize_t dma_read_direct(aDevUsartHandle_t *handle, void *buffer,
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
 
-    aDrvUsartPauseDispatch(&handle->drv_handle);
-    if ((handle->rx.state != ADEV_USART_RX_IDLE) ||
-        handle->rx.dispatching ||
-        handle->rx.dma_active ||
-        (handle->rx.count != 0U)) {
-        aDrvUsartResumeDispatch(&handle->drv_handle);
-
+    /* 仅无 ring 的 DMA RX 可直收，该配置不能建立异步订阅。
+     * dma_active 在初始化后不变；同方向调用由应用串行化。 */
+    if (handle->rx.dma_active) {
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
-    handle->rx.state = ADEV_USART_RX_DIRECT;
-    direct_rx_event_set(handle, A_FALSE);
-    aDrvUsartResumeDispatch(&handle->drv_handle);
 
     while (count < buffer_size) {
         size_t transfer_size = buffer_size - count;
@@ -517,7 +499,8 @@ static aSSize_t dma_read_direct(aDevUsartHandle_t *handle, void *buffer,
         for (;;) {
             status = aDrvUsartAsyncRxGetRemaining(
                 &handle->drv_handle, &remaining);
-            if (handle->rx.error != A_STATUS_OK) status = handle->rx.error;
+            const aStatus_t error = aDevUsartGetRxError(handle);
+            if (error != A_STATUS_OK) status = error;
             if (status == A_STATUS_OK && remaining != 0U)
                 status = direct_wait(handle->rx.wait_object, &end, A_FALSE);
             if ((status != A_STATUS_OK) || (remaining == 0U) ||
@@ -533,7 +516,7 @@ static aSSize_t dma_read_direct(aDevUsartHandle_t *handle, void *buffer,
                 }
                 if (received > transfer_size) {
                     status = A_STATUS_ERROR;
-                } else if (handle->rx.error == A_STATUS_OK) {
+                } else if (aDevUsartGetRxError(handle) == A_STATUS_OK) {
                     count += received;
                 } else {
                     /* 无法确定 DMA 数据中的出错位置，本次不发布字节。 */
@@ -551,9 +534,6 @@ static aSSize_t dma_read_direct(aDevUsartHandle_t *handle, void *buffer,
             break;
         }
     }
-
-    direct_rx_event_set(handle, A_TRUE);
-    handle->rx.state = ADEV_USART_RX_IDLE;
 
     if (count != 0U) return (aSSize_t)count;
     return status == A_STATUS_TIMEOUT
@@ -574,10 +554,8 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
     if (!handle->drv_handle.initialized)
         return aOSFailWithStatus(A_STATUS_NOT_READY);
     if (buffer_size == 0U) return 0;
-    if (handle->rx.error != A_STATUS_OK)
-        return aOSFailWithStatus(handle->rx.error);
-    if (handle->rx.state != ADEV_USART_RX_IDLE || handle->rx.dispatching)
-        return aOSFailWithStatus(A_STATUS_BUSY);
+    const aStatus_t ready = handle->rx.error;
+    if (ready != A_STATUS_OK) return aOSFailWithStatus(ready);
 #if ADEV_USART_DMA_BACKEND_ENABLE
     if ((handle->settings.mode & ADEV_USART_RX_MASK) ==
         ADEV_USART_RX_DMA_BUFFERED)
@@ -588,25 +566,6 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
 
     const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
     aStatus_t status = A_STATUS_OK;
-    aOSCriticalEnter();
-    if (handle->rx.state != ADEV_USART_RX_IDLE || handle->rx.dispatching ||
-        handle->rx.dma_active ||
-        handle->rx.count != 0U) {
-        aOSCriticalExit();
-
-        return aOSFailWithStatus(A_STATUS_BUSY);
-    }
-    handle->rx.state = ADEV_USART_RX_DIRECT;
-#if ADEV_USART_INTERRUPT_ENABLE
-    if ((handle->settings.mode & ADEV_USART_RX_MASK) ==
-        ADEV_USART_RX_INTERRUPT_BUFFERED)
-        (void)aDrvUsartSetEventEnabled(&handle->drv_handle,
-                                          ADRV_USART_EVENT_RX_READY, A_FALSE);
-    if (handle->settings.mode & ADEV_USART_OPTION_RX_IDLE)
-        (void)aDrvUsartSetEventEnabled(&handle->drv_handle,
-                                          ADRV_USART_EVENT_RX_IDLE, A_FALSE);
-#endif
-    aOSCriticalExit();
 
     size_t count = 0U;
     while (count < buffer_size) {
@@ -621,19 +580,6 @@ aSSize_t aDevUsartReadDirect(aDevUsartHandle_t *handle, void *buffer,
             break;
         }
     }
-    aOSCriticalEnter();
-#if ADEV_USART_INTERRUPT_ENABLE
-    if ((handle->settings.mode & ADEV_USART_RX_MASK) ==
-        ADEV_USART_RX_INTERRUPT_BUFFERED)
-        (void)aDrvUsartSetEventEnabled(&handle->drv_handle,
-                                          ADRV_USART_EVENT_RX_READY, A_TRUE);
-    if (handle->settings.mode & ADEV_USART_OPTION_RX_IDLE)
-        (void)aDrvUsartSetEventEnabled(&handle->drv_handle,
-                                          ADRV_USART_EVENT_RX_IDLE, A_TRUE);
-#endif
-    handle->rx.state = ADEV_USART_RX_IDLE;
-    aOSCriticalExit();
-
     if (count != 0U) return (aSSize_t)count;
     return status == A_STATUS_TIMEOUT ? aOSFailWithTimeout(timeout)
                                       : aOSFailWithStatus(status);
@@ -655,11 +601,14 @@ static void async_rx_dispatch(aDevUsartHandle_t *handle)
     aDevUsartRxCallback_t callback = handle->rx.callback;
     void *argument = handle->rx.callback_argument;
     aOSCriticalExitFromISR(key);
-
+    /* aDrv 串行派发回调，dispatching 阻止任务切换消费者。
+     * 本次消费期间独占 ring/DMA 游标，只有交接订阅时需要保护。 */
     aStatus_t status = handle->rx.error;
+
     if (!handle->rx.dma_active) {
         size_t available = handle->rx.count;
-        if (handle->rx.overflow) status = A_STATUS_ERROR;
+        if (handle->rx.overflow)
+            status = A_STATUS_ERROR;
         for (unsigned span = 0U; status == A_STATUS_OK && available &&
             span < 2U; ++span) {
             const size_t start = handle->rx.tail;
@@ -670,51 +619,50 @@ static void async_rx_dispatch(aDevUsartHandle_t *handle)
                 .buffer = handle->settings.rx_buffer + start,
                 .length = length, .status = A_STATUS_OK,
             };
-            /* 回调返回前保持这些缓冲位置被占用；中断接收方在缓冲区满时
-             * 丢弃新字节，不覆盖已占用的位置。 */
+            /* 回调返回前保持占用；满缓冲时生产者丢弃新字节。 */
             callback(handle, &event, argument);
-            key = aOSCriticalEnterFromISR();
             handle->rx.tail =
                 (start + length) % handle->settings.rx_buffer_size;
             handle->rx.count -= length;
-            aOSCriticalExitFromISR(key);
             available -= length;
-            if (handle->rx.overflow) status = A_STATUS_ERROR;
+            if (handle->rx.overflow)
+                status = A_STATUS_ERROR;
         }
         goto finish;
     }
 #if ADEV_USART_DMA_BACKEND_ENABLE
     if (status == A_STATUS_OK) status = aDevUsartDmaRxRefresh(handle);
-    if (handle->rx.overflow) status = A_STATUS_ERROR;
+    if (handle->rx.overflow)
+        status = A_STATUS_ERROR;
     const size_t start = handle->rx.dma_consumed;
     const size_t available = handle->rx.dma_produced - start;
     if (status == A_STATUS_OK && available != 0U) {
         const size_t offset = handle->rx.tail;
+        uint8_t *snapshot = handle->rx.snapshot;
         size_t first = handle->settings.rx_buffer_size - offset;
         if (first > available) first = available;
-        memcpy(handle->rx.snapshot, handle->settings.rx_buffer + offset, first);
-        memcpy(handle->rx.snapshot + first, handle->settings.rx_buffer,
-            available -
-            first);
-        atomic_thread_fence(memory_order_seq_cst);
+        /* dispatching 保持订阅及快照有效；复制期间不持有 CPU 临界区。 */
+        memcpy(snapshot, handle->settings.rx_buffer + offset, first);
+        memcpy(snapshot + first, handle->settings.rx_buffer, available - first);
+        aAtomicThreadFence(A_ATOMIC_SEQ_CST);
         status = aDevUsartDmaRxRefresh(handle);
         if (status == A_STATUS_OK &&
             handle->rx.dma_produced - start > handle->settings.rx_buffer_size)
             status = A_STATUS_ERROR;
-        /* 在接口约定的 DMA 中断延迟上限内，先验证复制期间源数据未被
-         * DMA 覆盖，再交付数据。 */
+        /* CPU 保护不停止 DMA，确认未覆盖后才交付快照。 */
         if (status == A_STATUS_OK) {
             handle->rx.dma_consumed = start + available;
             handle->rx.tail =
                 (offset + available) % handle->settings.rx_buffer_size;
             const aDevUsartRxEvent_t event = {
                 .type = ADEV_USART_RX_EVENT_DATA_READY,
-                .buffer = handle->rx.snapshot,
+                .buffer = snapshot,
                 .offset = 0U, .length = available, .status = A_STATUS_OK,
             };
             callback(handle, &event, argument);
             status = aDevUsartDmaRxRefresh(handle);
-            if (handle->rx.overflow) status = A_STATUS_ERROR;
+            if (handle->rx.overflow)
+                status = A_STATUS_ERROR;
         }
     }
 #else
@@ -758,7 +706,6 @@ aStatus_t aDevUsartReadAsync(aDevUsartHandle_t *handle,
                              : ring - snapshot < request->buffer_size)
             return A_STATUS_INVALID_PARAM;
     }
-    if (handle->rx.dispatching) return A_STATUS_BUSY;
     aStatus_t status = A_STATUS_OK;
     aOSCriticalEnter();
     if (handle->rx.state != ADEV_USART_RX_IDLE || handle->rx.dispatching) {
@@ -771,7 +718,7 @@ aStatus_t aDevUsartReadAsync(aDevUsartHandle_t *handle,
         if (status == A_STATUS_OK && (handle->rx.count != 0U ||
             handle->rx.dma_produced != handle->rx.dma_consumed))
             status = A_STATUS_BUSY;
-        if (status == A_STATUS_OK && handle->rx.error != A_STATUS_OK)
+        if (status == A_STATUS_OK)
             status = handle->rx.error;
         if (status == A_STATUS_OK) {
             handle->rx.snapshot = request->buffer;
@@ -789,7 +736,6 @@ aStatus_t aDevUsartReadAsyncCancel(aDevUsartHandle_t *handle)
 {
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (!handle->drv_handle.initialized) return A_STATUS_NOT_READY;
-    if (handle->rx.dispatching) return A_STATUS_BUSY;
     aStatus_t status = A_STATUS_OK;
     aOSCriticalEnter();
     if (handle->rx.state != ADEV_USART_RX_ASYNC || handle->rx.dispatching ||
@@ -810,7 +756,11 @@ aStatus_t aDevUsartReadAsyncCancel(aDevUsartHandle_t *handle)
 
 void aDevUsartAsyncRxCancelFromISR(aDevUsartHandle_t *handle)
 {
-    if (!handle->rx.cancel_pending) return;
+    aOSCriticalState_t key = aOSCriticalEnterFromISR();
+    if (!handle->rx.cancel_pending || handle->rx.dispatching) {
+        aOSCriticalExitFromISR(key);
+        return;
+    }
     handle->rx.dispatching = A_TRUE;
     handle->rx.cancel_pending = A_FALSE;
     aDevUsartRxCallback_t callback = handle->rx.callback;
@@ -818,12 +768,15 @@ void aDevUsartAsyncRxCancelFromISR(aDevUsartHandle_t *handle)
     const aDevUsartRxEvent_t event = {
         .type = ADEV_USART_RX_EVENT_CANCELLED, .status = A_STATUS_CANCELLED,
     };
+    aOSCriticalExitFromISR(key);
     callback(handle, &event, argument);
+    key = aOSCriticalEnterFromISR();
     handle->rx.snapshot = NULL;
     handle->rx.callback = NULL;
     handle->rx.callback_argument = NULL;
     handle->rx.state = ADEV_USART_RX_IDLE;
     handle->rx.dispatching = A_FALSE;
+    aOSCriticalExitFromISR(key);
 }
 
 #endif
@@ -878,27 +831,26 @@ aStatus_t aDevUsartDiscardRx(aDevUsartHandle_t *handle)
 
 uint32_t aDevUsartGetIdleEventCount(const aDevUsartHandle_t *handle)
 {
-    return handle == NULL ? 0U : handle->rx.idle_event_count;
+    if (handle == NULL) return 0U;
+    return handle->rx.idle_event_count;
 }
 
 aBool_t aDevUsartHasRxOverflowed(const aDevUsartHandle_t *handle)
 {
-    return (handle != NULL) && handle->rx.overflow;
+    if (handle == NULL) return A_FALSE;
+    return handle->rx.overflow;
 }
 
 void aDevUsartClearRxOverflow(aDevUsartHandle_t *handle)
 {
-    if (handle != NULL) {
-        handle->rx.overflow = A_FALSE;
-    }
+    if (handle == NULL) return;
+    handle->rx.overflow = A_FALSE;
 }
 
 void aDevUsartClearRxError(aDevUsartHandle_t *handle)
 {
     if (handle == NULL) return;
-    aOSCriticalEnter();
     handle->rx.error = A_STATUS_OK;
-    aOSCriticalExit();
 }
 
 aStatus_t aDevUsartGetRxError(const aDevUsartHandle_t *handle)

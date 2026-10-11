@@ -1,6 +1,5 @@
 #include "aDev_usart_internal.h"
 
-#include <limits.h>
 #include <string.h>
 
 #if ADEV_USART_NEEDS_EVENTS
@@ -108,7 +107,7 @@ static void handle_struct_init(aDevUsartHandle_t *handle, aBool_t dynamic)
     aDrvUsartHandleStructInit(&handle->drv_handle);
     aDrvGpioHandleStructInit(&handle->de_gpio);
     handle->settings.mode = ADEV_USART_TX_POLLING | ADEV_USART_RX_POLLING;
-    atomic_init(&handle->tx.completion_claimed, A_TRUE);
+    handle->rx.error = A_STATUS_OK;
     handle->dynamic_storage = dynamic;
 }
 
@@ -257,36 +256,24 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
     if (handle == NULL) {
         return A_STATUS_INVALID_PARAM;
     }
-    /* 工作线程不得等待同一串行队列中的其他工作项，避免自锁。 */
-    if (handle->rx.dispatching) return A_STATUS_BUSY;
-
     if (!handle->drv_handle.initialized) {
         return A_STATUS_NOT_READY;
     }
-    if ((handle->tx.state != ADEV_USART_TX_IDLE) ||
+    /* 生命周期独占，不会有新的请求；回调只推进已有事务。
+     * 忙快照允许保守拒绝，资源安全由下方 TimerDestroy/aDrv DeInit 保证。 */
+    const aBool_t busy = (handle->tx.state != ADEV_USART_TX_IDLE) ||
         (handle->rx.state != ADEV_USART_RX_IDLE) ||
         handle->rx.dispatching ||
         handle->rs485_transmitting ||
         ((handle->tx.count != 0U) && (handle->tx.error == A_STATUS_OK)) ||
-        (handle->tx.dma_active != 0U)) {
-        return A_STATUS_BUSY;
-    }
+        (handle->tx.dma_active != 0U);
+    if (busy) return A_STATUS_BUSY;
 
-#if ADEV_USART_DMA_BACKEND_ENABLE
-    if (handle->rx.dma_active) {
-        (void)aDrvUsartSetEventEnabled(
-            &handle->drv_handle, ADRV_USART_EVENT_RX_IDLE, A_FALSE);
-        status = aDrvUsartAsyncRxAbort(&handle->drv_handle);
-        if (status != A_STATUS_OK) return status;
-        handle->rx.dma_active = A_FALSE;
-    }
-
-#endif
-
-    /* 先停止并等待定时器回调结束，再等待其提交的工作项完成。 */
+    /* 生命周期由应用独占；不持有状态保护等待定时器或驱动回调退出。 */
     status = aOSTimerDestroy(&handle->tx.deadline_timer);
     if (status != A_STATUS_OK) return status;
 
+    /* aDrv 成功返回后，DMA 和驱动回调均不再访问实例及其缓冲区。 */
     status = aDrvUsartDeInitStatic(&handle->drv_handle);
     if (status == A_STATUS_OK) {
 #if ADEV_USART_RS485_ENABLE

@@ -9,6 +9,26 @@ static unsigned route, changes, stage;
 static aBool_t swd_only;
 static unsigned error_flag, data_reads;
 static unsigned clock_writes;
+static unsigned shutdown_stage;
+
+/* 真实 DeInit 必须先阻止新派发，再停止 DMA，最后清空句柄。 */
+void aDrvUsartPauseDispatch(aDrvUsartHandle_t *handle)
+{
+    assert(handle->initialized && shutdown_stage == 0U);
+    shutdown_stage = 1U;
+}
+aStatus_t aDrvUsartAsyncTxAbort(aDrvUsartHandle_t *handle)
+{
+    assert(handle->initialized && shutdown_stage == 1U);
+    shutdown_stage = 2U;
+    return A_STATUS_OK;
+}
+aStatus_t aDrvUsartAsyncRxAbort(aDrvUsartHandle_t *handle)
+{
+    assert(handle->initialized && shutdown_stage == 2U);
+    shutdown_stage = 3U;
+    return A_STATUS_OK;
+}
 unsigned usart_flag_get(uint32_t instance, uint32_t flag)
 {
     assert(instance != USART5);
@@ -64,7 +84,11 @@ void gpio_bit_write(uint32_t port, uint32_t pin, unsigned value)
     stage = 1U;
 }
 void usart_deinit(uint32_t instance) { assert(instance == USART2); }
-void usart_disable(uint32_t instance) { assert(instance == USART2); }
+void usart_disable(uint32_t instance)
+{
+    assert(instance == USART2 && shutdown_stage == 3U);
+    shutdown_stage = 0U;
+}
 void usart_enable(uint32_t instance) { assert(instance == USART2); }
 #define CONFIG_STUB(name) \
     void name(uint32_t instance, uint32_t value) \

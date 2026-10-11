@@ -1,8 +1,8 @@
 #include "aLog_internal.h"
 #include "aOS.h"
+#include "aAtomic.h"
 #include <elog.h>
 #include <stdarg.h>
-#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -11,7 +11,7 @@
 #define ALOG_HEADER_RESERVE 80U
 
 _Static_assert(ALOG_LINE_BUFFER_SIZE >= 256, "Log line too small");
-_Static_assert(ATOMIC_INT_LOCK_FREE == 2, "Log counters need atomics");
+_Static_assert(A_ATOMIC_INT_LOCK_FREE == 2, "Log counters need atomics");
 _Static_assert(ALOG_LEVEL_ERROR == ELOG_LVL_ERROR &&
                ALOG_LEVEL_VERBOSE == ELOG_LVL_VERBOSE,
                "Log level mapping changed");
@@ -25,7 +25,7 @@ static struct {
     aStatus_t output_status;
     unsigned output_records;
     unsigned filtered_records;
-    atomic_uint dropped_records;
+    aAtomicUint_t dropped_records;
     char message[ALOG_LINE_BUFFER_SIZE - ALOG_HEADER_RESERVE];
 } logger;
 
@@ -51,8 +51,8 @@ static aBool_t tag_valid(const char *tag)
 
 static void record_drop(void)
 {
-    (void)atomic_fetch_add_explicit(&logger.dropped_records, 1U,
-                                    memory_order_relaxed);
+    (void)aAtomicFetchAddExplicit(&logger.dropped_records, 1U,
+                                 A_ATOMIC_RELAXED);
 }
 
 static aStatus_t unlock_with_status(aStatus_t status)
@@ -90,7 +90,7 @@ aStatus_t aLogInit(const aLogConfig_t *config)
     logger.config = *config;
     logger.output_records = 0U;
     logger.filtered_records = 0U;
-    atomic_init(&logger.dropped_records, 0U);
+    aAtomicInit(&logger.dropped_records, 0U);
     logger.output_status = A_STATUS_OK;
     (void)elog_init();
     elog_output_lock_enabled(false);
@@ -142,8 +142,8 @@ aStatus_t aLogGetStats(aLogStats_t *stats)
     stats->level = logger.config.level;
     stats->output_records = logger.output_records;
     stats->filtered_records = logger.filtered_records;
-    stats->dropped_records = atomic_load_explicit(&logger.dropped_records,
-                                                 memory_order_relaxed);
+    stats->dropped_records = aAtomicLoadExplicit(&logger.dropped_records,
+                                                A_ATOMIC_RELAXED);
     return unlock_with_status(A_STATUS_OK);
 }
 

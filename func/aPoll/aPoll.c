@@ -91,7 +91,7 @@ static aStatus_t instance_init(const aPollConfig_t *config,
     handle->event_cursor = 0U;
     handle->class_cursor = 0U;
     handle->dynamic = dynamic;
-    atomic_init(&handle->active, A_FALSE);
+    aAtomicInit(&handle->active, A_FALSE);
     for (size_t i = 0U; i < config->job_count; i++) {
         aPollJobState_t *state = &handle->jobs[i];
         state->step_index = 0U;
@@ -99,10 +99,10 @@ static aStatus_t instance_init(const aPollConfig_t *config,
         state->delay = aTimepointCalc(A_TIMEOUT_NO_WAIT,
                                       state->cycle_started);
         state->cycle_active = A_FALSE;
-        atomic_init(&state->triggered, A_TRUE);
+        aAtomicInit(&state->triggered, A_TRUE);
     }
     for (size_t i = 0U; i < config->event_count; i++) {
-        atomic_init(&handle->events[i].pending, A_FALSE);
+        aAtomicInit(&handle->events[i].pending, A_FALSE);
     }
     handle->ready = A_TRUE;
     return A_STATUS_OK;
@@ -111,7 +111,7 @@ static aStatus_t instance_init(const aPollConfig_t *config,
 static aStatus_t instance_deinit(aPollHandle_t *handle)
 {
     if (!handle->ready) return A_STATUS_NOT_READY;
-    if (atomic_load(&handle->active) || handle->used != 0U) {
+    if (aAtomicLoad(&handle->active) || handle->used != 0U) {
         return A_STATUS_BUSY;
     }
     /* 生命周期由应用串行化；必须先停止投递者和等待任务。 */
@@ -196,7 +196,7 @@ aStatus_t aPollEventPost(aPollHandle_t *handle, size_t event_index)
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (!handle->ready) return A_STATUS_NOT_READY;
     if (event_index >= handle->config.event_count) return A_STATUS_NOT_FOUND;
-    atomic_store(&handle->events[event_index].pending, A_TRUE);
+    aAtomicStore(&handle->events[event_index].pending, A_TRUE);
     aOSWaitObjectNotify(handle->wake);
     return A_STATUS_OK;
 }
@@ -206,7 +206,7 @@ aStatus_t aPollJobTrigger(aPollHandle_t *handle, size_t job_index)
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (!handle->ready) return A_STATUS_NOT_READY;
     if (job_index >= handle->config.job_count) return A_STATUS_NOT_FOUND;
-    atomic_store(&handle->jobs[job_index].triggered, A_TRUE);
+    aAtomicStore(&handle->jobs[job_index].triggered, A_TRUE);
     aOSWaitObjectNotify(handle->wake);
     return A_STATUS_OK;
 }
@@ -243,7 +243,7 @@ static uint32_t job_remaining(aPollHandle_t *handle, size_t index,
     const aPollJobConfig_t *job = &handle->config.jobs[index];
     aPollJobState_t *state = &handle->jobs[index];
     uint32_t remaining = aTimepointRemaining(&state->delay, now).milliseconds;
-    if (!state->cycle_active && !atomic_load(&state->triggered)) {
+    if (!state->cycle_active && !aAtomicLoad(&state->triggered)) {
         uint32_t elapsed = now - state->cycle_started;
         if (elapsed < job->poll_time_ms &&
             job->poll_time_ms - elapsed > remaining) {
@@ -264,7 +264,7 @@ static aBool_t job_process(aPollHandle_t *handle, aPollProcessResult_t *result)
         uint32_t delay;
         if (job_remaining(handle, i, now) != 0U) continue;
         if (!state->cycle_active) {
-            atomic_exchange(&state->triggered, A_FALSE);
+            aAtomicExchange(&state->triggered, A_FALSE);
             state->cycle_started = now;
             state->cycle_active = A_TRUE;
         }
@@ -296,7 +296,7 @@ static aBool_t event_process(aPollHandle_t *handle,
     for (size_t n = 0U; n < count; n++) {
         size_t i = (handle->event_cursor + n) % count;
         const aPollEventConfig_t *event = &handle->config.events[i];
-        if (!atomic_exchange(&handle->events[i].pending, A_FALSE)) continue;
+        if (!aAtomicExchange(&handle->events[i].pending, A_FALSE)) continue;
         result->type = APOLL_WORK_EVENT;
         result->index = i;
         event->function(event->context);
@@ -340,7 +340,7 @@ static aTimeout_t next_wait(aPollHandle_t *handle)
             remaining < wait.milliseconds) wait = A_TIMEOUT_MS(remaining);
     }
     for (size_t i = 0U; i < handle->config.event_count; i++) {
-        if (atomic_load(&handle->events[i].pending)) return A_TIMEOUT_NO_WAIT;
+        if (aAtomicLoad(&handle->events[i].pending)) return A_TIMEOUT_NO_WAIT;
     }
     if (handle->config.request_capacity != 0U) {
         aBool_t pending;
@@ -360,7 +360,7 @@ static aStatus_t enter(aPollHandle_t *handle)
 {
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (!handle->ready) return A_STATUS_NOT_READY;
-    if (atomic_exchange(&handle->active, A_TRUE)) return A_STATUS_BUSY;
+    if (aAtomicExchange(&handle->active, A_TRUE)) return A_STATUS_BUSY;
     return A_STATUS_OK;
 }
 
@@ -393,7 +393,7 @@ aStatus_t aPollProcess(aPollHandle_t *handle, aPollProcessResult_t *result)
         }
     }
     result->wait = next_wait(handle);
-    atomic_store(&handle->active, A_FALSE);
+    aAtomicStore(&handle->active, A_FALSE);
     return status;
 }
 
@@ -410,6 +410,6 @@ aStatus_t aPollWait(aPollHandle_t *handle, aTimeout_t timeout)
         (due.type != A_TIMEOUT_TYPE_FOREVER &&
          due.milliseconds < timeout.milliseconds)) timeout = due;
     status = aOSWaitObjectWait(handle->wake, timeout);
-    atomic_store(&handle->active, A_FALSE);
+    aAtomicStore(&handle->active, A_FALSE);
     return status;
 }

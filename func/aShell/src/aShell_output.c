@@ -1,10 +1,10 @@
 #include "aShell_internal.h"
 #include "aShell_config.h"
+#include "aAtomic.h"
 
-#include <stdatomic.h>
 #include <string.h>
 
-_Static_assert(ATOMIC_INT_LOCK_FREE == 2,
+_Static_assert(A_ATOMIC_INT_LOCK_FREE == 2,
                "Shell drop counter requires lock-free unsigned atomics");
 _Static_assert(ASHELL_OUTPUT_BUFFER_SIZE >= ASHELL_PRINT_BUFFER_SIZE,
                "Output queue must hold a complete formatted message");
@@ -16,7 +16,7 @@ static struct {
     size_t head;
     size_t tail;
     size_t used;
-    atomic_uint dropped;
+    aAtomicUint_t dropped;
 } output;
 
 aStatus_t aShellOutputInit(void)
@@ -24,7 +24,7 @@ aStatus_t aShellOutputInit(void)
     output.head = 0U;
     output.tail = 0U;
     output.used = 0U;
-    atomic_init(&output.dropped, 0U);
+    aAtomicInit(&output.dropped, 0U);
     return aOSMutexCreate(&output.mutex);
 }
 
@@ -38,8 +38,8 @@ void aShellOutputDeInit(void)
 
 void aShellOutputDrop(void)
 {
-    (void)atomic_fetch_add_explicit(&output.dropped, 1U,
-                                    memory_order_relaxed);
+    (void)aAtomicFetchAddExplicit(&output.dropped, 1U,
+                                 A_ATOMIC_RELAXED);
 }
 
 aStatus_t aShellOutputWrite(const char *data, size_t size)
@@ -119,8 +119,8 @@ aStatus_t aShellGetOutputStats(aShellOutputStats_t *stats)
     status = aOSMutexLock(output.mutex, A_TIMEOUT_FOREVER);
     if (status != A_STATUS_OK) return status;
     stats->pending_bytes = output.used;
-    stats->dropped_messages = atomic_load_explicit(
-        &output.dropped, memory_order_relaxed);
+    stats->dropped_messages = aAtomicLoadExplicit(
+        &output.dropped, A_ATOMIC_RELAXED);
     (void)aOSMutexUnlock(output.mutex);
     return A_STATUS_OK;
 }

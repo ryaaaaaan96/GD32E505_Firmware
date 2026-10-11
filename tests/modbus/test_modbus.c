@@ -840,9 +840,9 @@ static void prepared_plans(aModbusTransportType_t type)
     reject_sig_write = A_TRUE;
     assert(aModbusPlanExecute(plan, &request) == A_STATUS_BUSY && attempted);
     reject_sig_write = A_FALSE;
-    atomic_store(&client->active, A_TRUE);
+    aAtomicStore(&client->active, A_TRUE);
     assert(aModbusPlanExecute(plan, &request) == A_STATUS_BUSY && !attempted);
-    atomic_store(&client->active, A_FALSE);
+    aAtomicStore(&client->active, A_FALSE);
     assert(aModbusPlanExecute(plan, &request) == A_STATUS_OK);
     /* 即时读写不改预生成帧；随后继续执行同一计划。 */
     assert(read_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,

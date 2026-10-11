@@ -4,6 +4,7 @@
  * 对象销毁前由调用方停止所有使用者，临界区不替代生命周期管理。 */
 #include "aOS.h"
 #include "aOS_config.h"
+#include "aAtomic.h"
 
 #include "FreeRTOS.h"
 #include "semphr.h"
@@ -11,7 +12,6 @@
 #include "timers.h"
 
 #include <stdint.h>
-#include <stdatomic.h>
 
 /* 当前时基约定为 32 位、1 ms 每 tick，与超时计算及回绕处理保持一致。 */
 _Static_assert(sizeof(TickType_t) == 4U && configTICK_RATE_HZ == 1000U,
@@ -229,7 +229,7 @@ void aOSRecordFault(aOSFaultCode_t code, aStatus_t status,
      * context 仅借用指针；此顺序不提供多写者互斥或完整快照同步。 */
     g_aOSFaultRecord.status = (int32_t)status;
     g_aOSFaultRecord.context = context;
-    atomic_thread_fence(memory_order_release);
+    aAtomicThreadFence(A_ATOMIC_RELEASE);
     g_aOSFaultRecord.code = (uint32_t)code;
 }
 

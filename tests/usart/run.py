@@ -7,21 +7,26 @@ import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[2]
-# RX 公共接口在轮询、仅中断、仅 DMA 的裁剪组合中也必须可编译。
-for name, interrupt, dma in (("polling", 0, 0), ("interrupt", 1, 0), ("dma", 0, 1)):
+# 收发及生命周期在轮询、仅中断、仅 DMA 的裁剪组合中也必须可编译。
+for name, interrupt, dma, direct in (
+    ("polling", 0, 0, 0), ("interrupt", 1, 0, 0), ("dma", 0, 1, 0),
+    ("polling-direct", 0, 0, 1), ("dma-direct", 0, 1, 1),
+):
     subprocess.run([
         "cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only",
         "-DADEV_USART_STATIC_ENABLE=1",
         f"-DADEV_USART_INTERRUPT_ENABLE={interrupt}",
-        "-DADEV_USART_DIRECT_ENABLE=0", "-DADEV_USART_ASYNC_ENABLE=0",
+        f"-DADEV_USART_DIRECT_ENABLE={direct}", "-DADEV_USART_ASYNC_ENABLE=0",
         "-DADEV_USART_RS485_ENABLE=0",
         f"-DADRV_USART_INTERRUPT_ENABLE={int(bool(interrupt or dma))}",
         f"-DADRV_USART_DMA_ENABLE={dma}",
         "-Itests/usart/mocks", "-Idevice/aDev_usart/include", "-Idevice/aDev_usart/src",
         "-Iplatform/aLib/include", "-Iplatform/aDrv/include",
+        "device/aDev_usart/src/aDev_usart.c",
         "device/aDev_usart/src/aDev_usart_rx.c",
+        "device/aDev_usart/src/aDev_usart_tx.c",
     ], cwd=root, check=True)
-    print("RX compile profile:", name, flush=True)
+    print("USART compile profile:", name, flush=True)
 
 with tempfile.TemporaryDirectory(prefix="aclass-usart-") as directory:
     # 只生成真实平台构建，不使用 ARM 工具链；核对 OS 约束确实传入 aDrv。
@@ -72,6 +77,7 @@ add_subdirectory("{root}/platform" platform)
             "INTERRUPT", "DIRECT", "ASYNC", "RS485",
         )],
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+        "-fno-builtin-memcpy", "-Wl,--wrap=memcpy",
         "-Itests/usart/mocks", "-Idevice/aDev_usart/include", "-Idevice/aDev_usart/src",
         "-Iplatform/aLib/include", "-Iplatform/aDrv/include",
         "tests/usart/test_rs485.c", "device/aDev_usart/src/aDev_usart.c",
@@ -79,8 +85,9 @@ add_subdirectory("{root}/platform" platform)
         "device/aDev_usart/src/aDev_usart_tx.c",
         "device/aDev_usart/src/aDev_usart_rs485.c", "-o", executable,
     ]
-    subprocess.run(command, cwd=root, check=True)
-    subprocess.run([executable], check=True)
+    for optimization in ("-O0", "-O2"):
+        subprocess.run(command + [optimization], cwd=root, check=True)
+        subprocess.run([executable], check=True)
 
     fifo = str(Path(directory) / "test_fifo")
     subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",

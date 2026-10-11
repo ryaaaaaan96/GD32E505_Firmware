@@ -86,7 +86,7 @@ typedef void *aOSTimer_t;
  */
 typedef void (*aOSTimerCallback_t)(void *argument);
 
-/** @brief ISR 临界区保存令牌，不应由调用者构造。 */
+/** @brief ISR 临界区恢复令牌，后端解释其内容，调用者原样配对归还。 */
 typedef uintptr_t aOSCriticalState_t;
 
 typedef struct aOSWorkItem aOSWorkItem_t;
@@ -373,8 +373,11 @@ aStatus_t aOSTimerStop(aOSTimer_t timer);
 aStatus_t aOSTimerDestroy(aOSTimer_t *timer);
 
 /**
- * @brief 进入当前后端任务临界区。
- * @note 与 Exit 成对；临界区内只能执行短小且不阻塞的操作，不提供跨核互斥。
+ * @brief 在任务上下文进入平台共享状态保护区，允许同一上下文嵌套。
+ * @note 任务版与 FromISR 版属于同一保护域；共享对象的所有并发访问者须参与。
+ *       与 Exit 成对，区间内只做短小且不阻塞的操作，应用回调在区间外执行。
+ *       当前 FreeRTOS/Cortex-M 后端通过本核中断屏蔽实现，仅支持单核。
+ *       将来 SMP 后端须提供此保护域的跨核互斥及获取/释放可见性，当前未实现。
  */
 void aOSCriticalEnter(void);
 
@@ -385,9 +388,10 @@ void aOSCriticalEnter(void);
 void aOSCriticalExit(void);
 
 /**
- * @brief 在 ISR 中保存并设置中断屏蔽状态。
+ * @brief 在 ISR 中进入同一平台保护域，并保存进入前状态。
  * @return 交给对应 ExitFromISR 的恢复令牌。
- * @note 仅合法 OS 中断优先级；不屏蔽全部更高优先级中断。
+ * @note 当前后端仅允许合法 OS 中断优先级，不屏蔽全部更高优先级中断。
+ *       不能被此机制保护的 ISR 不得访问这些共享对象；不能用可睡眠锁替代 ISR 保护。
  */
 aOSCriticalState_t aOSCriticalEnterFromISR(void);
 

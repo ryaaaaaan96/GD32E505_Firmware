@@ -25,6 +25,49 @@ app/devices 的 console_write 创建统一的 TX 互斥边界，锁等待计入�
 共享端口时，由 app/devices 协调同方向调用、发送完成等待和生命周期。
 忙状态检查不保证多任务入口竞争安全，ISR 临界区也不能替代任务互斥。
 
+aDev 管理 ring 和请求状态，并通过平台接口保护关联字段：任务侧使用
+`aOSCriticalEnter/Exit`，ISR 侧使用
+`aOSCriticalEnterFromISR/ExitFromISR`；定时服务属于任务上下文。
+aOS 实现临界区，aDrv 实现硬件控制、DMA 进度及事件派发。
+aDev 不依据 CPU 核数选择实现，也不为此新增一套 USART 专用保护宏。
+RX 错误、溢出标志和 IDLE 计数使用 volatile 标量快照，直接读写，不使用原子
+或临界区；IDLE 仅由串行驱动回调递增，任务只读。这些操作不承担其他数据发布。
+ring 计数提交与请求交接仍使用 aOS 保护。中断 Read 的 tail 和 DMA buffered
+Write 的 head 由调用任务独占，count 快照允许少读/少写，不单独进入临界区。
+异步 RX 取得 dispatching 后独占消费进度，同实例其他回调由 aDrv 串行派发；
+任务不能切换消费者，数据处理期间不重复加锁。批量复制、应用回调及等待在区间外。
+同步 RX 的 DMA 消费进度由接收任务独占，不额外进入临界区；无异步订阅时
+DMA 回调仅通知，不消费数据。复制前后的覆盖检查仍保留。
+同步 Read/Write/WaitTransmitComplete 和 ReadDirect 不另设调用期间的忙状态；
+它们依赖应用既有的串行调用约定，省去进入/退出时重复的状态发布。保留异步
+订阅及 DMA TX Direct 回调分流需要的状态。TX 完成、超时、取消都在同一临界区
+保护域确认 TX_ASYNC 并切换终态，因此不需要额外的完成原子标志。
+Read、Write、WriteAsync、WaitTransmitComplete 和 DeInit 的只读忙检查采用
+直接快照。应用保证同方向调用和生命周期独占，不会并发提交新请求；旧忙值
+允许保守拒绝，资源释放仍须等 aOS 定时器销毁及 aDrv 关闭完成。
+普通串口轮询的发送及完成等待不进入临界区；轮询 WriteDirect 复用 Write，
+不再单独发布 TX_DIRECT 状态。缓冲发送计数、RS485 方向切换与收尾仍受保护。
+TX_CALLBACK 期间完成事件和回调参数保持稳定，aDrv 串行派发，因此读取它们
+不再进入临界区；回调返回后清理请求字段和发布下一状态仍在保护区内完成。
+上述直接快照依赖当前 GD32 的自然对齐标量单次访问、任务/ISR 执行及工具链
+保证。volatile 不提供标准 C 线程同步，Linux/SMP 移植需重新适配快照及 ring
+发布访问，不能仅替换 aOS 临界区后端就认为移植完成。通用 aAtomic 语义不变。
+初始化先准备配置、等待对象和接收标志，再启用事件或启动 DMA，因此模式
+初始化不需要外围临界区；这些只读配置在驱动关闭前保持有效且不变。
+
+当前 GD32 aDrv 后端为同实例 USART 与 RX DMA 绑定同一中断优先级，回调
+不会互相抢占；当前 FreeRTOS aOS 后端通过本核中断屏蔽实现临界区。
+这些是平台后端的实现条件。aOS 任务/ISR 临界区属于同一保护域；未来 SMP
+后端须提供跨核互斥和内存可见性，当前只实现本核保护。aDrv 的硬件/DMA
+状态及回调登记也须由未来后端同步，不能依赖 aDev 临界区代替驱动保护。
+本轮明确契约，未实现 SMP/Linux 后端，见 [TODO 第 6 项](../todo.md)。
+
+生命周期仍由应用独占。aDev 先检查忙状态，再在临界区外销毁 aOS 定时器、
+调用 `aDrvUsartDeInitStatic`，最后销毁等待对象、重置实例。aDrv 关闭成功
+意味着 DMA 和驱动回调不再访问实例、缓冲区及回调参数。当前 GD32 在任务/
+启动上下文先停 USART 派发，再停 DMA 并清除登记；单核不存在并行在途 ISR。
+未来线程/SMP 后端必须在此契约下等待在途回调退出，不新增 aDev 关闭等待接口。
+
 DMA 中断入口、标志消费和循环计数集中在通用 aDrvDma；USART DMA 文件只负责
 路由、请求开关和通知适配。查询先消费事件时仍由 DMA ISR 派发通知。
 设备配置和 TX/RX 运行状态的组织见 [aDrv 与 aDevice 设计](driver_device_design.md)。

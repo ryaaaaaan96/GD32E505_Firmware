@@ -65,6 +65,13 @@ aOSWorkCancelSync/aOSWorkWaitIdle 是生命周期屏障，调用前须停止其�
 
 ## 跨上下文通知与定时器生命周期
 
+任务侧 `aOSCriticalEnter/Exit` 与 ISR 侧 `aOSCriticalEnterFromISR/ExitFromISR`
+属于同一保护域，用于短小的关联状态更新；所有访问者须参与同一保护。
+当前 FreeRTOS/Cortex-M 后端通过本核中断屏蔽实现，仅适用于单核及允许调用
+OS 的中断优先级。SMP 后端尚未实现，移植时须补齐跨核互斥与获取/释放可见性。
+独立计数和状态快照可使用无锁原子，避免进入临界区；ISR 使用的原子不能
+退化为内部锁。临界区内不得阻塞或调用应用回调。
+
 `aOSNotifyGive(wait_object)` 自动选择任务/ISR 通知后端，可用于来源不固定的设备
 事件回调；上层不需要判断 CPU 异常号。它只锁存条件变化，不保存事件记录。
 ISR 仍必须满足 FreeRTOS 可调用系统服务的优先级要求。

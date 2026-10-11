@@ -4,7 +4,7 @@
 
 #include "aModbus.h"
 #include "nanomodbus.h"
-#include <stdatomic.h>
+#include "aAtomic.h"
 
 struct aModbusHandle {
     nmbs_t core;
@@ -17,7 +17,7 @@ struct aModbusHandle {
     aBool_t dynamic;
     aBool_t fault;
     aBool_t recover_input;
-    atomic_bool active;
+    aAtomicBool_t active;
     uint8_t snapshot[AMODBUS_MAX_VALUE_SIZE];
 };
 

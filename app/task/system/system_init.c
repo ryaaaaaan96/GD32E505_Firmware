@@ -15,7 +15,7 @@
 #if ASHELL_ENABLE
 #include "aDrv_basic.h"
 #include "aShell.h"
-#include <stdatomic.h>
+#include "aAtomic.h"
 #endif
 
 /* --------------------------------------------------------------------------
@@ -67,13 +67,13 @@ static aStatus_t statusInit(void)
 #if ASHELL_ENABLE
 
 /* 初始化期间允许 Shell 文字入队，服务全部就绪后才消费并处理命令。 */
-static atomic_bool shell_services_ready = ATOMIC_VAR_INIT(0);
+static aAtomicBool_t shell_services_ready = A_ATOMIC_VAR_INIT(0);
 
 static void shellTask(void *argument)
 {
     (void)argument;
-    while (!atomic_load_explicit(&shell_services_ready,
-                                 memory_order_acquire)) {
+    while (!aAtomicLoadExplicit(&shell_services_ready,
+                               A_ATOMIC_ACQUIRE)) {
         aOSDelayMs(1U);
     }
     for (;;) {
@@ -567,7 +567,7 @@ aStatus_t aSystemInit(void)
 
 #if ASHELL_ENABLE
     /* 发布服务初始化结果，允许已创建的 Shell 任务开始处理命令。 */
-    atomic_store_explicit(&shell_services_ready, 1, memory_order_release);
+    aAtomicStoreExplicit(&shell_services_ready, 1, A_ATOMIC_RELEASE);
 #endif
 
     return A_STATUS_OK;

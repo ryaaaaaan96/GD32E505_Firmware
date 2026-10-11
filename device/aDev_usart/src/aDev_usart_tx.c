@@ -8,13 +8,11 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle);
 #endif
 static void rs485_complete(aDevUsartHandle_t *handle);
 #if ADEV_USART_ASYNC_ENABLE
+/* 调用方持有任务或 ISR 临界区且已确认 TX_ASYNC；
+ * 转为 TX_CALLBACK 后，完成/超时/取消路径不会再次终结该请求。 */
 static void async_tx_complete(aDevUsartHandle_t *handle, aStatus_t status,
                               size_t transferred)
 {
-    if (atomic_exchange_explicit(&handle->tx.completion_claimed, A_TRUE,
-                                 memory_order_acq_rel)) {
-        return;
-    }
     handle->tx.completion_event.buffer = handle->tx.async_buffer;
     handle->tx.completion_event.requested = handle->tx.async_size;
     handle->tx.completion_event.transferred = transferred;
@@ -35,11 +33,13 @@ static void async_tx_complete(aDevUsartHandle_t *handle, aStatus_t status,
 
 void aDevUsartAsyncTxDispatchFromISR(aDevUsartHandle_t *handle)
 {
+    /* aDrv 串行派发同实例回调；CALLBACK 期间完成事件和回调参数不再修改。 */
     if (handle->tx.state != ADEV_USART_TX_CALLBACK) return;
     const aDevUsartTxEvent_t event = handle->tx.completion_event;
     aDevUsartTxCallback_t callback = handle->tx.callback;
     void *callback_argument = handle->tx.callback_argument;
 
+    /* 请求保持占用至回调返回，再清理字段并发布下一状态。 */
     if (callback != NULL) callback(handle, &event, callback_argument);
     aOSCriticalState_t key = aOSCriticalEnterFromISR();
     handle->tx.callback = NULL;
@@ -54,7 +54,7 @@ void aDevUsartAsyncTxDispatchFromISR(aDevUsartHandle_t *handle)
 void aDevUsartAsyncTxTimeout(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
-    size_t remaining = handle->tx.async_size;
+    size_t remaining;
     size_t transferred = 0U;
 
     aOSCriticalEnter();
@@ -63,6 +63,7 @@ void aDevUsartAsyncTxTimeout(void *argument)
         aOSCriticalExit();
         return;
     }
+    remaining = handle->tx.async_size;
     if (aDrvUsartAsyncTxGetRemaining(&handle->drv_handle, &remaining) ==
         A_STATUS_OK) {
         transferred = handle->tx.async_size - remaining;
@@ -79,7 +80,7 @@ void aDevUsartAsyncTxTimeout(void *argument)
 
 #endif
 
-/* 调用者已暂停 USART 事件派发，或正在 USART 回调内。 */
+/* 调用者持有任务或 ISR 临界区。 */
 static void rs485_complete(aDevUsartHandle_t *handle)
 {
 #if ADEV_USART_RS485_ENABLE
@@ -110,12 +111,15 @@ void aDevUsartRs485ArmComplete(aDevUsartHandle_t *handle)
 static void tx_ready_callback(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
+    aBool_t notify = A_FALSE;
+    aOSCriticalState_t key = aOSCriticalEnterFromISR();
 
     if (handle->tx.count == 0U) {
         (void)aDrvUsartSetEventEnabled(
             &handle->drv_handle, ADRV_USART_EVENT_TX_READY, A_FALSE);
         (void)aDrvUsartSetEventEnabled(
             &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_TRUE);
+        aOSCriticalExitFromISR(key);
         return;
     }
 
@@ -125,7 +129,7 @@ static void tx_ready_callback(void *argument)
         if (++handle->tx.tail == handle->settings.tx_buffer_size)
             handle->tx.tail = 0U;
         --handle->tx.count;
-        aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
+        notify = A_TRUE;
         if (handle->tx.count == 0U) {
             (void)aDrvUsartSetEventEnabled(
                 &handle->drv_handle, ADRV_USART_EVENT_TX_READY, A_FALSE);
@@ -133,14 +137,16 @@ static void tx_ready_callback(void *argument)
                 &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_TRUE);
         }
     }
+    aOSCriticalExitFromISR(key);
+    if (notify) aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
 }
 
 #endif
 
 #if ADEV_USART_NEEDS_EVENTS
-static void tx_complete_callback(void *argument)
+/* 持有 ISR 临界区，返回是否需要唤醒发送等待方。 */
+static aBool_t tx_complete_locked(aDevUsartHandle_t *handle)
 {
-    aDevUsartHandle_t *handle = argument;
 
 #if ADEV_USART_ASYNC_ENABLE
     if (handle->tx.state == ADEV_USART_TX_DRAINING ||
@@ -151,7 +157,7 @@ static void tx_complete_callback(void *argument)
         handle->tx.draining = A_FALSE;
         if (handle->tx.state == ADEV_USART_TX_DRAINING)
             handle->tx.state = ADEV_USART_TX_IDLE;
-        return;
+        return A_FALSE;
     }
     if (handle->tx.state == ADEV_USART_TX_ASYNC) {
         size_t remaining = handle->tx.async_size;
@@ -159,7 +165,7 @@ static void tx_complete_callback(void *argument)
             &handle->drv_handle, &remaining);
 
         if ((status == A_STATUS_OK) && (remaining != 0U)) {
-            return;
+            return A_FALSE;
         }
         if (status != A_STATUS_OK)
             (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
@@ -169,9 +175,7 @@ static void tx_complete_callback(void *argument)
         async_tx_complete(handle, status,
                           status == A_STATUS_OK
                               ? handle->tx.async_size - remaining : 0U);
-        aDevUsartAsyncTxDispatchFromISR(handle);
-        aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
-        return;
+        return A_TRUE;
     }
 
 #endif
@@ -180,8 +184,7 @@ static void tx_complete_callback(void *argument)
     if (handle->tx.state == ADEV_USART_TX_DIRECT) {
         (void)aDrvUsartSetEventEnabled(
             &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
-        aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
-        return;
+        return A_TRUE;
     }
 
     if ((handle->settings.mode & ADEV_USART_TX_MASK) ==
@@ -193,14 +196,13 @@ static void tx_complete_callback(void *argument)
             (void)aDrvUsartSetEventEnabled(
                 &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
             rs485_complete(handle);
-            aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
-            return;
+            return A_TRUE;
         }
 
         status = aDrvUsartAsyncTxGetRemaining(
             &handle->drv_handle, &remaining);
         if ((status == A_STATUS_OK) && (remaining != 0U)) {
-            return;
+            return A_FALSE;
         }
         if (status != A_STATUS_OK) {
             handle->tx.error = status;
@@ -218,14 +220,13 @@ static void tx_complete_callback(void *argument)
             }
         }
 
-        aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
         if ((handle->tx.count == 0U) ||
             (handle->tx.error != A_STATUS_OK)) {
             (void)aDrvUsartSetEventEnabled(
                 &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
             rs485_complete(handle);
         }
-        return;
+        return A_TRUE;
     }
 
 #endif
@@ -233,7 +234,26 @@ static void tx_complete_callback(void *argument)
     (void)aDrvUsartSetEventEnabled(
         &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
     rs485_complete(handle);
-    aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
+    return A_TRUE;
+}
+
+static void tx_complete_callback(void *argument)
+{
+    aDevUsartHandle_t *handle = argument;
+    aOSCriticalState_t key = aOSCriticalEnterFromISR();
+#if ADEV_USART_ASYNC_ENABLE
+    const aBool_t asynchronous = handle->tx.state == ADEV_USART_TX_ASYNC;
+#endif
+    const aBool_t notify = tx_complete_locked(handle);
+#if ADEV_USART_ASYNC_ENABLE
+    const aBool_t dispatch = asynchronous &&
+        handle->tx.state == ADEV_USART_TX_CALLBACK;
+#endif
+    aOSCriticalExitFromISR(key);
+#if ADEV_USART_ASYNC_ENABLE
+    if (dispatch) aDevUsartAsyncTxDispatchFromISR(handle);
+#endif
+    if (notify) aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
 }
 
 #endif
@@ -371,31 +391,6 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
 #endif
 
 #if ADEV_USART_DMA_BACKEND_ENABLE
-static size_t ring_write(aDevUsartHandle_t *handle, const uint8_t *data,
-                         size_t size)
-{
-    size_t writable = handle->settings.tx_buffer_size - handle->tx.count;
-    size_t first;
-
-    if (writable > size) {
-        writable = size;
-    }
-    first = handle->settings.tx_buffer_size - handle->tx.head;
-    if (first > writable) {
-        first = writable;
-    }
-
-    memcpy(&handle->settings.tx_buffer[handle->tx.head], data, first);
-    memcpy(handle->settings.tx_buffer, data + first, writable - first);
-    handle->tx.head = (handle->tx.head + writable) %
-                      handle->settings.tx_buffer_size;
-    handle->tx.count += writable;
-    return writable;
-}
-
-#endif
-
-#if ADEV_USART_DMA_BACKEND_ENABLE
 static aSSize_t dma_buffered_write(aDevUsartHandle_t *handle,
                                    const void *data, size_t data_size,
                                    const aTimepoint_t *end,
@@ -407,18 +402,33 @@ static aSSize_t dma_buffered_write(aDevUsartHandle_t *handle,
         size_t accepted = 0U;
         aStatus_t status;
 
-        aOSCriticalEnter();
+        /* head 由当前发送任务独占；回调只减少 count，旧快照只会少写。 */
         status = handle->tx.error;
+        const size_t head = handle->tx.head;
+        size_t writable = handle->settings.tx_buffer_size - handle->tx.count;
         if (status == A_STATUS_OK) {
-            accepted = ring_write(
-                handle, (const uint8_t *)data + count,
-                data_size - count);
-            status = dma_tx_start_locked(handle);
+            if (writable > data_size - count) writable = data_size - count;
+            size_t first = handle->settings.tx_buffer_size - head;
+            if (first > writable) first = writable;
+            /* 应用保证单生产者；复制到未发布空闲区，再保护计数提交。 */
+            memcpy(handle->settings.tx_buffer + head,
+                   (const uint8_t *)data + count, first);
+            memcpy(handle->settings.tx_buffer,
+                   (const uint8_t *)data + count + first, writable - first);
+            aOSCriticalEnter();
+            status = handle->tx.error;
+            if (status == A_STATUS_OK) {
+                accepted = writable;
+                handle->tx.head =
+                    (head + accepted) % handle->settings.tx_buffer_size;
+                handle->tx.count += accepted;
+                status = dma_tx_start_locked(handle);
+            }
             if (status != A_STATUS_OK) {
                 handle->tx.error = status;
             }
+            aOSCriticalExit();
         }
-        aOSCriticalExit();
 
         count += accepted;
         if (status != A_STATUS_OK) {
@@ -496,7 +506,7 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
                         size_t data_size, aTimeout_t timeout)
 {
     aTimepoint_t end;
-    aStatus_t status;
+    aStatus_t status = A_STATUS_OK;
     aSSize_t result;
 
     if ((handle == NULL) || !aTimeoutIsValid(timeout) ||
@@ -513,12 +523,25 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
 
-    if ((handle->tx.state != ADEV_USART_TX_IDLE) ||
-        (handle->tx.callback != NULL)) {
+    if (handle->tx.state != ADEV_USART_TX_IDLE) {
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
-
-    handle->tx.state = ADEV_USART_TX_STREAM;
+    /* 同步调用由应用串行化；普通发送不需要发布额外的忙状态。 */
+    if ((handle->settings.mode & ADEV_USART_TX_MASK) == ADEV_USART_TX_POLLING) {
+#if ADEV_USART_RS485_ENABLE
+        if (handle->settings.rs485.mode != ADEV_USART_RS485_NONE)
+            aOSCriticalEnter();
+#endif
+        status = handle->tx.error;
+#if ADEV_USART_RS485_ENABLE
+        if (handle->settings.rs485.mode != ADEV_USART_RS485_NONE) {
+            if (status == A_STATUS_OK) status = aDevUsartRS485Begin(handle);
+            (void)aDrvUsartSetEventEnabled(
+                &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
+            aOSCriticalExit();
+        }
+#endif
+    }
     switch (handle->settings.mode & ADEV_USART_TX_MASK) {
 #if ADEV_USART_DMA_BACKEND_ENABLE
     case ADEV_USART_TX_DMA_BUFFERED:
@@ -537,32 +560,19 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
 
     case ADEV_USART_TX_POLLING:
     default:
-        aOSCriticalEnter();
-        status = handle->tx.error;
-        if (status == A_STATUS_OK) {
-#if ADEV_USART_RS485_ENABLE
-            status = aDevUsartRS485Begin(handle);
-#endif
-        }
-#if ADEV_USART_RS485_ENABLE
-        if ((handle->settings.rs485.mode != ADEV_USART_RS485_NONE)) {
-            (void)aDrvUsartSetEventEnabled(
-                &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
-        }
-#endif
-
-        aOSCriticalExit();
         result = status == A_STATUS_OK
                      ? polling_write(handle, data, data_size, &end, timeout)
                      : aOSFailWithStatus(status);
-        aOSCriticalEnter();
-#if ADEV_USART_RS485_ENABLE
-        aDevUsartRs485ArmComplete(handle);
-#endif
-        aOSCriticalExit();
         break;
     }
-    handle->tx.state = ADEV_USART_TX_IDLE;
+#if ADEV_USART_RS485_ENABLE
+    if ((handle->settings.mode & ADEV_USART_TX_MASK) == ADEV_USART_TX_POLLING &&
+        handle->settings.rs485.mode != ADEV_USART_RS485_NONE) {
+        aOSCriticalEnter();
+        aDevUsartRs485ArmComplete(handle);
+        aOSCriticalExit();
+    }
+#endif
 
     return result;
 }
@@ -571,29 +581,29 @@ static aStatus_t wait_transmit_complete(
     aDevUsartHandle_t *handle, const aTimepoint_t *end,
     aTimeout_t original_timeout)
 {
+    /* 同方向调用由应用串行化；旧忙值最多让本次等待保守返回 BUSY。 */
+    if (handle->tx.state != ADEV_USART_TX_IDLE) return A_STATUS_BUSY;
+    const aBool_t polling = (handle->settings.mode & ADEV_USART_TX_MASK) ==
+        ADEV_USART_TX_POLLING;
+    const aBool_t needs_critical = !polling ||
+        handle->settings.rs485.mode != ADEV_USART_RS485_NONE;
+
     for (;;) {
-        aBool_t complete;
-        aStatus_t status;
-
-        if (handle->tx.error != A_STATUS_OK) {
-            return handle->tx.error;
-        }
-        status = aDrvUsartIsTransmitComplete(
-            &handle->drv_handle, &complete);
-
-        if (status != A_STATUS_OK) {
-            return status;
-        }
-        if (complete &&
-            (((handle->settings.mode & ADEV_USART_TX_MASK) ==
-              ADEV_USART_TX_POLLING) ||
-             ((handle->tx.count == 0U) &&
-              (handle->tx.dma_active == 0U)))) {
-            aOSCriticalEnter();
+        aBool_t complete = A_FALSE;
+        /* 普通轮询只查询硬件；缓冲发送状态与 RS485 收尾仍需共同保护。 */
+        if (needs_critical) aOSCriticalEnter();
+        aStatus_t status = handle->tx.error;
+        if (status == A_STATUS_OK)
+            status = aDrvUsartIsTransmitComplete(&handle->drv_handle, &complete);
+        const aBool_t finished = status == A_STATUS_OK && complete &&
+            (polling || ((handle->tx.count == 0U) &&
+                         (handle->tx.dma_active == 0U)));
+        if (finished && needs_critical) {
             rs485_complete(handle);
-            aOSCriticalExit();
-            return handle->tx.error;
+            status = handle->tx.error;
         }
+        if (needs_critical) aOSCriticalExit();
+        if (status != A_STATUS_OK || finished) return status;
 #if ADEV_USART_DMA_BACKEND_ENABLE || ADEV_USART_INTERRUPT_ENABLE
         if (((handle->settings.mode & ADEV_USART_TX_MASK) ==
              ADEV_USART_TX_INTERRUPT_BUFFERED) ||
@@ -631,7 +641,6 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
                                         aTimeout_t timeout)
 {
     aTimepoint_t end;
-    aStatus_t status;
 
     if ((handle == NULL) || !aTimeoutIsValid(timeout)) {
         return A_STATUS_INVALID_PARAM;
@@ -642,15 +651,7 @@ aStatus_t aDevUsartWaitTransmitComplete(aDevUsartHandle_t *handle,
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
 
-    if (handle->tx.state != ADEV_USART_TX_IDLE) {
-        return A_STATUS_BUSY;
-    }
-
-    handle->tx.state = ADEV_USART_TX_STREAM;
-    status = wait_transmit_complete(handle, &end, timeout);
-    handle->tx.state = ADEV_USART_TX_IDLE;
-
-    return status;
+    return wait_transmit_complete(handle, &end, timeout);
 }
 
 #if ADEV_USART_ASYNC_ENABLE
@@ -681,11 +682,11 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
     }
     const aTimepoint_t deadline = aTimepointCalc(timeout, aOSGetUptimeMs());
 
-    if ((handle->tx.state != ADEV_USART_TX_IDLE) ||
-        (handle->tx.callback != NULL) ||
-        (handle->tx.count != 0U) || (handle->tx.dma_active != 0U)) {
-        return A_STATUS_BUSY;
-    }
+    /* 无同方向新请求并发提交；这里只观察是否仍有旧事务待完成。
+     * callback 的清理由 TX_CALLBACK 状态覆盖，不再重复读取指针。 */
+    const aBool_t busy = (handle->tx.state != ADEV_USART_TX_IDLE) ||
+        (handle->tx.count != 0U) || (handle->tx.dma_active != 0U);
+    if (busy) return A_STATUS_BUSY;
 
     if (timeout.type != A_TIMEOUT_TYPE_FOREVER) {
         if (handle->tx.deadline_timer == NULL) {
@@ -701,21 +702,20 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
         return A_STATUS_TIMEOUT;
     }
     status = A_STATUS_OK;
+    aOSCriticalEnter();
 #if ADEV_USART_RS485_ENABLE
     status = aDevUsartRS485Begin(handle);
 #endif
     if (status != A_STATUS_OK) {
+        aOSCriticalExit();
         return status;
     }
-    aOSCriticalEnter();
     handle->tx.deadline = deadline;
     handle->tx.async_buffer = buffer;
     handle->tx.async_size = size;
     handle->tx.callback = callback;
     handle->tx.callback_argument = argument;
     handle->tx.state = ADEV_USART_TX_ASYNC;
-    atomic_store_explicit(&handle->tx.completion_claimed, A_FALSE,
-                          memory_order_release);
     status = aDrvUsartAsyncTxStart(&handle->drv_handle, buffer, size,
                                    &started);
     if ((status == A_STATUS_OK) && (started != size)) {
@@ -737,8 +737,6 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
     if (status != A_STATUS_OK) {
         (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
         (void)aOSTimerStop(handle->tx.deadline_timer);
-        atomic_store_explicit(&handle->tx.completion_claimed, A_TRUE,
-                              memory_order_release);
         aBool_t complete = A_FALSE;
         (void)aDrvUsartIsTransmitComplete(&handle->drv_handle, &complete);
         handle->tx.draining = !complete;
@@ -766,9 +764,6 @@ aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle)
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (!handle->drv_handle.initialized) return A_STATUS_NOT_READY;
 
-    if (handle->tx.state != ADEV_USART_TX_ASYNC) {
-        return A_STATUS_NOT_READY;
-    }
     aOSCriticalEnter();
     if (handle->tx.state != ADEV_USART_TX_ASYNC) {
         aOSCriticalExit();
@@ -837,11 +832,11 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
 
-    aDrvUsartPauseDispatch(&handle->drv_handle);
+    aOSCriticalEnter();
     if ((handle->tx.state != ADEV_USART_TX_IDLE) ||
         (handle->tx.callback != NULL) ||
         (handle->tx.count != 0U) || (handle->tx.dma_active != 0U)) {
-        aDrvUsartResumeDispatch(&handle->drv_handle);
+        aOSCriticalExit();
 
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
@@ -853,7 +848,7 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
         status = aDevUsartRS485Begin(handle);
 #endif
     }
-    aDrvUsartResumeDispatch(&handle->drv_handle);
+    aOSCriticalExit();
 
     while ((status == A_STATUS_OK) && (count < data_size)) {
         size_t started = 0U;
@@ -896,14 +891,14 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
 
     /* 确认 DMA 已停止访问调用者缓冲区后才能返回。 */
     (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
-    aDrvUsartPauseDispatch(&handle->drv_handle);
+    aOSCriticalEnter();
     (void)aDrvUsartSetEventEnabled(
         &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
 #if ADEV_USART_RS485_ENABLE
     aDevUsartRs485ArmComplete(handle);
 #endif
     handle->tx.state = ADEV_USART_TX_IDLE;
-    aDrvUsartResumeDispatch(&handle->drv_handle);
+    aOSCriticalExit();
 
     if (count != 0U) return (aSSize_t)count;
     return status == A_STATUS_TIMEOUT
@@ -932,42 +927,7 @@ aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
     if ((handle->settings.mode & ADEV_USART_TX_MASK) != ADEV_USART_TX_POLLING)
         return aOSFailWithStatus(A_STATUS_UNSUPPORTED);
 
-    const aTimepoint_t end = aTimepointCalc(timeout, aOSGetUptimeMs());
-    aStatus_t status = A_STATUS_OK;
-
-    aOSCriticalEnter();
-    if (handle->tx.state != ADEV_USART_TX_IDLE || handle->tx.callback != NULL ||
-        handle->tx.count != 0U || handle->tx.dma_active != 0U) {
-        aOSCriticalExit();
-
-        return aOSFailWithStatus(A_STATUS_BUSY);
-    }
-    handle->tx.state = ADEV_USART_TX_DIRECT;
-#if ADEV_USART_NEEDS_EVENTS
-    if ((handle->settings.mode & ADEV_USART_TX_MASK) ==
-        ADEV_USART_TX_INTERRUPT_BUFFERED)
-        (void)aDrvUsartSetEventEnabled(&handle->drv_handle,
-                                          ADRV_USART_EVENT_TX_READY, A_FALSE);
-    (void)aDrvUsartSetEventEnabled(&handle->drv_handle,
-                                      ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
-#endif
-    status = handle->tx.error;
-#if ADEV_USART_RS485_ENABLE
-    if (status == A_STATUS_OK) status = aDevUsartRS485Begin(handle);
-#endif
-    aOSCriticalExit();
-
-    /* CPU 直接读取调用者的原始缓冲区，不复制到设备发送环形缓冲区。 */
-    const aSSize_t result = status == A_STATUS_OK
-        ? polling_write(handle, data, data_size, &end, timeout)
-        : aOSFailWithStatus(status);
-    aOSCriticalEnter();
-#if ADEV_USART_RS485_ENABLE
-    aDevUsartRs485ArmComplete(handle);
-#endif
-    handle->tx.state = ADEV_USART_TX_IDLE;
-    aOSCriticalExit();
-
-    return result;
+    /* 普通轮询已经直接读取调用者缓冲区，复用其发送及 RS485 收尾流程。 */
+    return aDevUsartWrite(handle, data, data_size, timeout);
 }
 #endif

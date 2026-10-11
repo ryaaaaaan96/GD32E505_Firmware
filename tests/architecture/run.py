@@ -62,6 +62,15 @@ for folder in ("app", "device", "func", "platform/aLib"):
             assert not re.search(
                 r'#\s*include\s*[<"](?:aOS|aDrv|aDev|aBus|aMemory|'
                 r'aDataBase|aShell|aLog|aModbus|aPoll)', text), path
+        else:
+            # 编译器原子类型、内存序及操作统一通过 aLib 适配。
+            assert not re.search(r'#\s*include\s*<stdatomic\.h>|\b_Atomic\b|'
+                                 r'\batomic_\w+\b|\bmemory_order_\w+\b|'
+                                 r'\bATOMIC_[A-Z_]+\b', text), path
+
+os_backend = root / "platform/aOS/backend/freertos/aOS_freertos.c"
+assert not re.search(r'\b(?:atomic_\w+|memory_order_\w+)\b|<stdatomic\.h>',
+                     os_backend.read_text()), os_backend
 
 # 业务公共头不需要厂商头、OS 内核头或实例私有布局。
 includes = ["platform/aLib/include", "platform/aOS/public",
@@ -70,7 +79,7 @@ includes = ["platform/aLib/include", "platform/aOS/public",
             "device/aDev_Flash25q", "func/aBus/include", "func/aMemory",
             "func/aDataBase", "func/aShell/include", "func/aLog",
             "func/aModbus", "func/aPoll", "app/protocol/inc"]
-headers = ("aLayout.h", "aCrc.h", "aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
+headers = ("aLayout.h", "aCrc.h", "aAtomic.h", "aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
            "aDrv_dma.h", "aDev_led.h", "aDev_led_instance.h",
            "aBus.h", "aMemory.h", "aDataBase.h", "aShell.h", "aLog.h",
            "aPoll.h", "aPoll_instance.h", "aModbus.h", "aModbus_rtu.h",
