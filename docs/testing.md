@@ -28,7 +28,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | LED/GPIO 状态、静态/动态生命周期与接口裁剪 | `python3 tests/led/run.py` |
 | SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |
 | DMA 通道、IRQ/查询交错与真实 USART DMA 适配 | `python3 tests/dma/run.py` |
-| USART、RS485、FIFO 与 IRQ | `python3 tests/usart/run.py` |
+| USART、RX 缓冲丢弃、RS485、FIFO 与 IRQ | `python3 tests/usart/run.py` |
 | aBus 定义、绑定、锁与分配 | `python3 tests/bus/run.py` |
 | SIG 应用与 Shell 类型解析 | `python3 tests/bus/test_app_sig.py`、`python3 tests/bus/test_shell_types.py` |
 | aMemory 注册、分区与访问 | `python3 tests/memory/run.py` |
@@ -39,8 +39,18 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | 协议统一入口、启动顺序与功能关闭 | `python3 tests/protocol_tasks/run.py` |
 | Modbus 板级端口、主从、任务调度与生命周期 | `python3 tests/modbus_demo/run.py` |
 | Shell / 日志、共享控制台发送互斥及部分写入 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
-| 应用设备清理、TX 锁超时、启动编排与 Shell 就绪门控 | `python3 tests/app_devices/run.py`、`python3 tests/app_startup/run.py` |
+| 应用设备清理、控制台 RX 溢出恢复、TX 锁超时、启动编排与 Shell 就绪门控 | `python3 tests/app_devices/run.py`、`python3 tests/app_startup/run.py` |
 | 调试脚本 | `python3 tests/scripts/test_debug.py` |
+
+`tests/app_devices/run.py` 包含真实控制台适配与 Shell 解析器的接收联测，
+通过模拟满 RX ring、读取期间溢出、旧换行、连续溢出及读空边界再次溢出，
+检查损坏命令不执行、一次丢弃缓冲残留、丢弃失败后的重试，以及正常半行和
+重新初始化行为；同时检查零长度和非法参数不清除缓冲及错误，超时参数原样传给 aDev。
+`tests/usart/run.py` 使用真实 aDev 验证中断缓冲丢弃、边界处的新字节/错误、
+活动接收拒绝丢弃、DMA 查询失败保留状态，以及快照后继续接收和计数回绕；
+验证普通 Read 将 IRQ/DMA 溢出统一返回为 EIO，覆盖部分复制和等待结束窗口，
+保留零长度、参数错误的优先级以及 ISR 不写任务 errno 的约定；
+还执行轮询、仅中断、仅 DMA 三种 RX 裁剪组合的主机编译检查。
 
 部分脚本支持通过 `SANITIZE=1` 增加 AddressSanitizer 检查，例如：
 

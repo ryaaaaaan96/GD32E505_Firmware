@@ -24,7 +24,7 @@ static aSSize_t io_result = 2;
 static unsigned shell_calls, deinit_calls;
 static unsigned shell_deinit_calls;
 static aBool_t shell_ready;
-static unsigned rx_error_clears;
+static unsigned rx_discards;
 static aStatus_t rx_error = A_STATUS_OK;
 static aOSMutex_t tx_mutex;
 static aBool_t tx_locked;
@@ -35,6 +35,7 @@ static aStatus_t lock_status = A_STATUS_OK;
 static aErrno_t last_errno;
 
 uint32_t aOSGetUptimeMs(void) { return uptime; }
+aErrno_t aOSGetErrno(void) { return last_errno; }
 aSSize_t aOSFailWithStatus(aStatus_t status)
 {
     last_errno = aStatusToErrno(status);
@@ -73,16 +74,12 @@ aStatus_t aOSMutexUnlock(aOSMutex_t mutex)
     tx_locked = A_FALSE;
     return A_STATUS_OK;
 }
-void aDevUsartClearRxError(aDevUsartHandle_t *handle)
+aStatus_t aDevUsartDiscardRx(aDevUsartHandle_t *handle)
 {
     assert(handle == expected_handle);
-    rx_error_clears++;
+    rx_discards++;
     rx_error = A_STATUS_OK;
-}
-aStatus_t aDevUsartGetRxError(const aDevUsartHandle_t *handle)
-{
-    assert(handle == expected_handle);
-    return rx_error;
+    return A_STATUS_OK;
 }
 static aStream_t stream;
 static char data[4];
@@ -135,6 +132,7 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
     assert(timeout.type == A_TIMEOUT_TYPE_RELATIVE &&
            timeout.milliseconds == 7U);
     assert(!tx_locked);
+    if (io_result < 0) return aOSFailWithStatus(A_STATUS_ERROR);
     return io_result;
 }
 aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *buffer,
@@ -247,10 +245,10 @@ int main(void)
     check_write_budget();
     io_result = -1;
     assert(stream.read(data, sizeof(data), A_TIMEOUT_MS(7U)) == -1);
-    assert(rx_error_clears == 0U);
+    assert(rx_discards == 1U);
     rx_error = A_STATUS_ERROR;
     assert(stream.read(data, sizeof(data), A_TIMEOUT_MS(7U)) == -1);
-    assert(rx_error_clears == 1U && rx_error == A_STATUS_OK);
+    assert(rx_discards == 2U && rx_error == A_STATUS_OK);
     assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == -1);
     assert(last_errno == A_EIO && !tx_locked);
     assert(usart_calls == 1);

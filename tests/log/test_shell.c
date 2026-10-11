@@ -42,13 +42,8 @@ aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle)
     return A_STATUS_OK;
 }
 
-aStatus_t aDevUsartGetRxError(const aDevUsartHandle_t *handle)
-{
-    (void)handle;
-    return A_STATUS_OK;
-}
-
-void aDevUsartClearRxError(aDevUsartHandle_t *handle) { (void)handle; }
+aStatus_t aDevUsartDiscardRx(aDevUsartHandle_t *handle)
+{ (void)handle; assert(0); return A_STATUS_ERROR; }
 
 aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *data, size_t size,
                       aTimeout_t timeout)

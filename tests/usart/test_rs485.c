@@ -37,9 +37,11 @@ static size_t rx_dma_remaining;
 static aBool_t rx_dma_circular;
 static size_t rx_dma_produced;
 static size_t rx_dma_position = SIZE_MAX;
+static size_t advance_after_progress;
 static aStatus_t rx_dma_progress_status = A_STATUS_OK;
 static aBool_t complete_rx_on_wait;
 static aDevUsartHandle_t *error_on_wait;
+static aDevUsartHandle_t *overflow_on_wait;
 static aBool_t overwrite_in_callback;
 static uint8_t *rx_ring;
 static aBool_t overwrite_during_copy;
@@ -53,6 +55,7 @@ static uint32_t uptime_ms;
 static unsigned critical_entries, critical_depth;
 static unsigned inject_on_exit;
 static aDevUsartHandle_t *inject_handle;
+static aDrvUsartExti_t inject_event = ADRV_USART_EXTI_RXNE;
 static uint8_t rx_byte = 42U;
 static void fire(aDevUsartHandle_t *h, aDrvUsartExti_t event);
 typedef struct {
@@ -77,6 +80,12 @@ aStatus_t aOSWaitObjectWait(void *p, aTimeout_t t)
         fire(error_on_wait, ADRV_USART_EXTI_ERROR);
         error_on_wait = NULL;
         return A_STATUS_OK;
+    }
+    if (overflow_on_wait != NULL) {
+        for (size_t i = 0U; i <= overflow_on_wait->settings.rx_buffer_size; ++i)
+            fire(overflow_on_wait, ADRV_USART_EXTI_RXNE);
+        overflow_on_wait = NULL;
+        return A_STATUS_TIMEOUT;
     }
     if (complete_rx_on_wait) {
         complete_rx_on_wait = A_FALSE;
@@ -122,14 +131,16 @@ void aOSCriticalExit(void)
     --critical_depth;
     if (inject_on_exit != 0U && --inject_on_exit == 0U) {
         assert(critical_depth == 0U);
-        fire(inject_handle, ADRV_USART_EXTI_RXNE);
+        fire(inject_handle, inject_event);
     }
 }
 aOSCriticalState_t aOSCriticalEnterFromISR(void) { return 0U; }
 void aOSCriticalExitFromISR(aOSCriticalState_t state) { (void)state; }
-aSSize_t aOSFailWithStatus(aStatus_t s) { last_error = s; return -1; }
+aErrno_t aOSGetErrno(void) { return aStatusToErrno(last_error); }
+aSSize_t aOSFailWithStatus(aStatus_t s)
+{ assert(isr_depth == 0U); last_error = s; return -1; }
 aSSize_t aOSFailWithTimeout(aTimeout_t t)
-{ (void)t; last_error = A_STATUS_TIMEOUT; return -1; }
+{ (void)t; assert(isr_depth == 0U); last_error = A_STATUS_TIMEOUT; return -1; }
 aBool_t aOSPollWaitExpired(const aTimepoint_t *p)
 { (void)p; ++poll_waits; return A_TRUE; }
 
@@ -208,6 +219,13 @@ aStatus_t aDrvUsartAsyncRxGetProgress(aDrvUsartHandle_t *h,
                                                       &progress->received);
     progress->position = rx_dma_position != SIZE_MAX ? rx_dma_position :
                          progress->received % rx_dma_size;
+    if (status == A_STATUS_OK && advance_after_progress != 0U) {
+        /* DMA 在 CPU 临界区内也会前进，快照后的数据必须保留。 */
+        rx_dma_produced += advance_after_progress;
+        if (rx_dma_position != SIZE_MAX)
+            rx_dma_position = (rx_dma_position + advance_after_progress) % rx_dma_size;
+        advance_after_progress = 0U;
+    }
     return status;
 }
 aStatus_t aDrvUsartAsyncRxGetRemaining(aDrvUsartHandle_t *h, size_t *n)
@@ -291,11 +309,13 @@ static void buffered_rx_tests(void)
     inject_on_exit = 1U;
     before = critical_entries;
     assert(aDevUsartRead(&handle, output, sizeof(output),
-                        A_TIMEOUT_NO_WAIT) == 7);
+                        A_TIMEOUT_NO_WAIT) == -1);
     assert(critical_entries - before == 2U);
-    for (size_t i = 0U; i < 7U; ++i) assert(output[i] == i);
-    /* 未提交前仍占满：到达的新字节丢弃，已占用的数据保持稳定。 */
+    assert(aOSGetErrno() == A_EIO && handle.rx.state == ADEV_USART_RX_IDLE);
+    /* 满缓冲的复制窗口中丢了字节：已复制的数据也不能作为成功结果交付。 */
     assert(aDevUsartHasRxOverflowed(&handle));
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == -1);
+    assert(aOSGetErrno() == A_EIO);
     aDevUsartClearRxOverflow(&handle);
     for (rx_byte = 10U; rx_byte < 15U; ++rx_byte)
         fire(&handle, ADRV_USART_EXTI_RXNE);
@@ -316,6 +336,88 @@ static void buffered_rx_tests(void)
     rx_byte = 42U;
 }
 
+static void read_overflow_tests(void)
+{
+    aDevUsartConfig_t config;
+    aDevUsartHandle_t handle;
+    uint8_t ring[7], output[9];
+    aDevUsartConfigStructInit(&config);
+    config.mode = ADEV_USART_RX_INTERRUPT_BUFFERED;
+    config.rx_buffer = ring;
+    config.rx_buffer_size = sizeof(ring);
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+
+    last_error = A_STATUS_BUSY;
+    for (rx_byte = 0U; rx_byte <= sizeof(ring); ++rx_byte)
+        fire(&handle, ADRV_USART_EXTI_RXNE);
+    assert(aDevUsartHasRxOverflowed(&handle) && aOSGetErrno() == A_EAGAIN);
+    assert(aDevUsartGetRxError(&handle) == A_STATUS_OK); /* 独立软件溢出锁存。 */
+    const aTimeout_t invalid = {.type = (aTimeoutType_t)-1};
+    assert(aDevUsartRead(&handle, NULL, 0U, A_TIMEOUT_NO_WAIT) == 0);
+    assert(aDevUsartRead(&handle, output, sizeof(output), invalid) == -1);
+    assert(aOSGetErrno() == A_EINVAL);
+    assert(aDevUsartRead(&handle, NULL, 1U, A_TIMEOUT_NO_WAIT) == -1);
+    assert(aOSGetErrno() == A_EINVAL);
+    assert(aDevUsartRead(&handle, output, (size_t)PTRDIFF_MAX + 1U,
+                        A_TIMEOUT_NO_WAIT) == -1);
+    assert(aOSGetErrno() == A_EINVAL);
+
+    unsigned waits_before = rx_waits;
+    memset(output, 0xa5, sizeof(output));
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_FOREVER) == -1);
+    assert(aOSGetErrno() == A_EIO && handle.rx.count == sizeof(ring));
+    assert(rx_waits == waits_before && output[0] == 0xa5U);
+    aDevUsartClearRxError(&handle); /* 仅清硬件错误不能掩盖软件溢出。 */
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == -1);
+    assert(aOSGetErrno() == A_EIO && handle.rx.count == sizeof(ring));
+    aDevUsartClearRxOverflow(&handle);
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == 7);
+    for (size_t i = 0U; i < sizeof(ring); ++i) assert(output[i] == i);
+
+    /* 请求长于现有数据，复制期间溢出也不能返回部分成功。 */
+    for (rx_byte = 0U; rx_byte < sizeof(ring); ++rx_byte)
+        fire(&handle, ADRV_USART_EXTI_RXNE);
+    inject_handle = &handle;
+    inject_on_exit = 1U;
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == -1);
+    assert(aOSGetErrno() == A_EIO && handle.rx.state == ADEV_USART_RX_IDLE);
+    assert(aDevUsartHasRxOverflowed(&handle));
+    assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
+
+    /* 等待返回 TIMEOUT 的同一窗口发生溢出，最终结果仍须为 EIO。 */
+    overflow_on_wait = &handle;
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_MS(5U)) == -1);
+    assert(aOSGetErrno() == A_EIO && overflow_on_wait == NULL);
+    assert(handle.rx.state == ADEV_USART_RX_IDLE);
+    assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
+    rx_byte = 0x5aU;
+    fire(&handle, ADRV_USART_EXTI_RXNE);
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == 1);
+    assert(output[0] == 0x5aU);
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+
+    config.mode = ADEV_USART_RX_DMA_BUFFERED;
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    memset(ring, 0x11, sizeof(ring));
+    rx_dma_produced = 2U;
+    count_reads = 0U;
+    overwrite_during_copy = A_TRUE;
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == -1);
+    assert(aOSGetErrno() == A_EIO && aDevUsartHasRxOverflowed(&handle));
+    assert(!overwrite_during_copy && handle.rx.state == ADEV_USART_RX_IDLE);
+    const size_t consumed = handle.rx.dma_consumed;
+    aDevUsartClearRxError(&handle);
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == -1);
+    assert(aOSGetErrno() == A_EIO && handle.rx.dma_consumed == consumed);
+    assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
+    ring[rx_dma_produced % sizeof(ring)] = 0xa5U;
+    ++rx_dma_produced;
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == 1);
+    assert(output[0] == 0xa5U);
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+    rx_byte = 42U;
+}
+
 static unsigned byte_callbacks, byte_errors;
 static void byte_receive(void *context, uint8_t byte, aStatus_t status)
 {
@@ -323,6 +425,128 @@ static void byte_receive(void *context, uint8_t byte, aStatus_t status)
     assert(context == &byte_callbacks);
     if (status == A_STATUS_OK) byte_callbacks++;
     else byte_errors++;
+}
+
+static void expect_discard_failure(aDevUsartHandle_t *handle, aStatus_t expected)
+{
+    aDevUsartRxData_t saved;
+    memcpy(&saved, &handle->rx, sizeof(saved));
+    assert(aDevUsartDiscardRx(handle) == expected);
+    assert(memcmp(&saved, &handle->rx, sizeof(saved)) == 0);
+    assert(critical_depth == 0U);
+}
+
+static void discard_rx_tests(void)
+{
+    aDevUsartConfig_t config;
+    aDevUsartHandle_t handle = {0};
+    uint8_t ring[7], output[7];
+    assert(aDevUsartDiscardRx(NULL) == A_STATUS_INVALID_PARAM);
+    expect_discard_failure(&handle, A_STATUS_NOT_READY);
+
+    aDevUsartConfigStructInit(&config);
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    expect_discard_failure(&handle, A_STATUS_UNSUPPORTED);
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+
+    config.mode = ADEV_USART_RX_INTERRUPT_CALLBACK;
+    config.rx_byte_callback = byte_receive;
+    config.rx_byte_context = &byte_callbacks;
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    expect_discard_failure(&handle, A_STATUS_UNSUPPORTED);
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+
+    aDevUsartConfigStructInit(&config);
+    config.mode = ADEV_USART_RX_INTERRUPT_BUFFERED;
+    config.rx_buffer = ring;
+    config.rx_buffer_size = sizeof(ring);
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    for (rx_byte = 0U; rx_byte < 7U; ++rx_byte)
+        fire(&handle, ADRV_USART_EXTI_RXNE);
+    assert(aDevUsartRead(&handle, output, 3U, A_TIMEOUT_NO_WAIT) == 3);
+    for (rx_byte = 10U; rx_byte < 14U; ++rx_byte)
+        fire(&handle, ADRV_USART_EXTI_RXNE);
+    hardware_rx_error = A_TRUE;
+    fire(&handle, ADRV_USART_EXTI_ERROR);
+    assert(aDevUsartHasRxOverflowed(&handle));
+    assert(aDevUsartGetRxError(&handle) == A_STATUS_ERROR);
+    handle.rx.state = ADEV_USART_RX_STREAM;
+    expect_discard_failure(&handle, A_STATUS_BUSY);
+    handle.rx.state = ADEV_USART_RX_DIRECT;
+    expect_discard_failure(&handle, A_STATUS_BUSY);
+    handle.rx.state = ADEV_USART_RX_IDLE;
+    handle.rx.dispatching = A_TRUE;
+    expect_discard_failure(&handle, A_STATUS_BUSY);
+    handle.rx.dispatching = A_FALSE;
+
+    unsigned waits_before = rx_waits;
+    assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
+    assert(rx_waits == waits_before);
+    assert(!aDevUsartHasRxOverflowed(&handle));
+    assert(aDevUsartGetRxError(&handle) == A_STATUS_OK);
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == -1);
+
+    /* 临界区退出时立刻收到的新字节和新错误不能被随后清除。 */
+    rx_byte = 0xa5U;
+    inject_handle = &handle;
+    inject_on_exit = 1U;
+    assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == 1);
+    assert(output[0] == 0xa5U);
+    hardware_rx_error = A_TRUE;
+    inject_event = ADRV_USART_EXTI_ERROR;
+    inject_on_exit = 1U;
+    assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
+    assert(aDevUsartGetRxError(&handle) == A_STATUS_ERROR);
+    inject_event = ADRV_USART_EXTI_RXNE;
+    assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
+
+    const aDevUsartReadRequest_t request = {.callback = async_rx_callback};
+    assert(aDevUsartReadAsync(&handle, &request) == A_STATUS_OK);
+    expect_discard_failure(&handle, A_STATUS_BUSY);
+    assert(aDevUsartReadAsyncCancel(&handle) == A_STATUS_OK);
+    expect_discard_failure(&handle, A_STATUS_BUSY);
+    service_pending(&handle);
+    assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+
+    aDevUsartConfigStructInit(&config);
+    config.mode = ADEV_USART_RX_DMA_BUFFERED;
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    expect_discard_failure(&handle, A_STATUS_UNSUPPORTED); /* 仅 Direct，无 ring。 */
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+
+    config.rx_buffer = ring;
+    config.rx_buffer_size = sizeof(ring);
+    assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
+    handle.rx.overflow = A_TRUE;
+    handle.rx.error = A_STATUS_ERROR;
+    rx_dma_produced = SIZE_MAX - 1U;
+    rx_dma_position = 5U; /* 累计计数回绕时，物理位置不能用计数取模推算。 */
+    rx_dma_progress_status = A_STATUS_ERROR;
+    expect_discard_failure(&handle, A_STATUS_ERROR);
+    rx_dma_progress_status = A_STATUS_NOT_READY;
+    expect_discard_failure(&handle, A_STATUS_NOT_READY);
+    rx_dma_progress_status = A_STATUS_OK;
+    ring[5] = 0xa1U; ring[6] = 0xa2U; ring[0] = 0xa3U;
+    advance_after_progress = 3U;
+    unsigned stops_before = rx_dma_stops;
+    waits_before = rx_waits;
+    assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
+    assert(rx_dma_circular && rx_dma_stops == stops_before && rx_waits == waits_before);
+    assert(!aDevUsartHasRxOverflowed(&handle));
+    assert(aDevUsartGetRxError(&handle) == A_STATUS_OK);
+    /* DMA Read 允许在环尾返回部分长度，下一次读取继续从环首交付。 */
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == 2);
+    assert(output[0] == 0xa1U && output[1] == 0xa2U);
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == 1);
+    assert(output[0] == 0xa3U);
+    assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == -1);
+    rx_dma_position = SIZE_MAX;
+    assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+    expect_discard_failure(&handle, A_STATUS_NOT_READY);
+    assert(critical_depth == 0U);
+    rx_byte = 42U;
 }
 
 int main(void)
@@ -698,8 +922,8 @@ int main(void)
         /* 已累计回绕后发生覆盖，必须使用 DMA 的物理位置恢复。 */
         rx_dma_produced = 7U;
         rx_dma_position = 2U;
-        assert(aDevUsartRead(h, &value, 1U, A_TIMEOUT_NO_WAIT) == 1);
-        assert(value == 0x33U);
+        assert(aDevUsartRead(h, &value, 1U, A_TIMEOUT_NO_WAIT) == -1);
+        assert(aOSGetErrno() == A_EIO); /* 覆盖优先于已复制的部分数据。 */
         assert(aDevUsartHasRxOverflowed(h));
         aDevUsartClearRxOverflow(h);
         aDevUsartClearRxError(h);
@@ -737,6 +961,8 @@ int main(void)
     assert(aDevUsartRead(h, read_buffer, 1U, A_TIMEOUT_NO_WAIT) == 1);
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
     buffered_rx_tests();
+    discard_rx_tests();
+    read_overflow_tests();
     puts("RS485 USART tests passed");
     return 0;
 }

@@ -347,6 +347,8 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
     if ((handle->settings.mode & ADEV_USART_RX_MASK) ==
         ADEV_USART_RX_INTERRUPT_CALLBACK)
         return aOSFailWithStatus(A_STATUS_UNSUPPORTED);
+    if (handle->rx.overflow)
+        return aOSFailWithStatus(A_STATUS_ERROR);
     if (handle->rx.error != A_STATUS_OK)
         return aOSFailWithStatus(handle->rx.error);
 
@@ -379,6 +381,9 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
     }
     handle->rx.state = ADEV_USART_RX_IDLE;
 
+    /* 流已丢字节：即使本次复制了部分数据，也不能按成功交付。 */
+    if (handle->rx.overflow)
+        return aOSFailWithStatus(A_STATUS_ERROR);
     return result;
 }
 
@@ -828,6 +833,55 @@ void aDevUsartAsyncRxCancelFromISR(aDevUsartHandle_t *handle)
 }
 
 #endif
+
+aStatus_t aDevUsartDiscardRx(aDevUsartHandle_t *handle)
+{
+    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (!handle->drv_handle.initialized) return A_STATUS_NOT_READY;
+
+    aStatus_t status = A_STATUS_OK;
+    aOSCriticalEnter();
+    if (handle->rx.state != ADEV_USART_RX_IDLE || handle->rx.dispatching ||
+        handle->rx.cancel_pending) {
+        status = A_STATUS_BUSY;
+    } else {
+        switch (handle->settings.mode & ADEV_USART_RX_MASK) {
+#if ADEV_USART_INTERRUPT_ENABLE
+        case ADEV_USART_RX_INTERRUPT_BUFFERED:
+            handle->rx.tail = handle->rx.head;
+            handle->rx.count = 0U;
+            break;
+#endif
+#if ADEV_USART_DMA_BACKEND_ENABLE
+        case ADEV_USART_RX_DMA_BUFFERED: {
+            aDrvUsartRxProgress_t progress;
+            if (!handle->rx.dma_active) {
+                status = A_STATUS_UNSUPPORTED;
+                break;
+            }
+            status = aDrvUsartAsyncRxGetProgress(&handle->drv_handle, &progress);
+            if (status == A_STATUS_OK) {
+                /* DMA 不因临界区停止；只丢弃快照之前的数据，保留后续进度。 */
+                handle->rx.dma_produced = progress.received;
+                handle->rx.dma_consumed = progress.received;
+                handle->rx.tail = progress.position;
+            }
+            break;
+        }
+#endif
+        default:
+            status = A_STATUS_UNSUPPORTED;
+            break;
+        }
+        if (status == A_STATUS_OK) {
+            handle->rx.overflow = A_FALSE;
+            handle->rx.error = A_STATUS_OK;
+        }
+    }
+    aOSCriticalExit();
+    return status;
+}
+
 uint32_t aDevUsartGetIdleEventCount(const aDevUsartHandle_t *handle)
 {
     return handle == NULL ? 0U : handle->rx.idle_event_count;

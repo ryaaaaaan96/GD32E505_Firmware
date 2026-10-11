@@ -84,8 +84,11 @@ static aSSize_t console_read(void *buffer, size_t size,
                             aTimeout_t timeout)
 {
     aSSize_t count = aDevUsartRead(console_handle, buffer, size, timeout);
-    if (count < 0 && aDevUsartGetRxError(console_handle) != A_STATUS_OK)
-        aDevUsartClearRxError(console_handle);
+    if (count < 0 && aOSGetErrno() == A_EIO) {
+        /* 丢弃失败仍保留异常锁存；Shell 等待新的 CR/LF，后续读取可重试。 */
+        (void)aDevUsartDiscardRx(console_handle);
+        return aOSFailWithStatus(A_STATUS_ERROR);
+    }
     return count;
 }
 

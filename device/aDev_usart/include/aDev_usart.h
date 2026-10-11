@@ -305,7 +305,11 @@ aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle);
  * 使用所选 RX 数据路径：轮询读取硬件、中断模式读取软件 ring、DMA buffered
  * 模式读取初始化配置的共享 DMA ring。无数据时等待首个字节；
  * 收到数据后读取当前可用内容，最多 buffer_size 字节，不为凑满长度继续等待。
- * 已读取部分数据时优先返回长度；无数据且失败时返回 -1 并设置 errno。
+ * 通常优先返回已读取的部分长度；未取得数据且失败时返回 -1 并设置 errno。
+ * 软件 RX 溢出例外：非零长度请求在读前或读取期间发现溢出，返回 -1/A_EIO，
+ * 本次已复制的数据也不可使用。目标区域可能已改写、内部消费位置可能已推进，
+ * 不回滚读取。溢出保持锁存直到显式 ClearRxOverflow 或 DiscardRx；后者同时
+ * 丢弃缓冲残留并清除接收错误。参数检查和零长度请求的处理仍优先于溢出报告。
  *
  * 超时语义：
  * - A_TIMEOUT_NO_WAIT：检查一次，无数据时返回 -1/A_EAGAIN；
@@ -317,13 +321,32 @@ aStatus_t aDevUsartDestroy(aDevUsartHandle_t *handle);
  * @param[in] buffer_size 请求读取的字节数，不得超过 PTRDIFF_MAX。
  * @param[in] timeout 本次完整调用共享的总等待预算。
  *
- * @return 正数表示实际读取长度，0 表示请求长度为 0，-1 表示未读取到任何数据
- *         且发生错误；返回 -1 时使用 aOSGetErrno() 查询详细原因。
+ * @return 正数表示实际交付长度，0 表示请求长度为 0，-1 表示失败且本次不交付
+ *         有效数据；返回 -1 时使用 aOSGetErrno() 查询详细原因。
  *
  * @warning 不是 ISR 安全接口；调用者必须保证同一实例的接收操作串行化。
  */
 aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *buffer,
                        size_t buffer_size, aTimeout_t timeout);
+
+/**
+ * @brief 丢弃当前未读 RX 缓冲，并清除软件溢出及接收错误锁存。
+ *
+ * 中断缓冲在临界区内丢弃未读区；环形 DMA 将消费位置推进到本次查询的
+ * 接收进度，不停止 DMA。丢弃边界之后到达的数据仍保留，不保证返回时为空。
+ * 不等待新数据，不清理调用者已读出的数据，也不识别协议帧或行边界。
+ * 不修复硬件故障；DMA 进度查询失败时返回底层状态，保留缓冲游标和软件锁存。
+ *
+ * @param[in,out] handle 已初始化的缓冲接收实例。
+ * @retval A_STATUS_OK 已丢弃快照之前的未读数据并清除软件锁存。
+ * @retval A_STATUS_INVALID_PARAM handle 为空。
+ * @retval A_STATUS_NOT_READY 未初始化，或底层 DMA 尚未就绪。
+ * @retval A_STATUS_BUSY RX 被占用，或暂时无法获得稳定的 DMA 进度。
+ * @retval A_STATUS_UNSUPPORTED 非缓冲模式，或未启用环形 DMA 接收。
+ * @note 失败不主动丢弃数据或清除软件锁存；原有 Clear 接口语义不变。
+ * @warning 仅任务上下文；调用方须串行化同一实例的接收操作及生命周期操作。
+ */
+aStatus_t aDevUsartDiscardRx(aDevUsartHandle_t *handle);
 
 /**
  * @brief 向 USART 提交最多 data_size 字节。
@@ -519,6 +542,7 @@ uint32_t aDevUsartGetIdleEventCount(const aDevUsartHandle_t *handle);
  *
  * RX 环形缓冲区发生数据丢失时返回 A_TRUE。中断模式丢弃新字节，DMA 模式
  * 覆盖最旧数据。handle 为 NULL 时返回 A_FALSE。
+ * Read 已通过 -1/A_EIO 报告软件溢出；本接口保留用于诊断，不清除标志或设置 errno。
  * @param[in] handle USART 句柄。
  * @return 当前软件溢出锁存标志。
  */

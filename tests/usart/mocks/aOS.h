@@ -30,6 +30,7 @@ void aOSCriticalExit(void);
 aOSCriticalState_t aOSCriticalEnterFromISR(void);
 void aOSCriticalExitFromISR(aOSCriticalState_t state);
 aSSize_t aOSFailWithStatus(aStatus_t status);
+aErrno_t aOSGetErrno(void);
 aSSize_t aOSFailWithTimeout(aTimeout_t timeout);
 aBool_t aOSPollWaitExpired(const aTimepoint_t *end);
 #endif
