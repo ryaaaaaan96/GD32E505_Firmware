@@ -32,7 +32,11 @@ for folder in ("app", "device", "func", "platform/aLib"):
             for header in re.findall(r'#\s*include\s*[<"]([^>"]+)[>"]',
                                      text):
                 assert Path(header).name not in app_headers, (path, header)
+        if path.is_relative_to(root / "func/aPoll"):
+            assert not re.search(
+                r'#\s*include\s*[<"](?:aBus|aModbus|aDrv|aDev)', text), path
         if path.is_relative_to(root / "func/aModbus"):
+            assert not re.search(r'#\s*include\s*[<"]aPoll', text), path
             assert not re.search(r'#\s*include\s*[<"](?:aDrv|aDev)',
                                  text), path
         if path.is_relative_to(root / "app/devices/rs485"):
@@ -54,7 +58,7 @@ for folder in ("app", "device", "func", "platform/aLib"):
         if folder == "platform/aLib":
             assert not re.search(
                 r'#\s*include\s*[<"](?:aOS|aDrv|aDev|aBus|aMemory|'
-                r'aDataBase|aShell|aLog|aModbus)', text), path
+                r'aDataBase|aShell|aLog|aModbus|aPoll)', text), path
 
 # 业务公共头不需要厂商头、OS 内核头或实例私有布局。
 includes = ["platform/aLib/include", "platform/aOS/public",
@@ -62,11 +66,12 @@ includes = ["platform/aLib/include", "platform/aOS/public",
             "platform/aDrv/include", "device/aDev_usart/include",
             "device/aDev_Flash25q", "func/aBus/include", "func/aMemory",
             "func/aDataBase", "func/aShell/include", "func/aLog",
-            "func/aModbus", "app/protocol/inc"]
+            "func/aModbus", "func/aPoll", "app/protocol/inc"]
 headers = ("aLayout.h", "aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
            "aDrv_dma.h", "aDev_led.h", "aDev_led_instance.h",
            "aBus.h", "aMemory.h", "aDataBase.h", "aShell.h", "aLog.h",
-           "aModbus.h", "aModbus_rtu.h", "aModbus_rtu_instance.h",
+           "aPoll.h", "aPoll_instance.h", "aModbus.h", "aModbus_rtu.h",
+           "aModbus_rtu_instance.h",
            "protocol.h", "IDU_sig_table.h", "FAN_sig_table.h")
 command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
            "-fsyntax-only", *["-I" + path for path in includes],

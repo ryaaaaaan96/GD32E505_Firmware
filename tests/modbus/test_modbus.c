@@ -231,6 +231,7 @@ struct link {
     aModbusTransportType_t type;
     aBool_t processed;
     aBool_t corrupt;
+    unsigned invalid_response;
     aBool_t short_tcp;
     uint32_t delay;
     unsigned completed;
@@ -261,6 +262,15 @@ static void serve(link_t *link)
     assert(aModbusServerProcess(link->server, &request) == A_STATUS_OK);
     if (link->corrupt && link->response_size != 0U) {
         link->response[link->response_size - 1U] ^= 1U;
+    }
+    if (link->type == AMODBUS_TRANSPORT_RTU && link->response_size >= 5U) {
+        switch (link->invalid_response) {
+        case 1U: link->response[0]++; break;
+        case 2U: link->response[1] = 4U; break;
+        case 3U: link->response[2]--; break;
+        case 4U: link->response_size--; break;
+        default: break;
+        }
     }
     if (link->short_tcp && link->response_size >= 8U) {
         link->response[4] = 0U;
@@ -743,6 +753,142 @@ static void end_to_end(aModbusTransportType_t type, aBool_t callbacks)
     assert(address_reads != 0U && address_writes != 0U);
 }
 
+static void prepared_plans(aModbusTransportType_t type)
+{
+    aModbusPoll_t items[] = {
+        {.area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 0U,
+         .quantity = 1U, .target = {1U, WORD, AMODBUS_SIG_WHOLE}},
+        {.area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 1U,
+         .quantity = 2U, .target = {1U, LOCAL, AMODBUS_SIG_WHOLE}},
+        {.area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 3U,
+         .quantity = 2U, .flags = AMODBUS_POLL_FLAG_BREAK_BEFORE,
+         .target = {1U, SIGNED, AMODBUS_SIG_WHOLE}},
+        {.area = AMODBUS_AREA_COILS, .address = 0U,
+         .quantity = 1U, .target = {1U, 0U, AMODBUS_SIG_WHOLE}},
+        {.area = AMODBUS_AREA_DISCRETE_INPUTS, .address = 1U,
+         .quantity = 1U, .target = {1U, 1U, AMODBUS_SIG_WHOLE}},
+        {.area = AMODBUS_AREA_INPUT_REGISTERS, .address = 0U,
+         .quantity = 2U, .target = {1U, LOCAL, AMODBUS_SIG_WHOLE},
+         .word_order = AMODBUS_WORD_LOW_FIRST},
+        {.area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 12U,
+         .quantity = 2U, .target = {1U, LOCAL, AMODBUS_SIG_WHOLE}},
+    };
+    link_t link = {.type = type};
+    endpoint_t server_port = {&link, A_TRUE};
+    endpoint_t client_port = {&link, A_FALSE};
+    aModbusConfig_t server_config =
+        configuration(&server_port, AMODBUS_ROLE_SERVER);
+    aModbusConfig_t client_config =
+        configuration(&client_port, AMODBUS_ROLE_CLIENT);
+    aModbusHandle_t server_storage, client_storage;
+    aModbusHandle_t *client;
+    aModbusPlanConfig_t config;
+    aModbusPlanRequest_t request;
+    aModbusPlan_t *plan;
+    aBool_t attempted;
+    aModbusResult_t result;
+    uint16_t immediate[2];
+    unsigned allocations;
+#if AMODBUS_STATIC_ENABLE
+    aModbusPlanFrame_t frames[7];
+    aModbusPlan_t storage = {.frames = frames, .capacity = 7U};
+#endif
+    client_config.sig_write = sig_write;
+    client_config.sig_context = &bus;
+    link.server = open_instance(&server_config, &server_storage);
+    client = open_instance(&client_config, &client_storage);
+    aModbusPlanConfigStructInit(&config);
+    config.items = items;
+    config.count = sizeof(items) / sizeof(items[0]);
+    config.timeout = A_TIMEOUT_MS(50U);
+#if AMODBUS_STATIC_ENABLE
+    storage.capacity = 1U;
+    assert(aModbusPlanInitStatic(client, &config, &storage) ==
+           A_STATUS_INVALID_PARAM);
+    assert(!storage.ready && client->plan_count == 0U);
+    storage.capacity = 7U;
+    assert(aModbusPlanInitStatic(client, &config, &storage) == A_STATUS_OK);
+    plan = &storage;
+    assert(aModbusDeInitStatic(client) == A_STATUS_BUSY);
+#else
+    assert(aModbusPlanCreate(client, &config, &plan) == A_STATUS_OK);
+    assert(aModbusDestroy(client) == A_STATUS_BUSY);
+#endif
+    assert(aModbusPlanFrameCount(plan) == 6U);
+    assert(plan->frames[0].count == 2U && plan->frames[0].quantity == 3U);
+    allocations = testAllocations();
+    word = 123U;
+    counter = 0x12345678U;
+    signed_value = -42;
+    flags[0] = 1U;
+    flags[1] = 0U;
+    aModbusPlanRequestStructInit(&request);
+    request.attempted = &attempted;
+    request.result = &result;
+    for (size_t i = 0U; i < 5U; i++) {
+        request.frame_index = i;
+        assert(aModbusPlanExecute(plan, &request) == A_STATUS_OK);
+        assert(attempted && result.exception == 0U);
+    }
+    assert(local_value == counter && signed_value == -42);
+    assert(flags[0] == 1U && flags[1] == 0U);
+    request.frame_index = 5U;
+    assert(aModbusPlanExecute(plan, &request) == A_STATUS_ERROR);
+    assert(attempted && result.exception == 2U);
+    request.frame_index = 0U;
+    /* 发布返回 BUSY 仍算本帧已尝试；实例入口重入 BUSY 则没有尝试。 */
+    reject_sig_write = A_TRUE;
+    assert(aModbusPlanExecute(plan, &request) == A_STATUS_BUSY && attempted);
+    reject_sig_write = A_FALSE;
+    atomic_store(&client->active, A_TRUE);
+    assert(aModbusPlanExecute(plan, &request) == A_STATUS_BUSY && !attempted);
+    atomic_store(&client->active, A_FALSE);
+    assert(aModbusPlanExecute(plan, &request) == A_STATUS_OK);
+    /* 即时读写不改预生成帧；随后继续执行同一计划。 */
+    assert(read_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
+        1U, 2U, immediate, sizeof(immediate), &result) == A_STATUS_OK);
+    assert(aModbusPlanExecute(plan, &request) == A_STATUS_OK);
+    assert(local_value == counter);
+    if (type == AMODBUS_TRANSPORT_RTU) {
+        static const uint8_t expected[] = {1U, 3U, 0U, 0U, 0U, 3U};
+        assert(memcmp(link.request, expected, sizeof(expected)) == 0);
+        assert(memcmp(plan->frames[0].rtu, link.request, 8U) == 0);
+        link.corrupt = A_TRUE;
+        assert(aModbusPlanExecute(plan, &request) == A_STATUS_ERROR);
+        link.corrupt = A_FALSE;
+        assert(aModbusPlanExecute(plan, &request) == A_STATUS_OK);
+        for (unsigned fault = 1U; fault <= 4U; fault++) {
+            link.invalid_response = fault;
+            assert(aModbusPlanExecute(plan, &request) ==
+                   (fault == 4U ? A_STATUS_TIMEOUT : A_STATUS_ERROR));
+            assert(attempted);
+        }
+        link.invalid_response = 0U;
+        assert(aModbusPlanExecute(plan, &request) == A_STATUS_OK);
+        link.delay = 60U;
+        assert(aModbusPlanExecute(plan, &request) == A_STATUS_TIMEOUT);
+        assert(attempted);
+        link.delay = 0U;
+        assert(aModbusPlanExecute(plan, &request) == A_STATUS_OK);
+    }
+    assert(testAllocations() == allocations);
+#if AMODBUS_STATIC_ENABLE
+    assert(aModbusPlanDeInitStatic(plan) == A_STATUS_OK);
+#else
+    assert(aModbusPlanDestroy(plan) == A_STATUS_OK);
+#endif
+#if AMODBUS_DYNAMIC_ENABLE
+    testFailAllocation(A_TRUE);
+    assert(aModbusPlanCreate(client, &config, &plan) == A_STATUS_NO_MEMORY);
+    assert(plan == NULL && client->plan_count == 0U);
+    testFailAllocation(A_FALSE);
+    assert(aModbusPlanCreate(client, &config, &plan) == A_STATUS_OK);
+    assert(aModbusPlanDestroy(plan) == A_STATUS_OK);
+#endif
+    close_instance(client);
+    close_instance(link.server);
+}
+
 static aStatus_t maximum_read(void *context,
     const aModbusAddressReadRequest_t *request)
 {
@@ -912,6 +1058,8 @@ int main(void)
     maximum_frames(AMODBUS_TRANSPORT_TCP);
     malformed_frames();
     stream_tests();
+    prepared_plans(AMODBUS_TRANSPORT_RTU);
+    prepared_plans(AMODBUS_TRANSPORT_TCP);
 #endif
     assert(aBusDeInitStatic(&bus) == A_STATUS_OK);
     assert(testAllocations() == 0U);

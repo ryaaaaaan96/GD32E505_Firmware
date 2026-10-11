@@ -2,7 +2,8 @@
 
 本目录负责产品点表、协议映射、持久化选择和通信任务装配。
 `system` 创建并私有持有 aBus 与数据库，恢复参数后调用 `protocolInit(bus)`。
-`devices` 只提供串口设备；aModbus 负责协议、类型转换及总线读写，不创建任务。
+`devices` 只提供串口设备；aModbus 负责协议、类型转换及总线读写；aPoll 负责周期、事件和请求队列。
+两者不创建任务，也不相互依赖。
 
 | 内容 | 位置 |
 | --- | --- |
@@ -25,9 +26,10 @@
   选择清单。纯静态模式下，随点表规模变化的 aBus 存储也在这里预留；
   创建总线、持有活动句柄及恢复数据仍由 system 完成。
 
-两个 Modbus 配置文件对外提供 `const aModbusServiceConfig_t`，不配置任务栈
-或优先级。`protocol.c` 为每条链路绑定业务配置、端口、任务名称/栈/优先级，
-再创建 RTU、Modbus 和任务。切换当前链路的主从角色也只在装配处处理。
+两个 Modbus 配置文件提供内部 `const protocolModbusConfig_t`，组合协议的
+service 与调度的 schedule。类型在 protocol_internal.h，配置不包含任务栈
+或优先级。protocol.c 装配端口、协议、采集计划和 aPoll，再创建任务。
+从站沿用阻塞式 ServerProcess；主站任务循环执行 aPollProcess/aPollWait。
 
 `protocolPersistenceConfigInit` 只向数据库配置填入只读点表和持久化清单。
 `system_init.c` 的数据库段持有 KV/TSDB 实例及静态索引 RAM，并结合
@@ -204,11 +206,39 @@ Demo 在 TEST_020 上设置断帧标志，每轮发送 6 帧 FC03，地址为零
 - `interval_ms / error_delay_ms`：两次事务之间的让出时间，成功 1 ms、
   失败至少 5 ms；它们不是逐点采集周期。
 
-站号使用服务配置中的 modbus.unit_id；各采集项不重复配置站号和超时。
+站号使用 service.modbus.unit_id；各采集项不重复配置站号和超时。
 六帧全部超时时，一轮约 3 s 加帧间等待，采集周期不保证超时情况下的频率。
 失败也推进列表，下轮再次尝试；通信失败保留该组旧值。
 每个 SIG 独立发布，整轮不提供原子快照。
 主站模式下，本地 Shell 改写这些采集值会被后续成功采集覆盖，不代表已下发。
+
+### 周期、事件与临时请求
+
+FAN 固定采集计划在初始化时生成，缓存六帧 RTU 请求及 CRC。aPoll 的一步
+对应一帧，protocol 不再维护 poll_index、轮次时间和周期等待计算。
+从站没有周期计划，继续处理接收到的请求。板级串口职责保持不变。
+
+主站 Shell 命令：
+
+```text
+protocol refresh
+```
+
+只调用 protocolRefresh 投递合并事件，回调在通信任务中通过 aPollJobTrigger
+请求提前采集。当前轮次不会被打断，成功/失败后的等待及 RTU 静默仍然生效。
+重复投递合并，从站返回 UNSUPPORTED。该命令不会直接从 Shell 操作串口。
+
+带参数的临时读写调用 protocolModbusSubmit。使用
+protocolModbusRequestStructInit 初始化，填写 access.read；写操作设置 write，
+并用 aModbusClientWriteRequestStructInit 初始化 access.write 后填充参数。
+四槽队列复制调度描述，原请求及数据借用至 complete 回调结束，不能提交局部
+对象后立即返回。complete 在通信任务调用，response 仅回调期间有效。
+access.result 不使用，状态和协议异常统一通过 complete 返回。
+临时请求在帧之间执行，不合并、不自动重试；队列满返回 BUSY。
+
+调度采用周期作业、事件、临时请求轮转，持续的外部请求不会饿死周期采集。
+当前同步收发可等待 500 ms，事件只能唤醒空闲任务，不能打断在途事务。
+独立物理端口应使用独立执行任务，避免一个端口超时拖住其他端口。
 
 ### 地址段回调 Demo
 
@@ -296,18 +326,18 @@ Shell 是本地调试入口，可写组合字段；Modbus 的只读权限属于�
 
 通信配置采用 `extern const` 跨文件共享，声明集中在
 [protocol.c](protocol.c)，只由它装配；公共头文件不声明这些对象。
-通信配置类型由 aModbus.h 提供，对象分别定义在 FAN_modbus_master.c、
+通信组合类型由私有 protocol_internal.h 提供，对象分别定义在 FAN_modbus_master.c、
 IDU_modbus_slave.c；protocol.c 在 APP_MODBUS_ENABLE 内按主从角色声明：
 
 ```c
 #if APP_MODBUS_MASTER_ENABLE
-extern const aModbusServiceConfig_t FAN_modbus_master_config;
+extern const protocolModbusConfig_t FAN_modbus_master_config;
 #else
-extern const aModbusServiceConfig_t IDU_modbus_slave_config;
+extern const protocolModbusConfig_t IDU_modbus_slave_config;
 #endif
 ```
 
-定义方和使用方均使用库提供的通用类型，但不再共享对象声明。
+定义方和使用方均包含私有组合类型，但公共 protocol.h 不暴露配置对象。
 修改对象名称、类型或 const 限定时，必须同步检查定义和 protocol.c 的声明；
 普通链接器不能保证发现跨文件的 C 类型不一致。
 protocol.c 根据主从宏引用所选对象，再复制配置并装配运行资源。

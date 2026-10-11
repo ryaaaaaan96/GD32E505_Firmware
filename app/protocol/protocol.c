@@ -2,7 +2,10 @@
 #include "app_config.h"
 
 #if APP_MODBUS_ENABLE
-#include "aModbus.h"
+#include "protocol_internal.h"
+#if APP_MODBUS_MASTER_ENABLE && !APOLL_DYNAMIC_ENABLE
+#include "aPoll_instance.h"
+#endif
 #include "rs485_device.h"
 #include "aModbus_rtu.h"
 #if !AMODBUS_DYNAMIC_ENABLE
@@ -18,19 +21,19 @@
 #if !AMODBUS_CLIENT_ENABLE
 #error "Modbus master demo requires AMODBUS_CLIENT_ENABLE"
 #endif
-extern const aModbusServiceConfig_t FAN_modbus_master_config;
+extern const protocolModbusConfig_t FAN_modbus_master_config;
 #else
 #if !AMODBUS_SERVER_ENABLE
 #error "Modbus slave demo requires AMODBUS_SERVER_ENABLE"
 #endif
-extern const aModbusServiceConfig_t IDU_modbus_slave_config;
+extern const protocolModbusConfig_t IDU_modbus_slave_config;
 #endif
 
 /* 每条通信链路独立持有状态；多个链路可借用同一个 aBus。
  * 当前硬件只注册 USART2，后续新端口增加自己的收发适配函数。
  */
 typedef struct {
-    const aModbusServiceConfig_t *service;
+    const protocolModbusConfig_t *product;
     aOSTaskConfig_t task; /* 本链路的任务资源，入口和参数在创建时填充。 */
     aStatus_t (*prepare)(rs485Port_t *port);
     aStatus_t (*open)(rs485ReceiveFn_t receive, void *context);
@@ -43,9 +46,19 @@ typedef struct {
     const aModbusServiceConfig_t *settings;
     aModbusHandle_t *modbus;
     aModbusRtuHandle_t *rtu;
-    size_t poll_index;
-    uint32_t cycle_started;
-    aBool_t cycle_complete;
+#if APP_MODBUS_MASTER_ENABLE
+    aModbusPlan_t *plan;
+    aPollHandle_t *poll;
+    aPollJobConfig_t job;
+    aPollEventConfig_t event;
+    aStatus_t previous_status;
+#if !APOLL_DYNAMIC_ENABLE
+    aPollJobState_t job_state;
+    aPollEventState_t event_state;
+    aPollRequest_t requests[4];
+    aPollHandle_t poll_instance;
+#endif
+#endif
 #if !AMODBUS_DYNAMIC_ENABLE
     aModbusHandle_t modbus_instance;
     aModbusRtuHandle_t rtu_instance;
@@ -70,9 +83,9 @@ static aSSize_t writeFrame(const void *data, size_t size, aTimeout_t timeout)
 /* 每条硬件链路注册自己的配置；总线无需知道协议或端口。 */
 static const protocolLinkConfig_t rs485_config = {
 #if APP_MODBUS_MASTER_ENABLE
-    .service = &FAN_modbus_master_config,
+    .product = &FAN_modbus_master_config,
 #else
-    .service = &IDU_modbus_slave_config,
+    .product = &IDU_modbus_slave_config,
 #endif
     .task = {
         .name = "modbus",
@@ -85,72 +98,103 @@ static const protocolLinkConfig_t rs485_config = {
     .framing_stream = {.read = readFrame, .write = writeFrame}
 };
 
-static aStatus_t modbusProcess(protocolLink_t *link)
+#if APP_MODBUS_MASTER_ENABLE
+/* 业务适配仅执行指定帧；周期、重试等待和推进由 aPoll 管理。 */
+static void pollExecute(void *context, size_t step, aPollStepResult_t *result)
 {
-    link->cycle_complete = A_FALSE;
-    if (link->modbus == NULL) return A_STATUS_NOT_READY;
-#if AMODBUS_CLIENT_ENABLE
-    if (link->settings->modbus.role == AMODBUS_ROLE_CLIENT) {
-        size_t completed;
-        const aModbusClientBatchRequest_t request = {
-            .items = &link->settings->polls[link->poll_index],
-            .count = link->settings->poll_count - link->poll_index,
-            .completed = &completed,
-            .unit_id = link->settings->modbus.unit_id,
-            .timeout = link->settings->request_timeout
-        };
-        aStatus_t status = aModbusClientReadBatch(link->modbus, &request);
-        if (completed == 0U) return status;
-        /* 合并的连续地址一次提交；失败也推进，避免离线项阻塞整轮。 */
-        link->poll_index += completed;
-        if (link->poll_index == link->settings->poll_count) {
-            link->poll_index = 0U;
-            link->cycle_complete = A_TRUE;
-        }
-        return status;
+    protocolLink_t *link = context;
+    const aModbusPlanRequest_t request = {
+        .frame_index = step, .attempted = &result->advance
+    };
+    result->status = aModbusPlanExecute(link->plan, &request);
+#if ASHELL_ENABLE
+    if (result->status != link->previous_status) {
+        ASHELL_PRINT("Modbus master: %s (status %d)\r\n",
+            result->status == A_STATUS_OK ? "online" : "read failed",
+            (int)result->status);
+        link->previous_status = result->status;
     }
-#endif
-#if AMODBUS_SERVER_ENABLE
-    return aModbusServerProcess(link->modbus, &link->settings->server);
-#else
-    return A_STATUS_UNSUPPORTED;
 #endif
 }
 
+static void refreshRequested(void *context)
+{
+    protocolLink_t *link = context;
+    (void)aPollJobTrigger(link->poll, 0U);
+}
+
+static aStatus_t pollInit(protocolLink_t *link)
+{
+    aModbusPlanConfig_t plan;
+    aPollConfig_t config;
+    aStatus_t status;
+    aModbusPlanConfigStructInit(&plan);
+    plan.items = link->settings->polls;
+    plan.count = link->settings->poll_count;
+    plan.unit_id = link->settings->modbus.unit_id;
+    plan.timeout = link->settings->request_timeout;
+#if AMODBUS_DYNAMIC_ENABLE
+    status = aModbusPlanCreate(link->modbus, &plan, &link->plan);
+#else
+    status = aModbusPlanInitStatic(link->modbus, &plan,
+        link->config->product->plan_instance);
+    if (status == A_STATUS_OK) {
+        link->plan = link->config->product->plan_instance;
+    }
+#endif
+    if (status != A_STATUS_OK) return status;
+    link->job = link->config->product->schedule;
+    link->job.execute = pollExecute;
+    link->job.context = link;
+    link->job.step_count = aModbusPlanFrameCount(link->plan);
+    link->event.function = refreshRequested;
+    link->event.context = link;
+    link->previous_status = A_STATUS_NOT_READY;
+    aPollConfigStructInit(&config);
+    config.jobs = &link->job;
+    config.job_count = 1U;
+    config.events = &link->event;
+    config.event_count = 1U;
+    config.request_capacity = 4U;
+#if APOLL_DYNAMIC_ENABLE
+    return aPollCreate(&config, &link->poll);
+#else
+    link->poll_instance.jobs = &link->job_state;
+    link->poll_instance.job_capacity = 1U;
+    link->poll_instance.events = &link->event_state;
+    link->poll_instance.event_capacity = 1U;
+    link->poll_instance.requests = link->requests;
+    link->poll_instance.request_capacity = 4U;
+    status = aPollInitStatic(&config, &link->poll_instance);
+    if (status == A_STATUS_OK) link->poll = &link->poll_instance;
+    return status;
+#endif
+}
+#endif
+
 static void modbusTask(void *argument)
 {
-#if ASHELL_ENABLE && AMODBUS_CLIENT_ENABLE
-    aStatus_t previous = A_STATUS_NOT_READY;
-#endif
-
     protocolLink_t *link = argument;
-    link->cycle_started = aOSGetUptimeMs();
     for (;;) {
-        aStatus_t status = modbusProcess(link);
-        uint32_t delay = status == A_STATUS_OK ? link->settings->interval_ms :
-                                                link->settings->error_delay_ms;
-
-#if ASHELL_ENABLE && AMODBUS_CLIENT_ENABLE
-        if (link->settings->modbus.role == AMODBUS_ROLE_CLIENT &&
-            status != previous) {
-            ASHELL_PRINT("Modbus master: %s (status %d)\r\n",
-                         status == A_STATUS_OK ? "online" : "read failed",
-                         (int)status);
-            previous = status;
+#if APP_MODBUS_MASTER_ENABLE
+        aPollProcessResult_t result;
+        aStatus_t status = aPollProcess(link->poll, &result);
+        if (status != A_STATUS_OK) {
+            aOSDelayMs(link->config->product->schedule.error_delay_ms);
+            continue;
+        }
+        status = aPollWait(link->poll, result.wait);
+        if (status != A_STATUS_OK && status != A_STATUS_TIMEOUT &&
+            status != A_STATUS_BUSY) {
+            aOSDelayMs(link->config->product->schedule.error_delay_ms);
+        }
+#else
+        aStatus_t status = aModbusServerProcess(link->modbus,
+                                                &link->settings->server);
+        if (status != A_STATUS_OK) {
+            aOSDelayMs(link->config->product->schedule.error_delay_ms);
         }
 #endif
-#if AMODBUS_CLIENT_ENABLE
-        if (link->settings->modbus.role == AMODBUS_ROLE_CLIENT &&
-            link->cycle_complete) {
-            uint32_t elapsed = aOSGetUptimeMs() - link->cycle_started;
-            uint32_t remaining = elapsed < link->settings->poll_time_ms ?
-                link->settings->poll_time_ms - elapsed : 0U;
-            if (remaining > delay) delay = remaining;
-            if (delay != 0U) aOSDelayMs(delay);
-            link->cycle_started = aOSGetUptimeMs();
-        } else
-#endif
-        if (delay != 0U) aOSDelayMs(delay);
     }
 }
 
@@ -198,7 +242,11 @@ static aStatus_t modbusPrepare(protocolLink_t *link, aBusHandle_t *bus)
     if (status == A_STATUS_OK) link->modbus = &link->modbus_instance;
 #endif
     if (status != A_STATUS_OK) return status;
-    /* 两个协议实例都已就绪，才允许 USART ISR 交付字节。 */
+#if APP_MODBUS_MASTER_ENABLE
+    status = pollInit(link);
+    if (status != A_STATUS_OK) return status;
+#endif
+    /* 协议、计划和调度资源就绪后，才允许 USART ISR 交付字节。 */
     return link->config->open(aModbusRtuReceive, link->rtu);
 }
 
@@ -208,11 +256,11 @@ static aStatus_t modbusInit(protocolLink_t *link, aBusHandle_t *bus)
     aStatus_t status;
     aStatus_t cleanup_status;
 
-    if (link->config == NULL || link->config->service == NULL ||
+    if (link->config == NULL || link->config->product == NULL ||
         link->config->prepare == NULL || link->config->open == NULL ||
         link->config->close == NULL) return A_STATUS_INVALID_PARAM;
     if (link->modbus != NULL || link->rtu != NULL) return A_STATUS_BUSY;
-    link->settings = link->config->service;
+    link->settings = &link->config->product->service;
     if (bus == NULL) return A_STATUS_INVALID_PARAM;
     if (link->settings->modbus.transport_type != AMODBUS_TRANSPORT_RTU) {
         return A_STATUS_UNSUPPORTED;
@@ -221,7 +269,7 @@ static aStatus_t modbusInit(protocolLink_t *link, aBusHandle_t *bus)
         link->config->task.name == NULL ||
         link->config->task.priority < AOS_TASK_PRIO_LOWEST ||
         link->config->task.priority > AOS_TASK_PRIO_REALTIME ||
-        link->settings->error_delay_ms == 0U) {
+        link->config->product->schedule.error_delay_ms == 0U) {
         return A_STATUS_INVALID_PARAM;
     }
     if (link->settings->modbus.role == AMODBUS_ROLE_CLIENT) {
@@ -229,7 +277,7 @@ static aStatus_t modbusInit(protocolLink_t *link, aBusHandle_t *bus)
         aModbusConfig_t config = link->settings->modbus;
         if (link->settings->polls == NULL ||
             link->settings->poll_count == 0U ||
-            link->settings->poll_time_ms > INT32_MAX ||
+            link->config->product->schedule.poll_time_ms > INT32_MAX ||
             !aTimeoutIsValid(link->settings->request_timeout)) {
             return A_STATUS_INVALID_PARAM;
         }
@@ -239,8 +287,6 @@ static aStatus_t modbusInit(protocolLink_t *link, aBusHandle_t *bus)
                 &link->settings->polls[i], config.unit_id);
             if (status != A_STATUS_OK) return status;
         }
-        link->poll_index = 0U;
-        link->cycle_started = aOSGetUptimeMs();
 #else
         return A_STATUS_UNSUPPORTED;
 #endif
@@ -248,8 +294,9 @@ static aStatus_t modbusInit(protocolLink_t *link, aBusHandle_t *bus)
 #if AMODBUS_SERVER_ENABLE
         if (!aTimeoutIsValid(link->settings->server.timeout) ||
             (link->settings->server.timeout.type == A_TIMEOUT_TYPE_RELATIVE &&
-             link->settings->server.timeout.milliseconds == 0U &&
-             link->settings->interval_ms == 0U)) return A_STATUS_INVALID_PARAM;
+             link->settings->server.timeout.milliseconds == 0U)) {
+            return A_STATUS_INVALID_PARAM;
+        }
 #else
         return A_STATUS_UNSUPPORTED;
 #endif
@@ -283,6 +330,26 @@ static aStatus_t modbusDeInit(protocolLink_t *link)
     aStatus_t status;
 
     if (link->modbus == NULL && link->rtu == NULL) return A_STATUS_NOT_READY;
+#if APP_MODBUS_MASTER_ENABLE
+    if (link->poll != NULL) {
+#if APOLL_DYNAMIC_ENABLE
+        status = aPollDestroy(link->poll);
+#else
+        status = aPollDeInitStatic(link->poll);
+#endif
+        if (status != A_STATUS_OK) return status;
+        link->poll = NULL;
+    }
+    if (link->plan != NULL) {
+#if AMODBUS_DYNAMIC_ENABLE
+        status = aModbusPlanDestroy(link->plan);
+#else
+        status = aModbusPlanDeInitStatic(link->plan);
+#endif
+        if (status != A_STATUS_OK) return status;
+        link->plan = NULL;
+    }
+#endif
     if (link->modbus != NULL) {
 #if AMODBUS_DYNAMIC_ENABLE
         status = aModbusDestroy(link->modbus);
@@ -328,3 +395,64 @@ aStatus_t protocolInit(aBusHandle_t *bus)
     return A_STATUS_OK;
 #endif
 }
+
+/* 只投递事件，回调在通信任务中触发下一轮；不在调用方直接操作串口。 */
+aStatus_t protocolRefresh(void)
+{
+#if APP_MODBUS_ENABLE && APP_MODBUS_MASTER_ENABLE
+    if (rs485_link.poll == NULL) return A_STATUS_NOT_READY;
+    return aPollEventPost(rs485_link.poll, 0U);
+#else
+    return A_STATUS_UNSUPPORTED;
+#endif
+}
+
+#if APP_MODBUS_ENABLE && APP_MODBUS_MASTER_ENABLE
+static void temporaryExecute(void *context, size_t step,
+                              aPollStepResult_t *result)
+{
+    const protocolModbusRequest_t *request = context;
+    aModbusResult_t response = {.exception = 0U};
+    (void)step;
+    if (request->write) {
+        aModbusClientWriteRequest_t access = request->access.write;
+        access.result = &response;
+        result->status = aModbusClientWrite(rs485_link.modbus, &access);
+    } else {
+        aModbusClientReadRequest_t access = request->access.read;
+        access.result = &response;
+        result->status = aModbusClientRead(rs485_link.modbus, &access);
+    }
+    result->advance = A_TRUE;
+    if (request->complete != NULL) {
+        request->complete(request->context, result->status, &response);
+    }
+}
+#endif
+
+#if APP_MODBUS_ENABLE
+void protocolModbusRequestStructInit(protocolModbusRequest_t *request)
+{
+    if (request != NULL) {
+        const protocolModbusRequest_t defaults = {.write = A_FALSE};
+        *request = defaults;
+        aModbusClientReadRequestStructInit(&request->access.read);
+    }
+}
+
+aStatus_t protocolModbusSubmit(const protocolModbusRequest_t *request)
+{
+#if APP_MODBUS_MASTER_ENABLE
+    aPollRequest_t queued;
+    if (request == NULL) return A_STATUS_INVALID_PARAM;
+    if (rs485_link.poll == NULL) return A_STATUS_NOT_READY;
+    aPollRequestStructInit(&queued);
+    queued.execute = temporaryExecute;
+    queued.context = (void *)request;
+    return aPollSubmit(rs485_link.poll, &queued);
+#else
+    (void)request;
+    return A_STATUS_UNSUPPORTED;
+#endif
+}
+#endif

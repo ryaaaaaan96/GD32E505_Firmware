@@ -291,10 +291,45 @@ typedef struct {
     aModbusResult_t *result;
 } aModbusClientBatchRequest_t;
 
-/** 通用服务配置，组合协议、请求及通信节奏，供应用统一装配。
- * 本结构体仅描述配置，不创建任务、端口或协议实例。
- * 任务名称、栈容量和优先级由应用的链路配置独立提供。
- * 应用持有模板及其引用的映射、采集项和结果对象，使用期间须持续有效。
+/** 采集计划引用原始清单，预计算分帧；RTU 固定读取报文含 CRC。
+ * TCP 同样复用分组，但事务编号和 MBAP 仍在执行时生成。
+ * 计划绑定一个协议实例；清单和实例必须有效至计划销毁。
+ */
+typedef struct aModbusPlan aModbusPlan_t;
+typedef struct {
+    const aModbusPoll_t *items;
+    size_t count;
+    uint8_t unit_id;
+    aTimeout_t timeout; /**< 设备统一的每帧预算，包含发布等待。 */
+} aModbusPlanConfig_t;
+
+typedef struct {
+    size_t frame_index;
+    aBool_t *attempted; /**< 执行前清零；取得实例并尝试事务后置位。 */
+    aModbusResult_t *result;
+} aModbusPlanRequest_t;
+
+void aModbusPlanConfigStructInit(aModbusPlanConfig_t *config);
+void aModbusPlanRequestStructInit(aModbusPlanRequest_t *request);
+#if AMODBUS_CLIENT_ENABLE
+#if AMODBUS_STATIC_ENABLE
+/* 静态计划预先提供 frames/capacity，见 aModbus_instance.h。 */
+aStatus_t aModbusPlanInitStatic(aModbusHandle_t *handle,
+    const aModbusPlanConfig_t *config, aModbusPlan_t *plan);
+aStatus_t aModbusPlanDeInitStatic(aModbusPlan_t *plan);
+#endif
+#if AMODBUS_DYNAMIC_ENABLE
+aStatus_t aModbusPlanCreate(aModbusHandle_t *handle,
+    const aModbusPlanConfig_t *config, aModbusPlan_t **plan_out);
+aStatus_t aModbusPlanDestroy(aModbusPlan_t *plan);
+#endif
+size_t aModbusPlanFrameCount(const aModbusPlan_t *plan);
+aStatus_t aModbusPlanExecute(aModbusPlan_t *plan,
+    const aModbusPlanRequest_t *request);
+#endif
+
+/** 协议服务配置；仅组合协议及请求参数，调度策略由应用另行提供。
+ * 不创建任务或端口，所有引用须保持有效至实例销毁。
  */
 typedef struct {
     /** 协议配置；使用前由应用装配 bus 和 transport。 */
@@ -306,11 +341,6 @@ typedef struct {
     aTimeout_t request_timeout;
     /** 从站每次处理请求，传给 aModbusServerProcess。 */
     aModbusServerProcessRequest_t server;
-    /** 每次成功或失败后等待的毫秒数，不属于协议事务超时。 */
-    uint32_t interval_ms;
-    uint32_t error_delay_ms;
-    /** 主站整轮起点之间的最小间隔；事务超时可使本轮超出周期。 */
-    uint32_t poll_time_ms;
 } aModbusServiceConfig_t;
 
 /** 启动前校验全部采集项，不分配资源、不访问端口、不修改数据。
@@ -325,10 +355,7 @@ aStatus_t aModbusClientPollCheck(const aModbusConfig_t *config,
 
 void aModbusTransportStructInit(aModbusTransport_t *transport);
 void aModbusConfigStructInit(aModbusConfig_t *config);
-/** 重置协议、请求及通信节奏默认值；NULL 不操作，不分配资源。
- * 默认事务超时 1000 ms，成功等待 0 ms，失败等待 5 ms。
- * 默认 poll_time_ms 为零（不额外限制整轮周期），须补齐业务配置。
- */
+/** 重置协议及请求默认值；事务超时默认 1000 ms，不分配资源。 */
 void aModbusServiceConfigStructInit(aModbusServiceConfig_t *config);
 void aModbusSigTargetStructInit(aModbusSigTarget_t *target);
 void aModbusAddressReadRequestStructInit(aModbusAddressReadRequest_t *request);

@@ -88,7 +88,7 @@ aModbusClientReadBatch 从首项合并同区域的连续地址，不排序、不
 不同类型、字序可以同帧读取，随后分别解码；组合 SIG 可按字段或整组配置。
 整组作为一个采集项参与合并，库不拆分单项；需要分帧时改用字段采集项。
 达到协议容量（125 个寄存器或 2000 位）或下一项要求断帧时停止合并。
-每次调用只发送一帧，无预分组表或运行期内存分配。
+每次调用只发送一帧，此即时批量入口不保存预分组表。固定轮询使用下述采集计划。
 
 flags 默认零，AMODBUS_POLL_FLAG_BREAK_BEFORE 表示从该项另起一帧：
 连续的 A、B、C 中给 B 设置标志，将读取 A 和 B+C 两帧。
@@ -99,10 +99,31 @@ flags 默认零，AMODBUS_POLL_FLAG_BREAK_BEFORE 表示从该项另起一帧：
 completed 返回本次尝试的项数；通信失败
 也返回该数量，供调度器推进；实例重入 BUSY 时为零。每个 SIG 独立提交，
 批次内解码/范围检查先于提交。自定义回调失败和跨 SIG 锁失败不回滚前项。
-设备服务配置用 request_timeout 统一控制每帧超时，poll_time_ms 表达整轮
-采集周期；两者独立。站号使用 modbus.unit_id，库不负责调度周期。
-应用在每帧完成后推进 completed，整轮完成后再等待余下周期时间。
+设备服务配置用 request_timeout 统一控制每帧超时，站号使用 modbus.unit_id。
+采集周期和执行进度由 aPoll 或其他调用者维护，不属于协议配置。
 单次主动读写接口仍在请求中指定 timeout，不与常驻采集项混用。
+
+## 固定采集计划
+
+`aModbusPlanCreate/InitStatic` 接收协议实例和 `aModbusPlanConfig_t`，检查清单并
+预先合并连续地址，尊重长度上限及 BREAK_BEFORE。RTU 请求缓存完整 8 字节
+报文（含 CRC）；TCP 复用分组，仍由 nanoMODBUS 在执行时更新事务编号及 MBAP。
+`aModbusPlanFrameCount` 返回帧数，`aModbusPlanExecute` 按帧下标执行一次。
+
+计划绑定原协议实例，共用实例占用保护、收发预算、端口恢复及 aBus 发布。
+不保存周期或执行游标，不依赖 aPoll。上游 nanoMODBUS 未修改；预生成 RTU
+读取入口在自有代码内校验站号、功能码、字节数、CRC 及异常，即时请求保留
+上游路径。两条路径使用同一 transport，不能由不同任务并发访问物理串口。
+
+PlanRequest 的 attempted 在进入前清零。取得实例并尝试事务后置位；通信
+超时或发布 BUSY 都保留置位，供调度器推进。入口重入 BUSY 时保持未尝试。
+每帧预算来自计划配置 timeout，仍涵盖通信及发布。结果 exception 语义与
+普通读写一致，支持的远端异常码为 1～4。
+
+动态计划按实际帧数一次分配。静态计划提供零初始化实例及 frames/capacity，
+帧类型见 aModbus_instance.h；容量可以按采集项数提供上限。配置对象复制，
+清单、目标定义及协议实例保持有效且不变。计划存在时协议销毁返回 BUSY，
+须先停止执行和排队请求，再销毁计划及协议实例。运行中不申请内存。
 
 ## 从设备与地址段
 
@@ -351,20 +372,20 @@ aModbusRtuBindTransport，并由应用先提供帧读写的 Stream 适配。
 
 1. rs485PortPrepare 提供串口参数、物理输出流和时基操作，不创建 RTU。
 2. 协议服务创建 RTU，适配帧 Stream，再创建 aModbus 并校验 aBus 映射。
-3. rs485PortOpen 将接收回调绑定到已就绪的 RTU，最后打开 USART。
+3. 主站先建立采集计划及 aPoll；rs485PortOpen 再绑定 RTU 接收回调并打开 USART。
 4. system 先创建总线，再调用 protocolInit(bus_handle)；protocol 装配并创建通信任务。
-5. 停止所有调用者后，先销毁协议，再关闭串口，最后释放 RTU。
+5. 停止所有调用者后，销毁 aPoll、采集计划和协议，再关闭串口并释放 RTU。
    串口关闭 BUSY 时保留 RTU，后续允许重试关闭。
 
 `aModbus.h` 提供 aModbusServiceConfig_t，统一组合 aModbusConfig_t、
-主站采集列表、从站处理请求及通信周期、成功/失败后的等待时间。
+主站采集列表、事务超时及从站处理请求。调度配置由应用组合 aPollJobConfig_t。
 该类型只描述配置，库不自动创建任务、不执行轮询调度，也不持有应用任务。
 任务名称、栈容量及优先级由应用链路独立配置，不再放在服务配置中。
 具体设备的配置实例由 app 定义，库中没有 IDU/FAN 等设备声明。
 装配时复制协议模板，填入具体 transport 并绑定私有 aBus；模板及点表保持只读。
 静态模板须明确字节等待策略，当前应用为 20 ms；局部配置可调用
 aModbusServiceConfigStructInit 获取整组默认值：协议按 aModbusConfigStructInit，
-从站处理超时为 100 ms，成功等待 0 ms、失败等待 5 ms。
+从站处理超时为 100 ms，主站事务超时为 1000 ms。
 应用须补齐端口、总线和采集或映射配置，再自行决定任务资源与执行入口。
 初始化函数仅填写结构体，不申请资源；只配置协议实例时仍用 aModbusConfig_t。
 

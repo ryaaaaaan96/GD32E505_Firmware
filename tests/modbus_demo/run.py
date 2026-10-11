@@ -10,6 +10,7 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 sources = [
     "tests/modbus_demo/test_demo.c", "tests/modbus/os_mock.c",
+    "tests/poll/wait_mock.c", "func/aPoll/aPoll.c",
     "app/protocol/FAN_modbus_master.c",
     "app/protocol/IDU_modbus_slave.c",
     "app/devices/rs485/rs485_device.c",
@@ -22,7 +23,7 @@ includes = [
     "app", "app/protocol", "app/devices/rs485",
     "app/devices/system", "device/aDev_LED",
     "app/protocol/inc", "app/task/system", "app/task/test",
-    "func/aModbus", "func/aModbus/nanoMODBUS", "func/aBus/include",
+    "func/aPoll", "func/aModbus", "func/aModbus/nanoMODBUS", "func/aBus/include",
     "platform/aLib/include", "platform/aOS/public", "platform/aDrv/include",
     "device/aDev_usart/include",
 ]
@@ -31,7 +32,7 @@ flags = [
     "-pthread", "-fno-pie", "-no-pie", "-fsanitize=undefined",
     "-fno-sanitize-recover=all", "-ffunction-sections", "-fdata-sections",
     "-Wl,--gc-sections", "-Wl,-T,func/aBus/port/gcc/aBus_sections_host.ld",
-    "-Wl,--wrap=aModbusClientReadBatch", "-Wl,--wrap=aModbusServerProcess",
+    "-Wl,--wrap=aModbusPlanExecute", "-Wl,--wrap=aModbusServerProcess",
     "-DAPP_MODBUS_ENABLE=1", "-DABUS_ENABLE=1", "-DASHELL_ENABLE=0",
     "-DABUS_STATIC_ENABLE=1", "-DABUS_LOCK_MODE=1",
     "-DADEV_USART_INTERRUPT_ENABLE=1", "-DADEV_USART_RS485_ENABLE=1",
@@ -58,7 +59,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
         for dynamic in (0, 1):
             executable = str(Path(tmp) / f"demo-{master}-{dynamic}")
             definitions = [f"-DAPP_MODBUS_MASTER_ENABLE={master}"]
-            for prefix in ("AMODBUS", "ADEV_USART"):
+            for prefix in ("AMODBUS", "APOLL", "ADEV_USART"):
                 definitions += [f"-D{prefix}_STATIC_ENABLE={1 - dynamic}",
                                 f"-D{prefix}_DYNAMIC_ENABLE={dynamic}"]
             definitions += [f"-DABUS_DYNAMIC_ENABLE={dynamic}"]

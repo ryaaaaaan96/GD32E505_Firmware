@@ -114,3 +114,20 @@ ELF 的静态 RAM 统计包含预留区，不等同于运行时堆使用量或�
 IDU/FAN 各 50 项。主机测试模拟介质与串口，不替代板上的串口时序、
 真实掉电恢复和 FreeRTOS 栈余量检查。命令与寄存器见
 [产品协议说明](../app/protocol/README.md)。
+
+
+## aPoll 与预生成采集计划
+
+```bash
+python3 tests/poll/run.py
+python3 tests/modbus/run.py
+python3 tests/modbus_demo/run.py
+python3 tests/modbus/build_matrix.py
+```
+
+aPoll 验证静动态分配、周期回绕、错误推进、通知先于等待、回调期间重投、
+超过 32 个事件、多生产者合并、队列满及三类工作公平性。
+Modbus 验证预生成 RTU 帧和 TCP 分组、四种读取区域、CRC/异常/超时、
+发布 BUSY 与入口 BUSY 的推进区别，以及计划与即时请求交替执行。
+Demo 验证主从、六帧采集、事件提前唤醒、临时请求和资源失败清理。
+构建通过不代表板上时序已验证；主站可通过 `protocol refresh` 检查事件触发。

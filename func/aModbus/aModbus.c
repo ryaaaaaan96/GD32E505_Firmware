@@ -29,8 +29,7 @@ void aModbusServiceConfigStructInit(aModbusServiceConfig_t *config)
 {
     if (config != NULL) {
         const aModbusServiceConfig_t defaults = {
-            .request_timeout = A_TIMEOUT_MS(1000U),
-            .error_delay_ms = 5U
+            .request_timeout = A_TIMEOUT_MS(1000U)
         };
         *config = defaults;
         aModbusConfigStructInit(&config->modbus);
@@ -551,7 +550,9 @@ aStatus_t aModbusDeInitStatic(aModbusHandle_t *handle)
 {
     if (handle == NULL || handle->dynamic) return A_STATUS_INVALID_PARAM;
     if (!handle->ready) return A_STATUS_NOT_READY;
-    if (atomic_load(&handle->active)) return A_STATUS_BUSY;
+    if (atomic_load(&handle->active) || handle->plan_count != 0U) {
+        return A_STATUS_BUSY;
+    }
     handle->ready = A_FALSE;
     return A_STATUS_OK;
 }
@@ -582,7 +583,9 @@ aStatus_t aModbusDestroy(aModbusHandle_t *handle)
 {
     if (handle == NULL) return A_STATUS_OK;
     if (!handle->dynamic) return A_STATUS_INVALID_PARAM;
-    if (atomic_load(&handle->active)) return A_STATUS_BUSY;
+    if (atomic_load(&handle->active) || handle->plan_count != 0U) {
+        return A_STATUS_BUSY;
+    }
     handle->ready = A_FALSE;
     aOSFree(handle);
     return A_STATUS_OK;
@@ -891,5 +894,272 @@ aStatus_t aModbusClientWriteSig(aModbusHandle_t *handle,
     const aModbusClientSigRequest_t *request)
 {
     return client_sig(handle, request, A_TRUE);
+}
+#endif
+
+void aModbusPlanConfigStructInit(aModbusPlanConfig_t *config)
+{
+    if (config != NULL) {
+        const aModbusPlanConfig_t defaults = {
+            .unit_id = 1U, .timeout = A_TIMEOUT_MS(1000U)
+        };
+        *config = defaults;
+    }
+}
+
+void aModbusPlanRequestStructInit(aModbusPlanRequest_t *request)
+{
+    if (request != NULL) {
+        const aModbusPlanRequest_t defaults = {0};
+        *request = defaults;
+    }
+}
+
+#if AMODBUS_CLIENT_ENABLE
+/* 两次扫描：先检查并计数，再填帧；不排序，不跨地址空洞或断帧标志。 */
+static aStatus_t plan_build(aModbusHandle_t *handle,
+    const aModbusPlanConfig_t *config, aModbusPlanFrame_t *frames,
+    size_t *frame_count)
+{
+    size_t count = 0U;
+    if (handle == NULL || config == NULL || config->items == NULL ||
+        config->count == 0U || !aTimeoutIsValid(config->timeout)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (!handle->ready) return A_STATUS_NOT_READY;
+    if (handle->config.role != AMODBUS_ROLE_CLIENT) return A_STATUS_UNSUPPORTED;
+    for (size_t i = 0U; i < config->count; i++) {
+        aStatus_t status = aModbusClientPollCheck(&handle->config,
+            &config->items[i], config->unit_id);
+        if (status != A_STATUS_OK) return status;
+    }
+    for (size_t first = 0U; first < config->count;) {
+        const aModbusPoll_t *item = &config->items[first];
+        uint16_t limit = aModbusAreaIsBits(item->area) ?
+                         AMODBUS_MAX_BITS : AMODBUS_MAX_REGISTERS;
+        uint16_t quantity = item->quantity;
+        size_t end = first + 1U;
+        while (end < config->count) {
+            const aModbusPoll_t *next = &config->items[end];
+            if (next->area != item->area ||
+                (next->flags & AMODBUS_POLL_FLAG_BREAK_BEFORE) != 0U ||
+                next->address != (uint32_t)item->address + quantity ||
+                next->quantity > limit - quantity) break;
+            quantity = (uint16_t)(quantity + next->quantity);
+            end++;
+        }
+        if (frames != NULL) {
+            aModbusPlanFrame_t *frame = &frames[count];
+            uint16_t crc;
+            frame->first = first;
+            frame->count = end - first;
+            frame->quantity = quantity;
+            frame->rtu[0] = config->unit_id;
+            frame->rtu[1] = (uint8_t)(item->area + 1U);
+            frame->rtu[2] = (uint8_t)(item->address >> 8U);
+            frame->rtu[3] = (uint8_t)item->address;
+            frame->rtu[4] = (uint8_t)(quantity >> 8U);
+            frame->rtu[5] = (uint8_t)quantity;
+            /* 上游 CRC API 返回已经交换字节序的值。 */
+            crc = nmbs_crc_calc(frame->rtu, 6U, NULL);
+            frame->rtu[6] = (uint8_t)(crc >> 8U);
+            frame->rtu[7] = (uint8_t)crc;
+        }
+        count++;
+        first = end;
+    }
+    *frame_count = count;
+    return A_STATUS_OK;
+}
+
+static aStatus_t plan_init(aModbusHandle_t *handle,
+    const aModbusPlanConfig_t *config, aModbusPlan_t *plan, aBool_t dynamic)
+{
+    size_t count;
+    aStatus_t status;
+    if (plan == NULL) return A_STATUS_INVALID_PARAM;
+    if (plan->ready) return A_STATUS_BUSY;
+    status = plan_build(handle, config, NULL, &count);
+    if (status != A_STATUS_OK) return status;
+    if (plan->frames == NULL || plan->capacity < count) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (handle->plan_count == SIZE_MAX) return A_STATUS_BUSY;
+    status = plan_build(handle, config, plan->frames, &count);
+    if (status != A_STATUS_OK) return status;
+    plan->config = *config;
+    plan->owner = handle;
+    plan->count = count;
+    plan->dynamic = dynamic;
+    plan->ready = A_TRUE;
+    handle->plan_count++;
+    return A_STATUS_OK;
+}
+
+static aStatus_t plan_deinit(aModbusPlan_t *plan)
+{
+    if (!plan->ready) return A_STATUS_NOT_READY;
+    if (atomic_load(&plan->owner->active)) return A_STATUS_BUSY;
+    plan->owner->plan_count--;
+    plan->owner = NULL;
+    plan->ready = A_FALSE;
+    return A_STATUS_OK;
+}
+
+#if AMODBUS_STATIC_ENABLE
+aStatus_t aModbusPlanInitStatic(aModbusHandle_t *handle,
+    const aModbusPlanConfig_t *config, aModbusPlan_t *plan)
+{
+    return plan_init(handle, config, plan, A_FALSE);
+}
+
+aStatus_t aModbusPlanDeInitStatic(aModbusPlan_t *plan)
+{
+    if (plan == NULL || plan->dynamic) return A_STATUS_INVALID_PARAM;
+    return plan_deinit(plan);
+}
+#endif
+
+#if AMODBUS_DYNAMIC_ENABLE
+aStatus_t aModbusPlanCreate(aModbusHandle_t *handle,
+    const aModbusPlanConfig_t *config, aModbusPlan_t **plan_out)
+{
+    aModbusPlan_t *plan;
+    size_t count;
+    aStatus_t status;
+    if (plan_out == NULL) return A_STATUS_INVALID_PARAM;
+    *plan_out = NULL;
+    status = plan_build(handle, config, NULL, &count);
+    if (status != A_STATUS_OK) return status;
+    if (count > (SIZE_MAX - sizeof(*plan)) / sizeof(*plan->frames)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    plan = aOSAlloc(sizeof(*plan) + count * sizeof(*plan->frames));
+    if (plan == NULL) return A_STATUS_NO_MEMORY;
+    memset(plan, 0, sizeof(*plan));
+    plan->frames = (void *)(plan + 1);
+    plan->capacity = count;
+    status = plan_init(handle, config, plan, A_TRUE);
+    if (status != A_STATUS_OK) {
+        aOSFree(plan);
+        return status;
+    }
+    *plan_out = plan;
+    return A_STATUS_OK;
+}
+
+aStatus_t aModbusPlanDestroy(aModbusPlan_t *plan)
+{
+    aStatus_t status;
+    if (plan == NULL) return A_STATUS_OK;
+    if (!plan->dynamic) return A_STATUS_INVALID_PARAM;
+    status = plan_deinit(plan);
+    if (status == A_STATUS_OK) aOSFree(plan);
+    return status;
+}
+#endif
+
+size_t aModbusPlanFrameCount(const aModbusPlan_t *plan)
+{
+    return plan != NULL && plan->ready ? plan->count : 0U;
+}
+
+/* 预生成 RTU 请求使用独立读响应入口，共用现有收发预算、恢复及发布。
+ * 不改上游状态机；即时请求继续走 nanoMODBUS 的完整组帧路径。
+ */
+static nmbs_error prepared_receive(aModbusHandle_t *handle, uint8_t *data,
+                                   uint16_t size, int32_t timeout)
+{
+    int32_t received = transport_read(data, size, timeout, handle);
+    if (received < 0) return NMBS_ERROR_TRANSPORT;
+    return received == size ? NMBS_ERROR_NONE : NMBS_ERROR_TIMEOUT;
+}
+
+static nmbs_error prepared_rtu_read(aModbusHandle_t *handle,
+    const aModbusPlanFrame_t *frame, aBool_t bits, void *output)
+{
+    uint8_t *response = handle->core.msg.buf;
+    uint16_t bytes = bits ? (frame->quantity + 7U) / 8U : frame->quantity * 2U;
+    uint16_t payload, crc;
+    int32_t written;
+    int32_t byte_timeout = timeout_ms(handle->config.byte_timeout);
+    nmbs_error error;
+    transport_discard(&handle->core, handle);
+    if (handle->io_status != A_STATUS_OK) return NMBS_ERROR_TRANSPORT;
+    handle->recover_input = A_FALSE;
+    written = transport_write(frame->rtu, sizeof(frame->rtu),
+                               byte_timeout, handle);
+    if (written < 0) return NMBS_ERROR_TRANSPORT;
+    if (written != sizeof(frame->rtu)) return NMBS_ERROR_TIMEOUT;
+    error = prepared_receive(handle, response, 1U,
+                              timeout_ms(aModbusRemaining(handle)));
+    if (error != NMBS_ERROR_NONE) return error;
+    error = prepared_receive(handle, response + 1U, 2U, byte_timeout);
+    if (error != NMBS_ERROR_NONE) return error;
+    if (response[0] != frame->rtu[0]) return NMBS_ERROR_INVALID_UNIT_ID;
+    if (response[1] == (uint8_t)(frame->rtu[1] | 0x80U)) payload = 0U;
+    else {
+        if (response[1] != frame->rtu[1] || response[2] != bytes) {
+            return NMBS_ERROR_INVALID_RESPONSE;
+        }
+        payload = bytes;
+    }
+    error = prepared_receive(handle, response + 3U, payload + 2U,
+                              byte_timeout);
+    if (error != NMBS_ERROR_NONE) return error;
+    crc = nmbs_crc_calc(response, payload + 3U, NULL);
+    if (response[payload + 3U] != (uint8_t)(crc >> 8U) ||
+        response[payload + 4U] != (uint8_t)crc) return NMBS_ERROR_CRC;
+    if (payload == 0U) {
+        if (response[2] < 1U || response[2] > 4U) {
+            return NMBS_ERROR_INVALID_RESPONSE;
+        }
+        return (nmbs_error)response[2];
+    }
+    if (bits) memcpy(output, response + 3U, bytes);
+    else {
+        uint16_t *registers = output;
+        for (size_t i = 0U; i < frame->quantity; i++) {
+            registers[i] = (uint16_t)((uint16_t)response[3U + i * 2U] << 8U) |
+                           response[4U + i * 2U];
+        }
+    }
+    return NMBS_ERROR_NONE;
+}
+
+aStatus_t aModbusPlanExecute(aModbusPlan_t *plan,
+    const aModbusPlanRequest_t *request)
+{
+    uint16_t registers[AMODBUS_MAX_REGISTERS];
+    nmbs_bitfield bits;
+    aModbusHandle_t *handle;
+    const aModbusPlanFrame_t *frame;
+    const aModbusPoll_t *first;
+    aStatus_t status, finished;
+    nmbs_error error;
+    void *data;
+    if (request == NULL) return A_STATUS_INVALID_PARAM;
+    if (request->attempted != NULL) *request->attempted = A_FALSE;
+    if (request->result != NULL) request->result->exception = 0U;
+    if (plan == NULL) return A_STATUS_INVALID_PARAM;
+    if (!plan->ready) return A_STATUS_NOT_READY;
+    if (request->frame_index >= plan->count) return A_STATUS_INVALID_PARAM;
+    handle = plan->owner;
+    status = operation_begin(handle, AMODBUS_ROLE_CLIENT,
+                              plan->config.timeout, request->result);
+    if (status != A_STATUS_OK) return status;
+    frame = &plan->frames[request->frame_index];
+    first = &plan->config.items[frame->first];
+    data = aModbusAreaIsBits(first->area) ? (void *)bits : registers;
+    if (request->attempted != NULL) *request->attempted = A_TRUE;
+    error = handle->config.transport_type == AMODBUS_TRANSPORT_RTU ?
+        prepared_rtu_read(handle, frame, aModbusAreaIsBits(first->area), data) :
+        client_read(handle, plan->config.unit_id, first->area,
+                     first->address, frame->quantity, data);
+    if (error == NMBS_ERROR_NONE) {
+        status = aModbusBusPublish(handle, first, frame->count, data);
+    }
+    finished = operation_end(handle, error, request->result);
+    return finished != A_STATUS_OK ? finished : status;
 }
 #endif

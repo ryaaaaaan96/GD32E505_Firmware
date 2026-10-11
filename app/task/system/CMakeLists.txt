@@ -4,6 +4,10 @@ target_sources(
         system_init.c
 )
 
+if(app_modbus_enable AND ASHELL_ENABLE)
+    target_sources(${APP_TARGET} PRIVATE command_protocol.c)
+endif()
+
 if(app_log_enable)
     target_sources(${APP_TARGET} PRIVATE command_log.c)
 endif()

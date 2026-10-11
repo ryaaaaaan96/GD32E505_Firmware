@@ -2,6 +2,9 @@
 # 缺少依赖时 cmake/aclass_resolve.cmake 给出配置错误。
 
 # func
+set(APOLL_ENABLE ON)
+set(APOLL_STATIC_ENABLE ON)
+set(APOLL_DYNAMIC_ENABLE ON)
 set(ABUS_ENABLE ON)
 set(ABUS_STATIC_ENABLE ON)
 set(ABUS_DYNAMIC_ENABLE ON)

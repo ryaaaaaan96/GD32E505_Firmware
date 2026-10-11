@@ -30,7 +30,10 @@ if(APP_MODBUS_DEMO_ENABLE AND AMODBUS_ENABLE
     # 角色由 app_config.h 选择，协议配置平铺在本目录。
     target_sources(${APP_TARGET} PRIVATE
         FAN_modbus_master.c IDU_modbus_slave.c)
-    target_link_libraries(${APP_TARGET} PRIVATE aModbus)
+    if(NOT APOLL_ENABLE)
+        message(FATAL_ERROR "Modbus demo requires APOLL_ENABLE")
+    endif()
+    target_link_libraries(${APP_TARGET} PRIVATE aModbus aPoll)
 endif()
 set(app_modbus_enable ${app_modbus_enable} PARENT_SCOPE)
 target_compile_definitions(${APP_TARGET} PRIVATE

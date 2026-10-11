@@ -21,7 +21,7 @@
 
 ```text
 app：资源配置、初始化、任务、传输/介质适配
- ├─ func：aBus、aMemory、aDataBase、aModbus、aShell、aLog
+ ├─ func：aBus、aMemory、aDataBase、aModbus、aPoll、aShell、aLog
  ├─ device：aDevUsart、Flash25Q、LED
  │    ├─ aDrv -> 私有 GD32 vendor -> aCore
  │    └─ aOS -> FreeRTOS -> aCore
@@ -256,3 +256,13 @@ aDrv 保持 MCU 驱动定位。Linux 设备可使用独立实现，不要求模�
 执行上下文，不能声称用户态回调运行在硬件 ISR。
 USART2 已检查并配置支持的 TX/RX 路由；跨外设的完整引脚资源校验和
 Python/XML 生成校验尚未实现。
+
+
+## 通信调度边界
+
+aPoll 管周期作业、合并事件、临时请求和等待通知；aModbus 管地址分组、
+固定 RTU 帧缓存、事务收发与 aBus 发布，两个模块互不依赖。
+app/protocol 组合配置、适配回调并创建通信任务；system 在总线初始化及
+参数恢复之后调用 protocolInit。一个串口的所有主站请求由同一任务串行执行。
+从站继续运行 ServerProcess，不强制包装为周期作业。
+详细契约见 [aPoll](../func/aPoll/README.md) 和 [产品协议](../app/protocol/README.md)。

@@ -2,7 +2,25 @@
 #include "app_config.h"
 #include "../../app/protocol/protocol.c"
 #define testModbusInit(bus) modbusInit(&rs485_link, (bus))
-#define testModbusProcess() modbusProcess(&rs485_link)
+#include "aPoll_instance.h"
+#include "aModbus_instance.h"
+static aStatus_t testModbusProcess(void)
+{
+    if (rs485_link.modbus == NULL) return A_STATUS_NOT_READY;
+#if APP_MODBUS_MASTER_ENABLE
+    aPollProcessResult_t result;
+    aStatus_t status;
+    if (rs485_link.poll == NULL) return A_STATUS_NOT_READY;
+    for (;;) {
+        status = aPollProcess(rs485_link.poll, &result);
+        if (status != A_STATUS_OK) return status;
+        if (result.type != APOLL_WORK_NONE) return result.execution.status;
+        (void)aPollWait(rs485_link.poll, result.wait);
+    }
+#else
+    return aModbusServerProcess(rs485_link.modbus, &rs485_link.settings->server);
+#endif
+}
 #define testModbusDeInit() modbusDeInit(&rs485_link)
 #include "IDU_sig_table.h"
 #include "system_init.c"
@@ -47,49 +65,43 @@ static size_t process_count, delay_count;
 #if APP_MODBUS_MASTER_ENABLE
 static size_t expected_poll;
 #endif
-static uint32_t task_delays[5];
+static uint32_t task_delays[7];
 static const aStatus_t task_results[] = {
-    A_STATUS_OK, A_STATUS_OK, A_STATUS_TIMEOUT, A_STATUS_TIMEOUT, A_STATUS_OK
+    A_STATUS_OK, A_STATUS_OK, A_STATUS_TIMEOUT, A_STATUS_TIMEOUT,
+    A_STATUS_OK, A_STATUS_OK, A_STATUS_OK
 };
 
-aStatus_t __real_aModbusClientReadBatch(aModbusHandle_t *handle,
-    const aModbusClientBatchRequest_t *request);
+aStatus_t __real_aModbusPlanExecute(aModbusPlan_t *plan,
+    const aModbusPlanRequest_t *request);
 aStatus_t __real_aModbusServerProcess(aModbusHandle_t *handle,
     const aModbusServerProcessRequest_t *request);
 
 static aStatus_t nextResult(void)
 {
-    if (process_count == 5U) longjmp(task_done, 1);
+    if (process_count == 7U) longjmp(task_done, 1);
     return task_results[process_count++];
 }
 
-aStatus_t __wrap_aModbusClientReadBatch(aModbusHandle_t *handle,
-    const aModbusClientBatchRequest_t *request)
+aStatus_t __wrap_aModbusPlanExecute(aModbusPlan_t *plan,
+    const aModbusPlanRequest_t *request)
 {
     aStatus_t status;
-
 #if APP_MODBUS_MASTER_ENABLE
-    assert(request->items ==
-           &FAN_modbus_master_config.polls[expected_poll]);
-    assert(request->unit_id == FAN_modbus_master_config.modbus.unit_id);
-    assert(request->timeout.type ==
-           FAN_modbus_master_config.request_timeout.type);
-    assert(request->timeout.milliseconds ==
-           FAN_modbus_master_config.request_timeout.milliseconds);
+    assert(request->frame_index == expected_poll);
+    assert(plan->config.unit_id ==
+           FAN_modbus_master_config.service.modbus.unit_id);
+    assert(plan->config.timeout.milliseconds ==
+           FAN_modbus_master_config.service.request_timeout.milliseconds);
 #endif
     if (task_test) {
-        /* 调度单测模拟一次推进多个项，整轮不能按调用次数计数。 */
-        *request->completed = request->count < 8U ? request->count : 8U;
+        *request->attempted = A_TRUE;
         status = nextResult();
     } else {
-        status = __real_aModbusClientReadBatch(handle, request);
+        status = __real_aModbusPlanExecute(plan, request);
     }
 #if APP_MODBUS_MASTER_ENABLE
-    if (*request->completed != 0U) {
-        expected_poll += *request->completed;
-        if (expected_poll == FAN_modbus_master_config.poll_count) {
-            expected_poll = 0U;
-        }
+    if (*request->attempted) {
+        expected_poll = (expected_poll + 1U) % aModbusPlanFrameCount(plan);
     }
 #endif
     return status;
@@ -269,7 +281,14 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
     assert(output_size + size <= sizeof(output));
 #if APP_MODBUS_MASTER_ENABLE
     const uint8_t *frame = data;
-    assert(frame[1] == 3U && size == 8U);
+    assert((frame[1] == 3U || frame[1] == 6U) && size == 8U);
+    if (frame[1] == 6U) {
+        feed(frame, 6U);
+        input_at = aOSGetUptimeMs() + 3U;
+        memcpy(output, data, size);
+        output_size = size;
+        return (aSSize_t)size;
+    }
     assert(frame[0] == 1U);
     last_address = (uint16_t)((uint16_t)frame[2] << 8U | frame[3]);
     last_quantity = (uint16_t)((uint16_t)frame[4] << 8U | frame[5]);
@@ -316,8 +335,9 @@ void aDevUsartClearRxOverflow(aDevUsartHandle_t *handle)
 void aOSDelayMs(uint32_t ms)
 {
     if (task_test) {
-        assert(delay_count < 5U);
+        assert(delay_count < 7U);
         task_delays[delay_count++] = ms;
+        testAdvanceTime(ms);
         return;
     }
     testAdvanceTime(ms);
@@ -681,7 +701,7 @@ static void master_round(aStatus_t first_status, aStatus_t other_status)
     const size_t count = sizeof(groups) / sizeof(groups[0]);
     size_t attempted = 0U;
 
-    assert(rs485_link.poll_index == 0U);
+    assert(rs485_link.poll->jobs[0].step_index == 0U);
     for (size_t i = 0U; i < count; i++) {
         output_size = 0U;
         assert(testModbusProcess() == (i == 0U ? first_status : other_status));
@@ -689,10 +709,11 @@ static void master_round(aStatus_t first_status, aStatus_t other_status)
         assert(last_quantity == groups[i].quantity);
         assert(output_size == 8U); /* 一组恰好一帧，不是逐点读取。 */
         attempted += groups[i].items;
-        assert(rs485_link.cycle_complete == (i + 1U == count));
-        assert(rs485_link.poll_index == (i + 1U == count ? 0U : attempted));
+        assert(rs485_link.poll->jobs[0].cycle_active == (i + 1U != count));
+        assert(rs485_link.poll->jobs[0].step_index ==
+               (i + 1U == count ? 0U : i + 1U));
     }
-    assert(attempted == FAN_modbus_master_config.poll_count);
+    assert(attempted == FAN_modbus_master_config.service.poll_count);
 }
 
 static void fan_values_check(void)
@@ -726,6 +747,63 @@ static void fan_values_check(void)
     }
 }
 
+static unsigned temporary_completed;
+static uint16_t temporary_values[2];
+static protocolModbusRequest_t temporary_request;
+
+static void temporary_complete(void *context, aStatus_t status,
+                               const aModbusResult_t *response)
+{
+    assert(context == &temporary_values);
+    assert(status == A_STATUS_OK && response->exception == 0U);
+    temporary_completed++;
+}
+
+static void temporary_tests(void)
+{
+    aPollProcessResult_t result;
+    aPollJobState_t *state = &rs485_link.poll->jobs[0];
+    /* 让周期作业等待一秒，验证通知可以提前唤醒且不直接发送报文。 */
+    state->cycle_active = A_FALSE;
+    state->step_index = 0U;
+    state->cycle_started = aOSGetUptimeMs();
+    state->delay = aTimepointCalc(A_TIMEOUT_NO_WAIT, aOSGetUptimeMs());
+    atomic_store(&state->triggered, A_FALSE);
+    expected_poll = 0U;
+    protocolModbusRequestStructInit(&temporary_request);
+    temporary_request.access.read.access.address = 34U;
+    temporary_request.access.read.access.quantity = 2U;
+    temporary_request.access.read.access.data = temporary_values;
+    temporary_request.access.read.access.size = sizeof(temporary_values);
+    temporary_request.context = &temporary_values;
+    temporary_request.complete = temporary_complete;
+    output_size = 0U;
+    assert(protocolModbusSubmit(&temporary_request) == A_STATUS_OK);
+    assert(output_size == 0U && temporary_completed == 0U);
+    assert(aPollProcess(rs485_link.poll, &result) == A_STATUS_OK);
+    assert(result.type == APOLL_WORK_REQUEST);
+    assert(temporary_completed == 1U && temporary_values[1] == 2345U);
+    temporary_request.write = A_TRUE;
+    aModbusClientWriteRequestStructInit(&temporary_request.access.write);
+    temporary_values[0] = 1U;
+    temporary_request.access.write.access.address = 32U;
+    temporary_request.access.write.access.quantity = 1U;
+    temporary_request.access.write.access.data = temporary_values;
+    temporary_request.access.write.access.size = sizeof(temporary_values);
+    output_size = 0U;
+    assert(protocolModbusSubmit(&temporary_request) == A_STATUS_OK);
+    assert(aPollProcess(rs485_link.poll, &result) == A_STATUS_OK);
+    assert(result.type == APOLL_WORK_REQUEST && temporary_completed == 2U);
+    assert(output[1] == 6U && output_size == 8U);
+    assert(protocolRefresh() == A_STATUS_OK);
+    assert(protocolRefresh() == A_STATUS_OK);
+    assert(aPollWait(rs485_link.poll, A_TIMEOUT_FOREVER) == A_STATUS_OK);
+    assert(aPollProcess(rs485_link.poll, &result) == A_STATUS_OK);
+    assert(result.type == APOLL_WORK_EVENT);
+    assert(aPollProcess(rs485_link.poll, &result) == A_STATUS_OK);
+    assert(result.type == APOLL_WORK_JOB && result.step_index == 0U);
+}
+
 static void master_tests(void)
 {
     aBool_t seen[FAN_SIG_COUNT] = {A_FALSE};
@@ -733,10 +811,10 @@ static void master_tests(void)
     unsigned allocations = testAllocations();
 
     assert(FAN_SIG_COUNT == 50U);
-    assert(FAN_modbus_master_config.poll_count == 30U);
-    for (size_t i = 0U; i < FAN_modbus_master_config.poll_count; i++) {
+    assert(FAN_modbus_master_config.service.poll_count == 30U);
+    for (size_t i = 0U; i < FAN_modbus_master_config.service.poll_count; i++) {
         const aModbusSigTarget_t *target =
-            &FAN_modbus_master_config.polls[i].target;
+            &FAN_modbus_master_config.service.polls[i].target;
         assert(target->deviceID == FAN_SIG_DEVICE_ID);
         assert(target->sigIndex <= FAN_SIG_TEST_030);
         if (!seen[target->sigIndex]) selected++;
@@ -765,6 +843,8 @@ static void master_tests(void)
     assert(motor_get().s32_value == -123);
     fan_values_check();
     assert(testAllocations() == allocations);
+    check_reentry = A_FALSE;
+    temporary_tests();
 }
 #endif
 
@@ -802,37 +882,48 @@ static void port_tests(void)
     assert(opened == closed && testAllocations() == baseline);
 }
 
+#if APP_MODBUS_MASTER_ENABLE
+static void reset_poll(void)
+{
+    aPollJobState_t *state = &rs485_link.poll->jobs[0];
+    state->step_index = 0U;
+    state->cycle_active = A_FALSE;
+    state->delay = aTimepointCalc(A_TIMEOUT_NO_WAIT, aOSGetUptimeMs());
+    atomic_store(&state->triggered, A_TRUE);
+    atomic_store(&rs485_link.poll->active, A_FALSE);
+    expected_poll = 0U;
+}
+#endif
+
 static void task_tests(void)
 {
     process_count = 0U;
     delay_count = 0U;
     task_test = A_TRUE;
 #if APP_MODBUS_MASTER_ENABLE
-    rs485_link.poll_index = 0U;
-    expected_poll = 0U;
+    reset_poll();
 #endif
     if (setjmp(task_done) == 0) {
         created_task.function(created_task.argument);
     }
-    assert(process_count == 5U);
+    assert(process_count == 7U);
 #if APP_MODBUS_MASTER_ENABLE
-    size_t poll_index = 0U;
-    assert(delay_count == 5U);
+    uint32_t elapsed = 0U;
+    const aPollJobConfig_t *schedule = &rs485_link.config->product->schedule;
+    assert(delay_count == 7U);
     for (size_t i = 0U; i < delay_count; i++) {
-        size_t remaining = rs485_link.settings->poll_count - poll_index;
-        poll_index += remaining < 8U ? remaining : 8U;
-        if (poll_index == rs485_link.settings->poll_count) {
-            assert(task_delays[i] == rs485_link.settings->poll_time_ms);
-            poll_index = 0U;
-        } else {
-            uint32_t expected = task_results[i] == A_STATUS_OK ?
-                rs485_link.settings->interval_ms :
-                rs485_link.settings->error_delay_ms;
-            assert(task_delays[i] == expected);
-        }
+        uint32_t expected = task_results[i] == A_STATUS_OK ?
+                            schedule->interval_ms : schedule->error_delay_ms;
+        if ((i + 1U) % aModbusPlanFrameCount(rs485_link.plan) == 0U) {
+            uint32_t remaining = schedule->poll_time_ms > elapsed ?
+                                 schedule->poll_time_ms - elapsed : 0U;
+            if (remaining > expected) expected = remaining;
+            elapsed = 0U;
+        } else elapsed += expected;
+        assert(task_delays[i] == expected);
     }
-    rs485_link.poll_index = 0U;
-    expected_poll = 0U;
+    /* longjmp 仅供测试退出永循环；清除被中断的 Process 所有权。 */
+    reset_poll();
 #else
     assert(delay_count == 2U);
     assert(task_delays[0] == 5U && task_delays[1] == 5U);

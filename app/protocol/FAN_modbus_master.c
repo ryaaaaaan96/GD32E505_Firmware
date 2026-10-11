@@ -1,4 +1,7 @@
-#include "aModbus.h"
+#include "protocol_internal.h"
+#if !AMODBUS_DYNAMIC_ENABLE
+#include "aModbus_instance.h"
+#endif
 #include "app_config.h"
 #include "FAN_sig_table.h"
 
@@ -296,22 +299,37 @@ static const aModbusPoll_t polls[] = {
 /* 整轮最小周期 1 s，帧间短暂让出 CPU；每帧超时 500 ms。
  * 断帧后共六帧；全部超时时，一轮约 3 s 加帧间等待，不承诺 1 s 内完成。
  */
-const aModbusServiceConfig_t FAN_modbus_master_config = {
-    .modbus = {
-        .role = AMODBUS_ROLE_CLIENT,
-        .unit_id = APP_MODBUS_MASTER_TARGET_ID,
-        .transport_type = AMODBUS_TRANSPORT_RTU,
-        .byte_timeout = {
-            .milliseconds = 20U, .type = A_TIMEOUT_TYPE_RELATIVE
+#if !AMODBUS_DYNAMIC_ENABLE
+/* 按采集项数预留上限，新增配置不需手工维护静态容量。 */
+static aModbusPlanFrame_t frames[sizeof(polls) / sizeof(polls[0])];
+static aModbusPlan_t plan_instance = {
+    .frames = frames, .capacity = sizeof(frames) / sizeof(frames[0])
+};
+#endif
+
+const protocolModbusConfig_t FAN_modbus_master_config = {
+    .service = {
+        .modbus = {
+            .role = AMODBUS_ROLE_CLIENT,
+            .unit_id = APP_MODBUS_MASTER_TARGET_ID,
+            .transport_type = AMODBUS_TRANSPORT_RTU,
+            .byte_timeout = {
+                .milliseconds = 20U, .type = A_TIMEOUT_TYPE_RELATIVE
+            },
         },
+        .request_timeout = {
+            .milliseconds = 500U, .type = A_TIMEOUT_TYPE_RELATIVE
+        },
+        .polls = polls,
+        .poll_count = sizeof(polls) / sizeof(polls[0]),
     },
-    .request_timeout = {
-        .milliseconds = 500U, .type = A_TIMEOUT_TYPE_RELATIVE
+    .schedule = {
+        .interval_ms = 1U,
+        .error_delay_ms = 5U,
+        .poll_time_ms = 1000U,
     },
-    .polls = polls,
-    .poll_count = sizeof(polls) / sizeof(polls[0]),
-    .interval_ms = 1U,
-    .error_delay_ms = 5U,
-    .poll_time_ms = 1000U,
+#if !AMODBUS_DYNAMIC_ENABLE
+    .plan_instance = &plan_instance,
+#endif
 };
 #endif

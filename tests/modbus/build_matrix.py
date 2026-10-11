@@ -72,8 +72,13 @@ cmake_language(DEFER CALL force_modbus)
                 lines += [f"set(ADEV_USART_{feature}_ENABLE OFF)"]
         if name.startswith("static_"):
             lines += ["set(ASHELL_ENABLE OFF)",
+                      "set(APOLL_DYNAMIC_ENABLE OFF)",
                       "set(ADEV_USART_STATIC_ENABLE ON)",
                       "set(ADEV_USART_DYNAMIC_ENABLE OFF)"]
+        if name.startswith("dynamic_"):
+            lines += ["set(APOLL_STATIC_ENABLE OFF)"]
+        if name == "disabled":
+            lines += ["set(APOLL_ENABLE OFF)"]
         for feature, value in zip(("ENABLE", "STATIC_ENABLE", "DYNAMIC_ENABLE",
                                    "CLIENT_ENABLE", "SERVER_ENABLE"), values):
             lines += [f"set(AMODBUS_{feature} {'ON' if value else 'OFF'})"]

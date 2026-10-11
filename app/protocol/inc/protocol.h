@@ -49,4 +49,26 @@ typedef struct aBusHandle aBusHandle_t;
  */
 aStatus_t protocolInit(aBusHandle_t *bus);
 
+/* 请求提前采集一轮；重复请求合并，从站模式返回 UNSUPPORTED。 */
+aStatus_t protocolRefresh(void);
+
+#if APP_MODBUS_ENABLE
+#include "aModbus.h"
+/* 临时请求和数据借用至完成回调结束；回调在通信任务内执行。
+ * response 仅回调期间有效；原 access.result 不使用，统一经 complete 返回。
+ */
+typedef struct {
+    aBool_t write;
+    union {
+        aModbusClientReadRequest_t read;
+        aModbusClientWriteRequest_t write;
+    } access;
+    void *context;
+    void (*complete)(void *context, aStatus_t status,
+                     const aModbusResult_t *response);
+} protocolModbusRequest_t;
+void protocolModbusRequestStructInit(protocolModbusRequest_t *request);
+aStatus_t protocolModbusSubmit(const protocolModbusRequest_t *request);
+#endif
+
 #endif

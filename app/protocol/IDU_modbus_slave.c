@@ -1,4 +1,4 @@
-#include "aModbus.h"
+#include "protocol_internal.h"
 #include "aOS.h"
 #include "app_config.h"
 #include "IDU_sig_table.h"
@@ -920,23 +920,24 @@ static const aModbusBusMap_t maps[] = {
     },
 };
 
-const aModbusServiceConfig_t IDU_modbus_slave_config = {
-    .modbus = {
-        .role = AMODBUS_ROLE_SERVER,
-        .transport_type = AMODBUS_TRANSPORT_RTU,
-        .unit_id = APP_MODBUS_SLAVE_UNIT_ID,
-        .ranges = ranges,
-        .range_count = sizeof(ranges) / sizeof(ranges[0]),
-        .maps = maps,
-        .map_count = sizeof(maps) / sizeof(maps[0]),
-        .byte_timeout = {
-            .milliseconds = 20U, .type = A_TIMEOUT_TYPE_RELATIVE
+const protocolModbusConfig_t IDU_modbus_slave_config = {
+    .service = {
+        .modbus = {
+            .role = AMODBUS_ROLE_SERVER,
+            .transport_type = AMODBUS_TRANSPORT_RTU,
+            .unit_id = APP_MODBUS_SLAVE_UNIT_ID,
+            .ranges = ranges,
+            .range_count = sizeof(ranges) / sizeof(ranges[0]),
+            .maps = maps,
+            .map_count = sizeof(maps) / sizeof(maps[0]),
+            .byte_timeout = {
+                .milliseconds = 20U, .type = A_TIMEOUT_TYPE_RELATIVE
+            },
+        },
+        .server = {
+            .timeout = {.milliseconds = 500U, .type = A_TIMEOUT_TYPE_RELATIVE},
         },
     },
-    .server = {
-        .timeout = {.milliseconds = 500U, .type = A_TIMEOUT_TYPE_RELATIVE},
-    },
-    .interval_ms = 0U,
-    .error_delay_ms = 5U,
+    .schedule = {.error_delay_ms = 5U},
 };
 #endif
