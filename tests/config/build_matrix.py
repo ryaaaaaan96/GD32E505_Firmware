@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-matrix-") as directory:
         if not dma:
             assert "aDrvUsartAsync" not in symbols, name
         if not irq:
-            assert "aDrvUsartSetInterruptEnabled" not in symbols, name
+            assert "aDrvUsartSetEventEnabled" not in symbols, name
             assert "aDrvUsartRegisterCallback" not in symbols, name
         if not values[2]:
             assert " T aDevUsartWriteAsync" not in symbols, name

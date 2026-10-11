@@ -1,6 +1,6 @@
 /**
  * @file aDrv_usart.h
- * @brief USART 非阻塞硬件、IRQ 与 DMA 操作接口。
+ * @brief USART 非阻塞收发、事件与 DMA 操作接口。
  * @see docs/interface_contract.md 公共类型、错误、超时与生命周期约定。
  *
  * aDev 负责等待、超时与业务回调；此层仅配置/查询硬件，不依赖 aOS。
@@ -57,22 +57,29 @@ typedef struct {
     aDrvUsartStopBits_t stop_bits; /**< 1 或 2 个停止位。 */
     aDrvGpioPin_t tx_pin; /**< TX；USART2 按 PB10/PC10/PD8 自动重映射。 */
     aDrvGpioPin_t rx_pin; /**< RX 引脚，需满足当前 port 引脚映射。 */
+    /** USART/DMA 共用中断优先级，默认 5；驱动初始化时校验并绑定。
+     * GD32 为 0..15，且须满足平台构建传入的 OS ISR 安全范围。 */
+    uint8_t interrupt_priority;
 } aDrvUsartConfig_t;
 
-/** @brief USART 内部事件；EXTI 命名不表示 GPIO 外部中断控制器。 */
+/** @brief USART 驱动事件；当前 GD32 后端通过 IRQ 派发。 */
 typedef enum {
-    ADRV_USART_EXTI_TXE, /**< 发送数据寄存器可写，不是线路发完。 */
-    ADRV_USART_EXTI_RXNE, /**< 接收数据寄存器非空。 */
-    ADRV_USART_EXTI_TC, /**< 最后一个停止位发送完成。 */
-    ADRV_USART_EXTI_IDLE, /**< 硬件空闲线检测，不等同于协议帧结束。 */
-    ADRV_USART_EXTI_ERROR, /**< 校验、帧、噪声或溢出等硬件异常通知。 */
-    ADRV_USART_EXTI_SOFTWARE, /**< 软件挂起的 USART ISR 事件。 */
-    ADRV_USART_EXTI_MAX, /**< 事件数量哨兵，不可作为注册事件。 */
-} aDrvUsartExti_t;
+    ADRV_USART_EVENT_TX_READY, /**< 可以继续提交发送数据，不是线路发完。 */
+    ADRV_USART_EVENT_RX_READY, /**< 有接收数据可读。 */
+    ADRV_USART_EVENT_TX_COMPLETE, /**< 最后一个停止位发送完成。 */
+    ADRV_USART_EVENT_RX_IDLE, /**< 硬件空闲线检测，不等同于协议帧结束。 */
+    ADRV_USART_EVENT_RX_ERROR, /**< 校验、帧、噪声或溢出等硬件异常通知。 */
+    ADRV_USART_EVENT_DISPATCH, /**< RequestDispatch 请求的回调派发事件。 */
+    ADRV_USART_EVENT_MAX, /**< 事件数量哨兵，不可作为注册事件。 */
+} aDrvUsartEvent_t;
+
+/** @brief 驱动事件回调；当前 GD32 后端在 USART ISR 执行，不得阻塞。
+ * argument 由注册者提供，须保持有效至回调注销且在途调用退出。 */
+typedef void (*aDrvUsartEventCallback_t)(void *argument);
 
 /** @brief aDrvUsartCallback_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */
 typedef struct {
-    aDrvInterruptCallback_t function; /**< 硬件 ISR 执行入口。 */
+    aDrvUsartEventCallback_t function; /**< 硬件 ISR 执行入口。 */
     void *argument; /**< 注册者借用参数，有效至在途回调退出。 */
 } aDrvUsartCallback_t;
 
@@ -99,21 +106,20 @@ typedef struct {
     aDrvUsartStopBits_t stop_bits; /**< 当前停止位缓存。 */
     aDrvUsartId_t id; /**< 本句柄绑定的逻辑实例。 */
     volatile aBool_t software_pending; /**< 待派发的软件事件。 */
-    aDrvUsartCallback_t callbacks[ADRV_USART_EXTI_MAX]; /**< ISR 回调槽。 */
+    aDrvUsartCallback_t callbacks[ADRV_USART_EVENT_MAX]; /**< ISR 回调槽。 */
     aDrvUsartOwner_t owner; /**< 当前占用路径的位集合。 */
     uint32_t interrupt_enabled_mask; /**< 外设事件使能位，不等于 NVIC 状态。 */
-    uint8_t irq_priority; /**< USART 共用 NVIC 优先级。 */
+    uint8_t irq_priority; /**< 初始化绑定的 USART/DMA 共用 NVIC 优先级。 */
     aBool_t initialized; /**< 基础 USART 配置是否完成。 */
 } aDrvUsartHandle_t;
 
-/** @brief aDrvUsartExtiConfig_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */
+/** @brief aDrvUsartCallbackConfig_t 配置描述；初始化/注册时读取，借用对象的生命周期见对应接口。 */
 typedef struct {
-    aDrvUsartExti_t trigger; /**< TXE/RXNE/TC/IDLE/ERROR 事件。 */
-    uint32_t priority; /**< 未移位的 NVIC 优先级，GD32 0..15；OS 约束由 aDev 校验。 */
-    aDrvInterruptCallback_t callback; /**< 必填 ISR 回调；不能阻塞。 */
+    aDrvUsartEvent_t event; /**< 要注册的 USART 驱动事件，不能为 EVENT_MAX。 */
+    aDrvUsartEventCallback_t callback; /**< 必填 ISR 回调；不能阻塞。 */
     void *argument; /**< 原样传给 callback，可为 NULL。 */
     aBool_t enabled; /**< 登记回调时是否立即开启事件源。 */
-} aDrvUsartExtiConfig_t;
+} aDrvUsartCallbackConfig_t;
 
 /**
  * @brief 填充默认 USART 配置。
@@ -134,7 +140,7 @@ void aDrvUsartHandleStructInit(aDrvUsartHandle_t *handle);
  * @param[in] config 本次调用期间有效的配置。
  * @param[out] handle 调用方持有的稳定存储，持续有效至 DeInit。
  * @retval A_STATUS_OK 已初始化。
- * @retval A_STATUS_INVALID_PARAM 参数、引脚或枚举不合法。
+ * @retval A_STATUS_INVALID_PARAM 参数、引脚、枚举或中断优先级不合法。
  * @retval A_STATUS_BUSY 实例已被其他句柄占用。
  * @note 不创建任务、等待对象或传输缓冲区。
  */
@@ -189,69 +195,75 @@ aStatus_t aDrvUsartTakeRxError(aDrvUsartHandle_t *handle);
 aStatus_t aDrvUsartIsTransmitComplete(
     const aDrvUsartHandle_t *handle, aBool_t *complete);
 #if ADRV_USART_INTERRUPT_ENABLE
-/** @brief 挂起 SOFTWARE 事件；仅在 USART ISR 中派发，可合并重复请求。 */
-aStatus_t aDrvUsartPendInterrupt(aDrvUsartHandle_t *handle);
+/** @brief 请求派发 DISPATCH 事件，可合并重复请求，不在本函数内直接调用回调。
+ * 当前 GD32 后端通过挂起 USART IRQ 派发；事件须先注册并启用。
+ * 回调可能在本函数返回之前执行。 */
+aStatus_t aDrvUsartRequestDispatch(aDrvUsartHandle_t *handle);
 
 /**
- * @brief 注册一个硬件事件回调并配置其 IRQ 使能状态。
+ * @brief 注册一个驱动事件回调并配置其使能状态。
  * @param[in,out] handle 已初始化句柄。
  * @param[in] config 回调配置；复制字段，argument 对象须在回调使用期间有效。
  * @retval A_STATUS_OK 已登记。
  * @retval A_STATUS_BUSY TXE/RXNE 与活动 DMA 路径冲突。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
- * @warning 回调在硬件 ISR 中执行；供 aDev 维护硬件状态，不是业务异步回调。
- * @note 同一 USART 共用 NVIC 优先级，后注册的 priority 会更新该实例 IRQ 优先级。
+ * @warning 当前 GD32 后端在 ISR 中回调，供 aDev 维护状态；回调不得阻塞。
+ * @note 所有回调使用初始化时绑定的优先级，注册不修改该值。
+ *       不在 PauseDispatch/ResumeDispatch 区间内注册；GD32 注册会恢复 USART IRQ。
  */
 aStatus_t aDrvUsartRegisterCallback(
-    aDrvUsartHandle_t *handle, const aDrvUsartExtiConfig_t *config);
+    aDrvUsartHandle_t *handle, const aDrvUsartCallbackConfig_t *config);
 
 /**
  * @brief 关闭指定事件并清除其回调。
  * @param[in,out] handle 已初始化句柄。
- * @param[in] trigger 要注销的事件。
+ * @param[in] event 要注销的事件。
  * @retval A_STATUS_OK 已注销；最后一个回调移除后关闭 NVIC。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
  * @note 未拥有中断路径也返回 NOT_READY；调用方负责回调参数生命周期。
  */
 aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
-                                      aDrvUsartExti_t trigger);
+                                      aDrvUsartEvent_t event);
 
 /**
- * @brief 使能或屏蔽已注册的硬件事件，不移除回调。
+ * @brief 启用或禁用已注册的 USART 事件，不移除回调。
  * @param[in,out] handle 已初始化句柄。
- * @param[in] trigger 已注册回调的事件。
+ * @param[in] event 已注册回调的事件。
  * @param[in] enabled A_TRUE 使能，A_FALSE 屏蔽。
- * @retval A_STATUS_OK 已更新外设中断源。
+ * @retval A_STATUS_OK 已更新事件使能状态，当前 GD32 后端调整对应中断源。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
  * @note 未注册该事件也返回 NOT_READY；上层仍须避免 TXE/RXNE 与 DMA 冲突。
  */
-aStatus_t aDrvUsartSetInterruptEnabled(aDrvUsartHandle_t *handle,
-                                       aDrvUsartExti_t trigger,
-                                       aBool_t enabled);
+aStatus_t aDrvUsartSetEventEnabled(aDrvUsartHandle_t *handle,
+                                   aDrvUsartEvent_t event,
+                                   aBool_t enabled);
 
 /**
- * @brief 查询本构建的 USART 中断实现。
+ * @brief 查询本构建是否提供 USART 事件派发实现。
  * @return 编译该接口时返回 A_TRUE。
  * @note INTERRUPT_ENABLE 为 0 时不声明/链接此 API，不能用运行时查询代替编译裁剪。
  */
-aBool_t aDrvUsartInterruptIsSupported(void);
+aBool_t aDrvUsartEventIsSupported(void);
 
 /**
- * @brief 恢复 USART 的 NVIC 中断线。
+ * @brief 恢复通过 RegisterCallback 注册的 USART 事件派发。
  * @param[in,out] handle 已初始化且持有中断路径的句柄，否则不操作。
- * @note 不改变各事件源开关，也不控制 DMA IRQ。
+ * @note 当前 GD32 后端恢复 USART NVIC 中断线；不改变各事件的使能状态。
+ *       与 PauseDispatch 配对使用，不记录嵌套层数或进入前状态，不控制 DMA 回调。
  */
-void aDrvUsartEnableInterrupt(aDrvUsartHandle_t *handle);
+void aDrvUsartResumeDispatch(aDrvUsartHandle_t *handle);
 
 /**
- * @brief 屏蔽 USART 的 NVIC 中断线。
+ * @brief 暂停通过 RegisterCallback 注册的 USART 事件派发。
  * @param[in,out] handle 已初始化句柄；空或未初始化时不操作。
- * @note 不移除回调、不清事件源使能位，也不关闭 DMA IRQ。
+ * @note 当前 GD32 后端屏蔽 USART NVIC 中断线；不改变事件使能状态或清除待处理事件。
+ *       不停止数据收发、不暂停 DMA 回调、不等待在途回调退出。
+ *       仅供当前串行调用路径短暂暂停派发；不支持嵌套，不提供任务互斥。
  */
-void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *handle);
+void aDrvUsartPauseDispatch(aDrvUsartHandle_t *handle);
 #endif
 
 #if ADRV_USART_DMA_ENABLE
@@ -331,23 +343,20 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
  * @param[in,out] handle 已初始化句柄。
  * @param[out] buffer DMA 目标，至少 size 字节，保持有效至 Stop/Abort。
  * @param[in] size 1..65535 字节。
- * @param[in] interrupt_priority 硬件 IRQ 优先级；上层另行校验 OS 使用约束。
  * @param[in] callback 非空硬件 ISR 回调，不可阻塞。
  * @param[in] argument 原样传入回调，可为 NULL；保持有效至停止并退出在途回调。
  * @return aDrvUsartAsyncRxStart() 的状态或参数错误。
- * @note 通知后上层仍需查询结果并 Stop；不是 aDev 业务任务回调。
+ * @note 使用初始化时绑定的优先级；通知后上层仍需查询结果并 Stop。
  */
 aStatus_t aDrvUsartRxDmaStart(
     aDrvUsartHandle_t *handle, void *buffer, size_t size,
-    uint8_t interrupt_priority, aDrvUsartDmaCallback_t callback,
-    void *argument);
+    aDrvUsartDmaCallback_t callback, void *argument);
 
 /**
  * @brief 启动持续覆盖同一缓冲区的循环 RX DMA。
  * @param[in,out] handle 已初始化句柄。
  * @param[out] buffer DMA 环形区，持续有效直到 Stop/Abort。
  * @param[in] size 环形区字节数，2..65535。
- * @param[in] interrupt_priority DMA IRQ 优先级，须满足上层 OS 约束。
  * @param[in] callback 非空 ISR 通知回调，用于进度/错误处理，不可阻塞。
  * @param[in] argument 回调参数，可为 NULL。
  * @retval A_STATUS_OK 已启动。
@@ -356,11 +365,11 @@ aStatus_t aDrvUsartRxDmaStart(
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
  * @return 也可能返回 DMA 配置错误。
+ * @note 使用初始化时绑定的 USART/DMA 共用中断优先级。
  * @warning DMA 不等待消费者；读取时须验证覆盖，IRQ 服务延迟必须小于一整圈时间。
  */
 aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
                                         void *buffer, size_t size,
-                                        uint8_t interrupt_priority,
                                         aDrvUsartDmaCallback_t callback,
                                         void *argument);
 

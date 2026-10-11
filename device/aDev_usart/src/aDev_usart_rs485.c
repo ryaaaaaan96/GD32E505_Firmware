@@ -33,7 +33,7 @@ aStatus_t aDevUsartRS485Init(aDevUsartHandle_t *handle,
         return A_STATUS_INVALID_PARAM;
     }
     /* 即使轮询 TX 也需要 TC IRQ，以便超时返回后安全释放线路。 */
-    if (!aDrvUsartInterruptIsSupported()) {
+    if (!aDrvUsartEventIsSupported()) {
         return A_STATUS_UNSUPPORTED;
     }
     status = init_pin(&handle->de_gpio, config->de_pin,

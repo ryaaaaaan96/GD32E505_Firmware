@@ -7,10 +7,10 @@
 #include <stdatomic.h>
 #define ADEV_USART_DMA_BACKEND_ENABLE (ADRV_USART_DMA_ENABLE && \
     ADRV_USART_INTERRUPT_ENABLE)
-#define ADEV_USART_NEEDS_IRQ (ADEV_USART_INTERRUPT_ENABLE || \
+#define ADEV_USART_NEEDS_EVENTS (ADEV_USART_INTERRUPT_ENABLE || \
     ADEV_USART_DMA_BACKEND_ENABLE || ADEV_USART_RS485_ENABLE)
 
-/* Begin/Complete 仅由 USART ISR 或屏蔽 USART IRQ 的 TX 路径调用。 */
+/* Begin/Complete 仅由 USART 回调或已暂停 USART 事件派发的 TX 路径调用。 */
 aStatus_t aDevUsartRS485Init(aDevUsartHandle_t *handle,
                            const aDevUsartRS485Config_t *config);
 aStatus_t aDevUsartRS485DeInit(aDevUsartHandle_t *handle);
@@ -23,9 +23,9 @@ void aDevUsartRxDmaNotifyFromISR(aDevUsartHandle_t *handle);
 void aDevUsartAsyncTxTimeout(void *argument);
 void aDevUsartAsyncTxDispatchFromISR(aDevUsartHandle_t *handle);
 void aDevUsartAsyncRxCancelFromISR(aDevUsartHandle_t *handle);
-aStatus_t aDevUsartRegisterIrqCallback(
-    aDevUsartHandle_t *handle, aDrvUsartExti_t trigger,
-    aDrvInterruptCallback_t callback, uint8_t priority, aBool_t enabled);
+aStatus_t aDevUsartRegisterDriverCallback(
+    aDevUsartHandle_t *handle, aDrvUsartEvent_t event,
+    aDrvUsartEventCallback_t callback, aBool_t enabled);
 aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
                               const aDevUsartConfig_t *config);
 aStatus_t aDevUsartDmaRxRefresh(aDevUsartHandle_t *handle);

@@ -55,9 +55,9 @@ static uint32_t uptime_ms;
 static unsigned critical_entries, critical_depth;
 static unsigned inject_on_exit;
 static aDevUsartHandle_t *inject_handle;
-static aDrvUsartExti_t inject_event = ADRV_USART_EXTI_RXNE;
+static aDrvUsartEvent_t inject_event = ADRV_USART_EVENT_RX_READY;
 static uint8_t rx_byte = 42U;
-static void fire(aDevUsartHandle_t *h, aDrvUsartExti_t event);
+static void fire(aDevUsartHandle_t *h, aDrvUsartEvent_t event);
 typedef struct {
     aOSTimerCallback_t callback;
     void *argument;
@@ -67,8 +67,6 @@ void *aOSAlloc(size_t size) { return malloc(size); }
 void aOSFree(void *memory) { free(memory); }
 
 uint32_t aOSGetUptimeMs(void) { return uptime_ms; }
-aStatus_t aOSValidateIsrPriority(uint32_t priority)
-{ return priority >= 5U ? A_STATUS_OK : A_STATUS_INVALID_PARAM; }
 void aOSYield(void) {}
 aStatus_t aOSWaitObjectCreate(void **p) { *p = p; return A_STATUS_OK; }
 void aOSWaitObjectDestroy(void **p) { *p = NULL; }
@@ -77,13 +75,13 @@ aStatus_t aOSWaitObjectWait(void *p, aTimeout_t t)
     (void)p; ++rx_waits;
     if (error_on_wait != NULL) {
         hardware_rx_error = A_TRUE;
-        fire(error_on_wait, ADRV_USART_EXTI_ERROR);
+        fire(error_on_wait, ADRV_USART_EVENT_RX_ERROR);
         error_on_wait = NULL;
         return A_STATUS_OK;
     }
     if (overflow_on_wait != NULL) {
         for (size_t i = 0U; i <= overflow_on_wait->settings.rx_buffer_size; ++i)
-            fire(overflow_on_wait, ADRV_USART_EXTI_RXNE);
+            fire(overflow_on_wait, ADRV_USART_EVENT_RX_READY);
         overflow_on_wait = NULL;
         return A_STATUS_TIMEOUT;
     }
@@ -152,20 +150,24 @@ aStatus_t aDrvGpioDeInit(aDrvGpioHandle_t *h) { ++driver_deinit_count; h->initia
 aStatus_t aDrvGpioWrite(const aDrvGpioHandle_t *h, aDrvGpioLevel_t l)
 { assert(h->initialized); levels[h->pin] = l; return A_STATUS_OK; }
 void aDrvUsartConfigStructInit(aDrvUsartConfig_t *p)
-{ memset(p, 0, sizeof(*p)); p->tx_pin = 9; p->rx_pin = 10; }
+{ memset(p, 0, sizeof(*p)); p->tx_pin = 9; p->rx_pin = 10;
+  p->interrupt_priority = 5U; }
 void aDrvUsartHandleStructInit(aDrvUsartHandle_t *p) { memset(p, 0, sizeof(*p)); }
 aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *c, aDrvUsartHandle_t *h)
-{ ++driver_init_count; h->id = c->id;
+{ ++driver_init_count;
+  if (c->interrupt_priority < 5U || c->interrupt_priority > 15U)
+      return A_STATUS_INVALID_PARAM;
+  h->id = c->id; h->irq_priority = c->interrupt_priority;
   h->initialized = A_TRUE; return A_STATUS_OK; }
 aStatus_t aDrvUsartDeInitStatic(aDrvUsartHandle_t *h)
 { ++driver_deinit_count; h->initialized = A_FALSE; return A_STATUS_OK; }
-aBool_t aDrvUsartInterruptIsSupported(void) { return irq_supported; }
-void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *h) { (void)h; }
-void aDrvUsartEnableInterrupt(aDrvUsartHandle_t *h) { (void)h; }
-aStatus_t aDrvUsartSetInterruptEnabled(aDrvUsartHandle_t *h, aDrvUsartExti_t i, aBool_t en)
+aBool_t aDrvUsartEventIsSupported(void) { return irq_supported; }
+void aDrvUsartPauseDispatch(aDrvUsartHandle_t *h) { (void)h; }
+void aDrvUsartResumeDispatch(aDrvUsartHandle_t *h) { (void)h; }
+aStatus_t aDrvUsartSetEventEnabled(aDrvUsartHandle_t *h, aDrvUsartEvent_t i, aBool_t en)
 { if(en) h->interrupt_enabled_mask |= 1U << i; else h->interrupt_enabled_mask &= ~(1U << i); return A_STATUS_OK; }
-aStatus_t aDrvUsartRegisterCallback(aDrvUsartHandle_t *h, const aDrvUsartExtiConfig_t *c)
-{ h->callbacks[c->trigger].function = c->callback; h->callbacks[c->trigger].argument = c->argument; return aDrvUsartSetInterruptEnabled(h,c->trigger,c->enabled); }
+aStatus_t aDrvUsartRegisterCallback(aDrvUsartHandle_t *h, const aDrvUsartCallbackConfig_t *c)
+{ h->callbacks[c->event].function = c->callback; h->callbacks[c->event].argument = c->argument; return aDrvUsartSetEventEnabled(h,c->event,c->enabled); }
 aStatus_t aDrvUsartTryWriteByte(aDrvUsartHandle_t *h, uint8_t b)
 { (void)h; (void)b; if (!byte_budget) return A_STATUS_BUSY; --byte_budget; tc = A_FALSE; return A_STATUS_OK; }
 aStatus_t aDrvUsartTryReadByte(aDrvUsartHandle_t *h, uint8_t *b)
@@ -189,18 +191,16 @@ aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *h, void *p, size_t n)
 aStatus_t aDrvUsartAsyncRxAbort(aDrvUsartHandle_t *h)
 { (void)h; rx_dma_circular = A_FALSE; rx_dma_callback = NULL; return A_STATUS_OK; }
 aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *h, void *p, size_t n,
-                                         uint8_t priority,
                                          aDrvUsartDmaCallback_t callback,
                                          void *argument)
-{ (void)h; (void)priority; rx_ring = p;
+{ (void)h; rx_ring = p;
   rx_dma_circular = A_TRUE; rx_dma_produced = 0U;
   rx_dma_size = n; rx_dma_callback = callback; rx_dma_argument = argument;
   return A_STATUS_OK; }
 aStatus_t aDrvUsartRxDmaStart(aDrvUsartHandle_t *h, void *p, size_t n,
-                              uint8_t priority,
                               aDrvUsartDmaCallback_t callback,
                               void *argument)
-{ (void)priority; (void)aDrvUsartAsyncRxStart(h, p, n);
+{ (void)aDrvUsartAsyncRxStart(h, p, n);
   rx_dma_circular = A_FALSE; rx_dma_callback = callback;
   rx_dma_argument = argument; rx_dma_size = n;
   return A_STATUS_OK; }
@@ -266,16 +266,16 @@ static void async_rx_callback(aDevUsartHandle_t *handle,
   async_rx_reason = event->type;
 }
 
-static void fire(aDevUsartHandle_t *h, aDrvUsartExti_t event)
+static void fire(aDevUsartHandle_t *h, aDrvUsartEvent_t event)
 {
     assert(h->drv_handle.interrupt_enabled_mask & (1U << event));
-    if (event == ADRV_USART_EXTI_TC) tc = A_TRUE;
+    if (event == ADRV_USART_EVENT_TX_COMPLETE) tc = A_TRUE;
     ++isr_depth;
     h->drv_handle.callbacks[event].function(h->drv_handle.callbacks[event].argument);
     --isr_depth;
 }
 
-aStatus_t aDrvUsartPendInterrupt(aDrvUsartHandle_t *h)
+aStatus_t aDrvUsartRequestDispatch(aDrvUsartHandle_t *h)
 {
     h->software_pending = A_TRUE;
     return A_STATUS_OK;
@@ -285,7 +285,7 @@ static void service_pending(aDevUsartHandle_t *h)
 {
     assert(h->drv_handle.software_pending);
     h->drv_handle.software_pending = A_FALSE;
-    fire(h, ADRV_USART_EXTI_SOFTWARE);
+    fire(h, ADRV_USART_EVENT_DISPATCH);
 }
 
 /* 非 2 的幂容量、满缓冲、回绕、部分读取及复制窗口内的 ISR。 */
@@ -303,7 +303,7 @@ static void buffered_rx_tests(void)
     rx_byte_budget = SIZE_MAX;
     assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
     for (rx_byte = 0U; rx_byte < 7U; ++rx_byte)
-        fire(&handle, ADRV_USART_EXTI_RXNE);
+        fire(&handle, ADRV_USART_EVENT_RX_READY);
     assert(handle.rx.head == 0U && handle.rx.count == 7U);
     inject_handle = &handle;
     inject_on_exit = 1U;
@@ -318,11 +318,11 @@ static void buffered_rx_tests(void)
     assert(aOSGetErrno() == A_EIO);
     aDevUsartClearRxOverflow(&handle);
     for (rx_byte = 10U; rx_byte < 15U; ++rx_byte)
-        fire(&handle, ADRV_USART_EXTI_RXNE);
+        fire(&handle, ADRV_USART_EVENT_RX_READY);
     assert(aDevUsartRead(&handle, output, 3U, A_TIMEOUT_NO_WAIT) == 3);
     for (size_t i = 0U; i < 3U; ++i) assert(output[i] == 10U + i);
     for (rx_byte = 15U; rx_byte < 18U; ++rx_byte)
-        fire(&handle, ADRV_USART_EXTI_RXNE);
+        fire(&handle, ADRV_USART_EVENT_RX_READY);
     /* 快照后再来一个字节，提交必须保留 ISR 新增的 rx_count。 */
     inject_on_exit = 1U;
     before = critical_entries;
@@ -349,7 +349,7 @@ static void read_overflow_tests(void)
 
     last_error = A_STATUS_BUSY;
     for (rx_byte = 0U; rx_byte <= sizeof(ring); ++rx_byte)
-        fire(&handle, ADRV_USART_EXTI_RXNE);
+        fire(&handle, ADRV_USART_EVENT_RX_READY);
     assert(aDevUsartHasRxOverflowed(&handle) && aOSGetErrno() == A_EAGAIN);
     assert(aDevUsartGetRxError(&handle) == A_STATUS_OK); /* 独立软件溢出锁存。 */
     const aTimeout_t invalid = {.type = (aTimeoutType_t)-1};
@@ -376,7 +376,7 @@ static void read_overflow_tests(void)
 
     /* 请求长于现有数据，复制期间溢出也不能返回部分成功。 */
     for (rx_byte = 0U; rx_byte < sizeof(ring); ++rx_byte)
-        fire(&handle, ADRV_USART_EXTI_RXNE);
+        fire(&handle, ADRV_USART_EVENT_RX_READY);
     inject_handle = &handle;
     inject_on_exit = 1U;
     assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == -1);
@@ -391,7 +391,7 @@ static void read_overflow_tests(void)
     assert(handle.rx.state == ADEV_USART_RX_IDLE);
     assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
     rx_byte = 0x5aU;
-    fire(&handle, ADRV_USART_EXTI_RXNE);
+    fire(&handle, ADRV_USART_EVENT_RX_READY);
     assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == 1);
     assert(output[0] == 0x5aU);
     assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
@@ -462,12 +462,12 @@ static void discard_rx_tests(void)
     config.rx_buffer_size = sizeof(ring);
     assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
     for (rx_byte = 0U; rx_byte < 7U; ++rx_byte)
-        fire(&handle, ADRV_USART_EXTI_RXNE);
+        fire(&handle, ADRV_USART_EVENT_RX_READY);
     assert(aDevUsartRead(&handle, output, 3U, A_TIMEOUT_NO_WAIT) == 3);
     for (rx_byte = 10U; rx_byte < 14U; ++rx_byte)
-        fire(&handle, ADRV_USART_EXTI_RXNE);
+        fire(&handle, ADRV_USART_EVENT_RX_READY);
     hardware_rx_error = A_TRUE;
-    fire(&handle, ADRV_USART_EXTI_ERROR);
+    fire(&handle, ADRV_USART_EVENT_RX_ERROR);
     assert(aDevUsartHasRxOverflowed(&handle));
     assert(aDevUsartGetRxError(&handle) == A_STATUS_ERROR);
     handle.rx.state = ADEV_USART_RX_STREAM;
@@ -494,11 +494,11 @@ static void discard_rx_tests(void)
     assert(aDevUsartRead(&handle, output, sizeof(output), A_TIMEOUT_NO_WAIT) == 1);
     assert(output[0] == 0xa5U);
     hardware_rx_error = A_TRUE;
-    inject_event = ADRV_USART_EXTI_ERROR;
+    inject_event = ADRV_USART_EVENT_RX_ERROR;
     inject_on_exit = 1U;
     assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
     assert(aDevUsartGetRxError(&handle) == A_STATUS_ERROR);
-    inject_event = ADRV_USART_EXTI_RXNE;
+    inject_event = ADRV_USART_EVENT_RX_READY;
     assert(aDevUsartDiscardRx(&handle) == A_STATUS_OK);
 
     const aDevUsartReadRequest_t request = {.callback = async_rx_callback};
@@ -629,19 +629,19 @@ int main(void)
         assert(aDevUsartWaitTransmitComplete(h, A_TIMEOUT_NO_WAIT) != A_STATUS_OK);
         assert(levels[8] == ADRV_GPIO_HIGH);
         byte_budget = 100;
-        if (i == 1) while(h->tx.count) fire(h, ADRV_USART_EXTI_TXE);
-        fire(h, ADRV_USART_EXTI_TC);
+        if (i == 1) while(h->tx.count) fire(h, ADRV_USART_EVENT_TX_READY);
+        fire(h, ADRV_USART_EVENT_TX_COMPLETE);
         assert(!h->rs485_transmitting && levels[8] == ADRV_GPIO_LOW);
         assert(levels[7] == ADRV_GPIO_HIGH);
 
         if (i == 2) {
             /* Move tail, then wrap the next write into two DMA spans. */
             assert(aDevUsartWrite(h, data, 3, A_TIMEOUT_NO_WAIT) == 3);
-            fire(h, ADRV_USART_EXTI_TC);
+            fire(h, ADRV_USART_EVENT_TX_COMPLETE);
             assert(aDevUsartWrite(h, data, 3, A_TIMEOUT_NO_WAIT) == 3);
-            fire(h, ADRV_USART_EXTI_TC);
+            fire(h, ADRV_USART_EVENT_TX_COMPLETE);
             assert(h->rs485_transmitting && h->tx.count == 2);
-            fire(h, ADRV_USART_EXTI_TC);
+            fire(h, ADRV_USART_EVENT_TX_COMPLETE);
             assert(!h->rs485_transmitting && h->tx.count == 0);
         }
 
@@ -649,19 +649,19 @@ int main(void)
         assert(aDevUsartWriteDirect(h, data, 2, A_TIMEOUT_NO_WAIT) == 2);
         assert(dma_source == data); /* No bounce buffer. */
         assert(h->rs485_transmitting && levels[8] == ADRV_GPIO_HIGH);
-        fire(h, ADRV_USART_EXTI_TC);
+        fire(h, ADRV_USART_EVENT_TX_COMPLETE);
         assert(!h->rs485_transmitting);
         dma_stall = A_TRUE;
         assert(aDevUsartWriteDirect(h, data, 2, A_TIMEOUT_NO_WAIT) == -1);
         assert(last_error == A_STATUS_TIMEOUT && dma_remaining == 0);
         assert(h->rs485_transmitting); /* DMA stopped, final byte may still be shifting. */
-        fire(h, ADRV_USART_EXTI_TC);
+        fire(h, ADRV_USART_EVENT_TX_COMPLETE);
         dma_stall = A_FALSE;
         }
         if (i == 2) {
             assert(aDevUsartWrite(h, data, 2, A_TIMEOUT_NO_WAIT) == 2);
             dma_error = A_TRUE;
-            fire(h, ADRV_USART_EXTI_TC);
+            fire(h, ADRV_USART_EVENT_TX_COMPLETE);
             assert(!h->rs485_transmitting && h->tx.dma_active == 0);
             assert(aDevUsartWaitTransmitComplete(h, A_TIMEOUT_NO_WAIT) == A_STATUS_ERROR);
             dma_error = A_FALSE;
@@ -681,7 +681,7 @@ int main(void)
     assert(aDevUsartInitStatic(&c, h) == A_STATUS_OK);
     assert(aDevUsartWrite(h, data, 1, A_TIMEOUT_NO_WAIT) == 1);
     assert(levels[8] == ADRV_GPIO_LOW && levels[7] == ADRV_GPIO_HIGH);
-    fire(h, ADRV_USART_EXTI_TC);
+    fire(h, ADRV_USART_EVENT_TX_COMPLETE);
     assert(levels[8] == ADRV_GPIO_HIGH);
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
     c.rs485.mode = ADEV_USART_RS485_NONE;
@@ -777,7 +777,7 @@ int main(void)
     timer_create_delay = 0U;
     memset(&tx_request, 0, sizeof(tx_request));
     assert(dma_source == data && h->tx.state == ADEV_USART_TX_ASYNC);
-    fire(h, ADRV_USART_EXTI_TC);
+    fire(h, ADRV_USART_EVENT_TX_COMPLETE);
     assert(async_tx_callbacks == 1U && async_tx_status == A_STATUS_OK);
 
     tx_request = (aDevUsartWriteRequest_t) {
@@ -791,11 +791,11 @@ int main(void)
     assert(aDevUsartDeInit(h) == A_STATUS_BUSY);
     assert(aDevUsartWriteAsyncCancel(h) == A_STATUS_NOT_READY);
     service_pending(h);
-    fire(h, ADRV_USART_EXTI_SOFTWARE); /* Duplicate IRQ cannot redeliver. */
+    fire(h, ADRV_USART_EVENT_DISPATCH); /* Duplicate IRQ cannot redeliver. */
     assert(async_tx_callbacks == 2U && async_tx_status == A_STATUS_CANCELLED);
     assert(h->tx.state == ADEV_USART_TX_DRAINING);
     assert(aDevUsartWriteAsync(h, &tx_request) == A_STATUS_BUSY);
-    fire(h, ADRV_USART_EXTI_TC);
+    fire(h, ADRV_USART_EVENT_TX_COMPLETE);
     assert(h->tx.state == ADEV_USART_TX_IDLE);
     assert(aDevUsartWriteAsync(h, &tx_request) == A_STATUS_OK);
     MockTimer *tx_timer = h->tx.deadline_timer;
@@ -805,7 +805,7 @@ int main(void)
     tx_timer->callback(tx_timer->argument);
     assert(async_tx_callbacks == 2U);
     tx_timer->callback(tx_timer->argument);
-    fire(h, ADRV_USART_EXTI_TC); /* Hardware finishes before queued callback. */
+    fire(h, ADRV_USART_EVENT_TX_COMPLETE); /* Hardware finishes before queued callback. */
     assert(async_tx_callbacks == 2U);
     service_pending(h);
     assert(async_tx_callbacks == 3U && async_tx_status == A_STATUS_TIMEOUT);
@@ -840,11 +840,11 @@ int main(void)
     assert(last_error == A_STATUS_BUSY);
     memset(rx_a, 0x5a, sizeof(rx_a));
     rx_dma_produced = 3U;
-    fire(h, ADRV_USART_EXTI_IDLE);
+    fire(h, ADRV_USART_EVENT_RX_IDLE);
     assert(async_rx_callbacks == 1U && async_rx_length == 3U);
     rx_a[0] = 8U; rx_a[1] = 9U;
     rx_dma_produced = 10U; /* Ring wrap is combined into a stable snapshot. */
-    fire(h, ADRV_USART_EXTI_IDLE);
+    fire(h, ADRV_USART_EVENT_RX_IDLE);
     assert(async_rx_callbacks == 2U && async_rx_length == 7U);
     const uint8_t wrapped[] = {0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 8, 9};
     assert(memcmp(snapshot, wrapped, sizeof(wrapped)) == 0);
@@ -852,10 +852,10 @@ int main(void)
     assert(async_rx_callbacks == 2U);
     assert(aDevUsartReadAsyncCancel(h) == A_STATUS_BUSY);
     assert(aDevUsartDeInit(h) == A_STATUS_BUSY);
-    fire(h, ADRV_USART_EXTI_IDLE); /* Data must not pass a pending cancellation. */
+    fire(h, ADRV_USART_EVENT_RX_IDLE); /* Data must not pass a pending cancellation. */
     assert(async_rx_callbacks == 2U);
     service_pending(h);
-    fire(h, ADRV_USART_EXTI_SOFTWARE);
+    fire(h, ADRV_USART_EVENT_DISPATCH);
     assert(async_rx_callbacks == 3U && async_rx_reason == ADEV_USART_RX_EVENT_CANCELLED);
     assert(aDevUsartReadAsyncCancel(h) == A_STATUS_NOT_READY);
     rx_dma_produced = 12U;
@@ -864,7 +864,7 @@ int main(void)
     assert(aDevUsartReadAsync(h, &rx_request) == A_STATUS_OK);
     overwrite_in_callback = A_TRUE;
     rx_dma_produced = 13U;
-    fire(h, ADRV_USART_EXTI_IDLE);
+    fire(h, ADRV_USART_EVENT_RX_IDLE);
     assert(async_rx_reason == ADEV_USART_RX_EVENT_ERROR);
     assert(aDevUsartHasRxOverflowed(h));
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
@@ -876,7 +876,7 @@ int main(void)
     overwrite_during_copy = A_TRUE;
     count_reads = 0U;
     const unsigned before_torn_copy = async_rx_callbacks;
-    fire(h, ADRV_USART_EXTI_IDLE);
+    fire(h, ADRV_USART_EVENT_RX_IDLE);
     assert(async_rx_callbacks == before_torn_copy + 1U);
     assert(async_rx_reason == ADEV_USART_RX_EVENT_ERROR);
     assert(h->rx.state == ADEV_USART_RX_IDLE && h->rx.snapshot == NULL);
@@ -891,7 +891,7 @@ int main(void)
     assert(aDevUsartInitStatic(&c, h) == A_STATUS_OK);
     assert(aDevUsartReadAsync(h, &rx_request) == A_STATUS_OK);
     const unsigned before_irq_callback = async_rx_callbacks;
-    fire(h, ADRV_USART_EXTI_RXNE);
+    fire(h, ADRV_USART_EVENT_RX_READY);
     assert(async_rx_callbacks == before_irq_callback + 1U && async_rx_length == 1U);
     assert(h->rx.count == 0U);
     assert(aDevUsartReadAsyncCancel(h) == A_STATUS_OK);
@@ -937,10 +937,10 @@ int main(void)
     c.rx_byte_callback = byte_receive;
     c.rx_byte_context = &byte_callbacks;
     assert(aDevUsartInitStatic(&c, h) == A_STATUS_OK);
-    fire(h, ADRV_USART_EXTI_RXNE);
+    fire(h, ADRV_USART_EVENT_RX_READY);
     assert(byte_callbacks == 1U);
     hardware_rx_error = A_TRUE;
-    fire(h, ADRV_USART_EXTI_ERROR);
+    fire(h, ADRV_USART_EVENT_RX_ERROR);
     assert(byte_errors == 1U && !hardware_rx_error);
     assert(aDevUsartGetRxError(h) == A_STATUS_ERROR);
     aDevUsartClearRxError(h);
@@ -957,7 +957,7 @@ int main(void)
     assert(aDevUsartRead(h, read_buffer, 1U, A_TIMEOUT_MS(100U)) == -1);
     assert(last_error == A_STATUS_ERROR && error_on_wait == NULL);
     aDevUsartClearRxError(h);
-    fire(h, ADRV_USART_EXTI_RXNE);
+    fire(h, ADRV_USART_EVENT_RX_READY);
     assert(aDevUsartRead(h, read_buffer, 1U, A_TIMEOUT_NO_WAIT) == 1);
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
     buffered_rx_tests();

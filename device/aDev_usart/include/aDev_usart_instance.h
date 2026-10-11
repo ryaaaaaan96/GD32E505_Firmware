@@ -34,7 +34,6 @@ typedef enum {
 typedef struct {
     aDevUsartRS485Config_t rs485;
     aDevUsartMode_t mode;
-    uint8_t interrupt_priority;
     uint8_t *rx_buffer;
     size_t rx_buffer_size;
     aDevUsartRxByteCallback_t rx_byte_callback;

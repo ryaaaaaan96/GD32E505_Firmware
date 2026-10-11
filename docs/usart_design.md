@@ -29,9 +29,33 @@ DMA 中断入口、标志消费和循环计数集中在通用 aDrvDma；USART DM
 路由、请求开关和通知适配。查询先消费事件时仍由 DMA ISR 派发通知。
 设备配置和 TX/RX 运行状态的组织见 [aDrv 与 aDevice 设计](driver_device_design.md)。
 
+应用通过 `drv_config.interrupt_priority` 配置 USART/DMA 的共同优先级。
+aDrv 初始化时完成硬件范围和 OS 安全范围校验，并把值保存到驱动句柄；
+后续 USART 回调、IDLE 和 RX DMA 使用该绑定值。aDev 不保存、读取、传递或
+校验优先级。OS 范围由平台构建传给 aDrv，不引入驱动对 OS 运行时的依赖。
+
+aDev 与 aDrv 的交互使用事件、回调和派发命名，硬件 IRQ 命名和操作保留在
+GD32 驱动内部。`aDrvUsartEvent_t` 包含 TX_READY、RX_READY、TX_COMPLETE、
+RX_IDLE、RX_ERROR 和 DISPATCH，均带 `ADRV_USART_EVENT_` 前缀。
+回调配置为 `aDrvUsartCallbackConfig_t`，通过 `event` 字段选择事件。
+
+| 接口 | 职责 |
+| --- | --- |
+| `aDevUsartRegisterDriverCallback` | aDev 内部登记驱动回调，不是应用回调接口 |
+| `aDrvUsartRegisterCallback` / `UnregisterCallback` | 登记、注销指定事件回调 |
+| `aDrvUsartSetEventEnabled` | 启用、禁用指定事件 |
+| `aDrvUsartEventIsSupported` | 查询当前构建的 USART 事件派发能力 |
+| `aDrvUsartRequestDispatch` | 请求 DISPATCH 回调；允许合并，GD32 通过挂起 IRQ 实现 |
+| `aDrvUsartPauseDispatch` / `ResumeDispatch` | 短暂暂停、恢复 USART 事件派发 |
+
+Pause/Resume 只影响通过 RegisterCallback 注册的 USART 事件，不包含 DMA
+回调，不等待在途回调退出，不支持嵌套或任务互斥；区间内不注册新回调。
+这些调整仅改变命名，当前 `FromISR` 回调上下文、同步方式和编译开关保持
+原有语义。Linux 的回调与线程同步适配仍需另行实现。
+
 ## 回调上下文和数据稳定性
 
-aDrv 硬件回调由 aDev 注册，应用不覆盖设备正在使用的 IRQ 分发。
+aDrv 事件回调由 aDev 注册，应用不覆盖设备正在使用的回调。
 缓冲业务回调通过 ReadAsync / WriteAsync 请求设置，不另外注册 CallbackSet。
 需要字节到达时刻的协议可选独占 RX 字节回调模式，在初始化时提供钩子。
 

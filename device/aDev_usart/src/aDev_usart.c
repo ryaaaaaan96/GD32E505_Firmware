@@ -3,16 +3,15 @@
 #include <limits.h>
 #include <string.h>
 
-#if ADEV_USART_NEEDS_IRQ
-aStatus_t aDevUsartRegisterIrqCallback(aDevUsartHandle_t *handle,
-                                       aDrvUsartExti_t trigger,
-                                       aDrvInterruptCallback_t callback,
-                                       uint8_t priority, aBool_t enabled)
+#if ADEV_USART_NEEDS_EVENTS
+aStatus_t aDevUsartRegisterDriverCallback(aDevUsartHandle_t *handle,
+                                         aDrvUsartEvent_t event,
+                                         aDrvUsartEventCallback_t callback,
+                                         aBool_t enabled)
 {
-    aDrvUsartExtiConfig_t config;
+    aDrvUsartCallbackConfig_t config;
 
-    config.trigger = trigger;
-    config.priority = priority;
+    config.event = event;
     config.callback = callback;
     config.argument = handle;
     config.enabled = enabled;
@@ -92,7 +91,6 @@ void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
 
     aDrvUsartConfigStructInit(&config->drv_config);
     config->mode = ADEV_USART_TX_POLLING | ADEV_USART_RX_POLLING;
-    config->interrupt_priority = 5U;
     config->rx_buffer = NULL;
     config->rx_buffer_size = 0U;
     config->tx_buffer = NULL;
@@ -115,7 +113,7 @@ static void handle_struct_init(aDevUsartHandle_t *handle, aBool_t dynamic)
 }
 
 #if ADEV_USART_ASYNC_ENABLE
-static void async_software_interrupt(void *argument)
+static void async_dispatch_callback(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
     aDevUsartAsyncTxDispatchFromISR(handle);
@@ -157,9 +155,6 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
          !ADEV_USART_RS485_ENABLE)) {
         return A_STATUS_UNSUPPORTED;
     }
-    if (aOSValidateIsrPriority(config->interrupt_priority) != A_STATUS_OK) {
-        return A_STATUS_INVALID_PARAM;
-    }
     if ((rx == ADEV_USART_RX_INTERRUPT_CALLBACK) !=
         (config->rx_byte_callback != NULL)) return A_STATUS_INVALID_PARAM;
 
@@ -183,7 +178,6 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
         return status;
     }
     handle->settings.mode = config->mode;
-    handle->settings.interrupt_priority = config->interrupt_priority;
 
 #if ADEV_USART_RS485_ENABLE
     status = aDevUsartRS485Init(handle, &config->rs485);
@@ -193,8 +187,8 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
     }
 #if ADEV_USART_ASYNC_ENABLE
     if (status == A_STATUS_OK) {
-        status = aDevUsartRegisterIrqCallback(handle, ADRV_USART_EXTI_SOFTWARE,
-            async_software_interrupt, config->interrupt_priority, A_TRUE);
+        status = aDevUsartRegisterDriverCallback(handle, ADRV_USART_EVENT_DISPATCH,
+            async_dispatch_callback, A_TRUE);
     }
 #endif
     if (status == A_STATUS_OK) {
@@ -280,8 +274,8 @@ aStatus_t aDevUsartDeInit(aDevUsartHandle_t *handle)
 
 #if ADEV_USART_DMA_BACKEND_ENABLE
     if (handle->rx.dma_active) {
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_IDLE, A_FALSE);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_RX_IDLE, A_FALSE);
         status = aDrvUsartAsyncRxAbort(&handle->drv_handle);
         if (status != A_STATUS_OK) return status;
         handle->rx.dma_active = A_FALSE;

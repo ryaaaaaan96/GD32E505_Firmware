@@ -26,8 +26,8 @@ static void async_tx_complete(aDevUsartHandle_t *handle, aStatus_t status,
     (void)aDrvUsartIsTransmitComplete(&handle->drv_handle, &complete);
     handle->tx.draining = !complete;
     if (handle->tx.draining) {
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, A_TRUE);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_TRUE);
     } else {
         rs485_complete(handle);
     }
@@ -69,17 +69,17 @@ void aDevUsartAsyncTxTimeout(void *argument)
     }
     (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
     if ((handle->settings.rs485.mode == ADEV_USART_RS485_NONE)) {
-        (void)aDrvUsartSetInterruptEnabled(&handle->drv_handle,
-                                           ADRV_USART_EXTI_TC, A_FALSE);
+        (void)aDrvUsartSetEventEnabled(&handle->drv_handle,
+                                           ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
     }
     async_tx_complete(handle, A_STATUS_TIMEOUT, transferred);
     aOSCriticalExit();
-    (void)aDrvUsartPendInterrupt(&handle->drv_handle);
+    (void)aDrvUsartRequestDispatch(&handle->drv_handle);
 }
 
 #endif
 
-/* 调用者已屏蔽 USART IRQ，或正在 USART ISR 内。 */
+/* 调用者已暂停 USART 事件派发，或正在 USART 回调内。 */
 static void rs485_complete(aDevUsartHandle_t *handle)
 {
 #if ADEV_USART_RS485_ENABLE
@@ -96,8 +96,8 @@ static void rs485_complete(aDevUsartHandle_t *handle)
 void aDevUsartRs485ArmComplete(aDevUsartHandle_t *handle)
 {
     if (handle->rs485_transmitting) {
-        const aStatus_t status = aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, A_TRUE);
+        const aStatus_t status = aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_TRUE);
         if (status != A_STATUS_OK) {
             handle->tx.error = status;
         }
@@ -107,15 +107,15 @@ void aDevUsartRs485ArmComplete(aDevUsartHandle_t *handle)
 #endif
 
 #if ADEV_USART_INTERRUPT_ENABLE
-static void irq_transmit(void *argument)
+static void tx_ready_callback(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
 
     if (handle->tx.count == 0U) {
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TXE, A_FALSE);
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, A_TRUE);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_READY, A_FALSE);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_TRUE);
         return;
     }
 
@@ -127,26 +127,26 @@ static void irq_transmit(void *argument)
         --handle->tx.count;
         aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
         if (handle->tx.count == 0U) {
-            (void)aDrvUsartSetInterruptEnabled(
-                &handle->drv_handle, ADRV_USART_EXTI_TXE, A_FALSE);
-            (void)aDrvUsartSetInterruptEnabled(
-                &handle->drv_handle, ADRV_USART_EXTI_TC, A_TRUE);
+            (void)aDrvUsartSetEventEnabled(
+                &handle->drv_handle, ADRV_USART_EVENT_TX_READY, A_FALSE);
+            (void)aDrvUsartSetEventEnabled(
+                &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_TRUE);
         }
     }
 }
 
 #endif
 
-#if ADEV_USART_NEEDS_IRQ
-static void irq_transmit_complete(void *argument)
+#if ADEV_USART_NEEDS_EVENTS
+static void tx_complete_callback(void *argument)
 {
     aDevUsartHandle_t *handle = argument;
 
 #if ADEV_USART_ASYNC_ENABLE
     if (handle->tx.state == ADEV_USART_TX_DRAINING ||
         handle->tx.state == ADEV_USART_TX_CALLBACK) {
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
         rs485_complete(handle);
         handle->tx.draining = A_FALSE;
         if (handle->tx.state == ADEV_USART_TX_DRAINING)
@@ -163,8 +163,8 @@ static void irq_transmit_complete(void *argument)
         }
         if (status != A_STATUS_OK)
             (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
         rs485_complete(handle);
         async_tx_complete(handle, status,
                           status == A_STATUS_OK
@@ -178,8 +178,8 @@ static void irq_transmit_complete(void *argument)
 
 #if ADEV_USART_DMA_BACKEND_ENABLE
     if (handle->tx.state == ADEV_USART_TX_DIRECT) {
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
         aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
         return;
     }
@@ -190,8 +190,8 @@ static void irq_transmit_complete(void *argument)
         aStatus_t status;
 
         if (handle->tx.dma_active == 0U) {
-            (void)aDrvUsartSetInterruptEnabled(
-                &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+            (void)aDrvUsartSetEventEnabled(
+                &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
             rs485_complete(handle);
             aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
             return;
@@ -221,8 +221,8 @@ static void irq_transmit_complete(void *argument)
         aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
         if ((handle->tx.count == 0U) ||
             (handle->tx.error != A_STATUS_OK)) {
-            (void)aDrvUsartSetInterruptEnabled(
-                &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+            (void)aDrvUsartSetEventEnabled(
+                &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
             rs485_complete(handle);
         }
         return;
@@ -230,8 +230,8 @@ static void irq_transmit_complete(void *argument)
 
 #endif
 
-    (void)aDrvUsartSetInterruptEnabled(
-        &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+    (void)aDrvUsartSetEventEnabled(
+        &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
     rs485_complete(handle);
     aOSWaitObjectNotifyFromISR(handle->tx.wait_object);
 }
@@ -243,12 +243,11 @@ aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
 {
     switch (config->mode & ADEV_USART_TX_MASK) {
     case ADEV_USART_TX_POLLING:
-#if ADEV_USART_NEEDS_IRQ
+#if ADEV_USART_NEEDS_EVENTS
         if ((config->rs485.mode != ADEV_USART_RS485_NONE) ||
             (config->mode & ADEV_USART_TX_MASK) == ADEV_USART_TX_DMA_BUFFERED)
-            return aDevUsartRegisterIrqCallback(
-                handle, ADRV_USART_EXTI_TC, irq_transmit_complete,
-                config->interrupt_priority, A_FALSE);
+            return aDevUsartRegisterDriverCallback(
+                handle, ADRV_USART_EVENT_TX_COMPLETE, tx_complete_callback, A_FALSE);
 #endif
         (void)handle;
         return A_STATUS_OK;
@@ -256,7 +255,7 @@ aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
     case ADEV_USART_TX_INTERRUPT_BUFFERED: {
         aStatus_t status;
 
-        if (!aDrvUsartInterruptIsSupported()) {
+        if (!aDrvUsartEventIsSupported()) {
             return A_STATUS_UNSUPPORTED;
         }
         if ((config->tx_buffer == NULL) ||
@@ -265,15 +264,13 @@ aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
         }
         handle->settings.tx_buffer = config->tx_buffer;
         handle->settings.tx_buffer_size = config->tx_buffer_size;
-        status = aDevUsartRegisterIrqCallback(
-            handle, ADRV_USART_EXTI_TXE, irq_transmit,
-            config->interrupt_priority, A_FALSE);
+        status = aDevUsartRegisterDriverCallback(
+            handle, ADRV_USART_EVENT_TX_READY, tx_ready_callback, A_FALSE);
         if (status != A_STATUS_OK) {
             return status;
         }
-        return aDevUsartRegisterIrqCallback(
-            handle, ADRV_USART_EXTI_TC, irq_transmit_complete,
-            config->interrupt_priority, A_FALSE);
+        return aDevUsartRegisterDriverCallback(
+            handle, ADRV_USART_EVENT_TX_COMPLETE, tx_complete_callback, A_FALSE);
     }
 #endif
 
@@ -281,7 +278,7 @@ aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
     case ADEV_USART_TX_DMA_BUFFERED: {
         aStatus_t status;
 
-        if (!aDrvUsartInterruptIsSupported() ||
+        if (!aDrvUsartEventIsSupported() ||
             !aDrvUsartDmaTxIsSupported(handle->drv_handle.id)) {
             return A_STATUS_UNSUPPORTED;
         }
@@ -291,9 +288,8 @@ aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
         }
         handle->settings.tx_buffer = config->tx_buffer;
         handle->settings.tx_buffer_size = config->tx_buffer_size;
-        status = aDevUsartRegisterIrqCallback(
-            handle, ADRV_USART_EXTI_TC, irq_transmit_complete,
-            config->interrupt_priority, A_FALSE);
+        status = aDevUsartRegisterDriverCallback(
+            handle, ADRV_USART_EVENT_TX_COMPLETE, tx_complete_callback, A_FALSE);
         return status;
     }
 #endif
@@ -360,8 +356,8 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
     }
 
     handle->tx.dma_active = started;
-    status = aDrvUsartSetInterruptEnabled(
-        &handle->drv_handle, ADRV_USART_EXTI_TC, A_TRUE);
+    status = aDrvUsartSetEventEnabled(
+        &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_TRUE);
     if (status != A_STATUS_OK) {
         (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
         handle->tx.dma_active = 0U;
@@ -444,7 +440,7 @@ static aSSize_t dma_buffered_write(aDevUsartHandle_t *handle,
 #endif
 
 #if ADEV_USART_INTERRUPT_ENABLE
-static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
+static aSSize_t event_buffered_write(aDevUsartHandle_t *handle, const void *data,
                                 size_t data_size,
                                 const aTimepoint_t *end,
                                 aTimeout_t original_timeout)
@@ -473,10 +469,10 @@ static aSSize_t interrupt_write(aDevUsartHandle_t *handle, const void *data,
             handle->tx.head =
                 (handle->tx.head + 1U) % handle->settings.tx_buffer_size;
             ++handle->tx.count;
-            (void)aDrvUsartSetInterruptEnabled(
-                &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
-            (void)aDrvUsartSetInterruptEnabled(
-                &handle->drv_handle, ADRV_USART_EXTI_TXE, A_TRUE);
+            (void)aDrvUsartSetEventEnabled(
+                &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
+            (void)aDrvUsartSetEventEnabled(
+                &handle->drv_handle, ADRV_USART_EVENT_TX_READY, A_TRUE);
         }
         aOSCriticalExit();
 
@@ -534,7 +530,7 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
 
 #if ADEV_USART_INTERRUPT_ENABLE
     case ADEV_USART_TX_INTERRUPT_BUFFERED:
-        result = interrupt_write(handle, data, data_size, &end,
+        result = event_buffered_write(handle, data, data_size, &end,
                                  timeout);
         break;
 #endif
@@ -550,8 +546,8 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
         }
 #if ADEV_USART_RS485_ENABLE
         if ((handle->settings.rs485.mode != ADEV_USART_RS485_NONE)) {
-            (void)aDrvUsartSetInterruptEnabled(
-                &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+            (void)aDrvUsartSetEventEnabled(
+                &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
         }
 #endif
 
@@ -603,8 +599,8 @@ static aStatus_t wait_transmit_complete(
              ADEV_USART_TX_INTERRUPT_BUFFERED) ||
             ((handle->settings.mode & ADEV_USART_TX_MASK) ==
              ADEV_USART_TX_DMA_BUFFERED)) {
-            (void)aDrvUsartSetInterruptEnabled(
-                &handle->drv_handle, ADRV_USART_EXTI_TC, A_TRUE);
+            (void)aDrvUsartSetEventEnabled(
+                &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_TRUE);
             const aStatus_t wait_status = wait_for_event(
                 handle->tx.wait_object, end);
 
@@ -728,8 +724,8 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
     }
     if (status == A_STATUS_OK) {
         handle->tx.dma_active = size;
-        status = aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, A_TRUE);
+        status = aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_TRUE);
     }
     if ((status == A_STATUS_OK) &&
         (timeout.type != A_TIMEOUT_TYPE_FOREVER)) {
@@ -748,8 +744,8 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
         handle->tx.draining = !complete;
         handle->tx.state = complete ? ADEV_USART_TX_IDLE :
             ADEV_USART_TX_DRAINING;
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, !complete);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, !complete);
         if (complete) rs485_complete(handle);
         handle->tx.dma_active = 0U;
         handle->tx.callback = NULL;
@@ -786,13 +782,13 @@ aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle)
     }
     (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
     if ((handle->settings.rs485.mode == ADEV_USART_RS485_NONE)) {
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
     }
     async_tx_complete(handle, A_STATUS_CANCELLED, transferred);
     aOSCriticalExit();
 
-    (void)aDrvUsartPendInterrupt(&handle->drv_handle);
+    (void)aDrvUsartRequestDispatch(&handle->drv_handle);
     return A_STATUS_OK;
 }
 
@@ -800,19 +796,19 @@ aStatus_t aDevUsartWriteAsyncCancel(aDevUsartHandle_t *handle)
 
 #if ADEV_USART_DIRECT_ENABLE && ADEV_USART_DMA_BACKEND_ENABLE
 /* 直接使用用户缓冲区的同步 DMA 发送实现。 */
-static void direct_tx_interrupts_disable(aDevUsartHandle_t *handle)
+static void direct_tx_events_disable(aDevUsartHandle_t *handle)
 {
     const aDevUsartMode_t tx_mode = handle->settings.mode & ADEV_USART_TX_MASK;
 
     if (tx_mode == ADEV_USART_TX_INTERRUPT_BUFFERED) {
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TXE, A_FALSE);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_READY, A_FALSE);
     }
     if ((tx_mode == ADEV_USART_TX_INTERRUPT_BUFFERED) ||
         (tx_mode == ADEV_USART_TX_DMA_BUFFERED) ||
         (handle->settings.rs485.mode != ADEV_USART_RS485_NONE)) {
-        (void)aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+        (void)aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
     }
 }
 
@@ -841,23 +837,23 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
 
-    aDrvUsartDisableInterrupt(&handle->drv_handle);
+    aDrvUsartPauseDispatch(&handle->drv_handle);
     if ((handle->tx.state != ADEV_USART_TX_IDLE) ||
         (handle->tx.callback != NULL) ||
         (handle->tx.count != 0U) || (handle->tx.dma_active != 0U)) {
-        aDrvUsartEnableInterrupt(&handle->drv_handle);
+        aDrvUsartResumeDispatch(&handle->drv_handle);
 
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
     handle->tx.state = ADEV_USART_TX_DIRECT;
-    direct_tx_interrupts_disable(handle);
+    direct_tx_events_disable(handle);
     status = handle->tx.error;
     if (status == A_STATUS_OK) {
 #if ADEV_USART_RS485_ENABLE
         status = aDevUsartRS485Begin(handle);
 #endif
     }
-    aDrvUsartEnableInterrupt(&handle->drv_handle);
+    aDrvUsartResumeDispatch(&handle->drv_handle);
 
     while ((status == A_STATUS_OK) && (count < data_size)) {
         size_t started = 0U;
@@ -869,8 +865,8 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
         if (status != A_STATUS_OK) break;
 
         remaining = started;
-        status = aDrvUsartSetInterruptEnabled(
-            &handle->drv_handle, ADRV_USART_EXTI_TC, A_TRUE);
+        status = aDrvUsartSetEventEnabled(
+            &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_TRUE);
         if (status != A_STATUS_OK) break;
         for (;;) {
             status = aDrvUsartAsyncTxGetRemaining(
@@ -900,14 +896,14 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
 
     /* 确认 DMA 已停止访问调用者缓冲区后才能返回。 */
     (void)aDrvUsartAsyncTxAbort(&handle->drv_handle);
-    aDrvUsartDisableInterrupt(&handle->drv_handle);
-    (void)aDrvUsartSetInterruptEnabled(
-        &handle->drv_handle, ADRV_USART_EXTI_TC, A_FALSE);
+    aDrvUsartPauseDispatch(&handle->drv_handle);
+    (void)aDrvUsartSetEventEnabled(
+        &handle->drv_handle, ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
 #if ADEV_USART_RS485_ENABLE
     aDevUsartRs485ArmComplete(handle);
 #endif
     handle->tx.state = ADEV_USART_TX_IDLE;
-    aDrvUsartEnableInterrupt(&handle->drv_handle);
+    aDrvUsartResumeDispatch(&handle->drv_handle);
 
     if (count != 0U) return (aSSize_t)count;
     return status == A_STATUS_TIMEOUT
@@ -947,13 +943,13 @@ aSSize_t aDevUsartWriteDirect(aDevUsartHandle_t *handle,
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
     handle->tx.state = ADEV_USART_TX_DIRECT;
-#if ADEV_USART_NEEDS_IRQ
+#if ADEV_USART_NEEDS_EVENTS
     if ((handle->settings.mode & ADEV_USART_TX_MASK) ==
         ADEV_USART_TX_INTERRUPT_BUFFERED)
-        (void)aDrvUsartSetInterruptEnabled(&handle->drv_handle,
-                                          ADRV_USART_EXTI_TXE, A_FALSE);
-    (void)aDrvUsartSetInterruptEnabled(&handle->drv_handle,
-                                      ADRV_USART_EXTI_TC, A_FALSE);
+        (void)aDrvUsartSetEventEnabled(&handle->drv_handle,
+                                          ADRV_USART_EVENT_TX_READY, A_FALSE);
+    (void)aDrvUsartSetEventEnabled(&handle->drv_handle,
+                                      ADRV_USART_EVENT_TX_COMPLETE, A_FALSE);
 #endif
     status = handle->tx.error;
 #if ADEV_USART_RS485_ENABLE

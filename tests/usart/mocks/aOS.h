@@ -9,7 +9,6 @@ typedef uintptr_t aOSCriticalState_t;
 uint32_t aOSGetUptimeMs(void);
 void *aOSAlloc(size_t size);
 void aOSFree(void *memory);
-aStatus_t aOSValidateIsrPriority(uint32_t priority);
 void aOSYield(void);
 aStatus_t aOSWaitObjectCreate(void **object);
 void aOSWaitObjectDestroy(void **object);

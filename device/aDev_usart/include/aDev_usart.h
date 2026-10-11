@@ -108,7 +108,7 @@ typedef struct {
  * UART_DE 当前返回 UNSUPPORTED；不提供方向延迟或协议帧间隔配置。
  */
 typedef struct {
-    /** aDrv USART 基础配置：逻辑实例、TX/RX 引脚、波特率、校验和停止位。 */
+    /** aDrv USART 配置，整体交给驱动初始化。 */
     aDrvUsartConfig_t drv_config;
 
     /**
@@ -119,12 +119,6 @@ typedef struct {
 
     /** 可选半双工方向管理；Read 不改变方向，最终 TC 自动释放 DE。 */
     aDevUsartRS485Config_t rs485;
-
-    /**
-     * USART/DMA 中断优先级，供中断、DMA 异步及 IDLE 使用；取值必须
-     * 满足当前 aDrv port 的优先级范围以及所使用 RTOS 的 ISR 调用约束。
-     */
-    uint8_t interrupt_priority;
 
     /**
      * 应用提供的共享 RX 环形缓冲区。RX 中断缓冲模式由 RXNE ISR 填充；
@@ -234,7 +228,7 @@ typedef struct {
 /**
  * @brief 填充 USART 配置默认值。
  *
- * 默认普通 TX/RX 和 Direct TX/RX 后端均使用轮询，中断优先级为 5，不启用 option，所有设备缓冲区
+ * 默认普通 TX/RX 和 Direct TX/RX 后端均使用轮询，不启用 option，所有设备缓冲区
  * 为空；aDrv 子配置由 aDrvUsartConfigStructInit() 初始化。
  *
  * @param[out] config 配置结构；为 NULL 时函数不执行任何操作。

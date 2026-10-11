@@ -12,6 +12,7 @@ typedef struct {
 static Channel channels[2][7];
 static unsigned mask, in_isr, calls, events_seen;
 static unsigned pending[12], irq_enabled[12];
+static unsigned irq_priority[12];
 static unsigned reload_reads, complete_on_enable;
 uint32_t test_usart_data;
 
@@ -28,7 +29,8 @@ void NVIC_ClearPendingIRQ(IRQn_Type irq) { pending[irq] = 0; }
 void NVIC_SetPendingIRQ(IRQn_Type irq) { pending[irq] = 1; }
 void nvic_irq_disable(IRQn_Type irq) { irq_enabled[irq] = 0; }
 void nvic_irq_enable(IRQn_Type irq, unsigned priority, unsigned subpriority)
-{ assert(priority <= 15 && subpriority == 0); irq_enabled[irq] = 1; }
+{ assert(priority <= 15 && subpriority == 0);
+  irq_enabled[irq] = 1; irq_priority[irq] = priority; }
 void rcu_periph_clock_enable(rcu_periph_enum clock) { (void)clock; }
 void dma_struct_para_init(dma_parameter_struct *p)
 { memset(p, 0, sizeof(*p)); }
@@ -180,19 +182,23 @@ static void test_usart(void)
 {
     aDrvUsartHandle_t uart = {
         .id = ADRV_USART_0, .instance = USART0, .initialized = A_TRUE,
+        .irq_priority = 6U,
     };
     aDrvUsartHandle_t shared = {
         .id = ADRV_USART_3, .instance = UART3, .initialized = A_TRUE,
+        .irq_priority = 9U,
     };
     aDrvUsartHandle_t conflict = {
         .id = ADRV_USART_5, .instance = USART5, .initialized = A_TRUE,
+        .irq_priority = 11U,
     };
     aDrvUsartRxProgress_t progress;
     uint8_t buffer[8];
     size_t count;
     calls = 0;
     assert(aDrvUsartAsyncRxCircularStart(&uart, buffer, sizeof(buffer),
-        5, uart_callback, &calls) == A_STATUS_OK);
+        uart_callback, &calls) == A_STATUS_OK);
+    assert(irq_priority[4] == 6U);
     channels[0][4].remaining = 4;
     channels[0][4].flags = DMA_FLAG_HTF;
     assert(aDrvUsartAsyncRxGetProgress(&uart, &progress) == A_STATUS_OK);
@@ -207,8 +213,9 @@ static void test_usart(void)
     assert(aDrvUsartAsyncRxStop(&uart, &count) == A_STATUS_OK && count == 8);
     assert(aDrvUsartAsyncRxAbort(&uart) == A_STATUS_OK);
     complete_on_enable = 1;
-    assert(aDrvUsartRxDmaStart(&uart, buffer, 1, 5,
+    assert(aDrvUsartRxDmaStart(&uart, buffer, 1,
         uart_callback, &calls) == A_STATUS_OK);
+    assert(irq_priority[4] == 6U);
     fire(DMA0_Channel4_IRQHandler);
     assert(calls == 3);
     assert(aDrvUsartAsyncRxGetRemaining(&uart, &count) == A_STATUS_OK);
@@ -217,12 +224,14 @@ static void test_usart(void)
     assert(aDrvUsartAsyncRxAbort(&uart) == A_STATUS_OK);
 
     assert(aDrvUsartAsyncRxCircularStart(&shared, buffer, 8,
-        5, uart_callback, &calls) == A_STATUS_OK);
+        uart_callback, &calls) == A_STATUS_OK);
+    assert(irq_priority[9] == 9U);
     assert(aDrvUsartAsyncRxCircularStart(&conflict, buffer, 8,
-        5, uart_callback, &calls) == A_STATUS_BUSY);
+        uart_callback, &calls) == A_STATUS_BUSY);
     assert(aDrvUsartAsyncRxAbort(&shared) == A_STATUS_OK);
     assert(aDrvUsartAsyncRxCircularStart(&conflict, buffer, 8,
-        5, uart_callback, &calls) == A_STATUS_OK);
+        uart_callback, &calls) == A_STATUS_OK);
+    assert(irq_priority[9] == 11U);
     channels[1][2].flags = DMA_FLAG_HTF;
     fire(DMA1_Channel2_IRQHandler);
     assert(calls == 4);

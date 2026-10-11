@@ -2,6 +2,12 @@
 
 #include "aDrv_usart_internal.h"
 
+/* 平台构建提供 OS 安全范围，驱动不依赖 OS 运行时或内核头。 */
+#if !defined(ADRV_USART_INTERRUPT_PRIORITY_MIN) || \
+    !defined(ADRV_USART_INTERRUPT_PRIORITY_MAX)
+#error "Platform must define USART interrupt priority limits"
+#endif
+
 static const aDrvPrivateUsartMapping_t s_usart_mappings[] = {
     {USART0, RCU_USART0, USART0_IRQn},
     {USART1, RCU_USART1, USART1_IRQn},
@@ -106,6 +112,7 @@ void aDrvUsartConfigStructInit(aDrvUsartConfig_t *config)
     config->stop_bits = ADRV_USART_STOP_1;
     config->tx_pin = ADRV_PIN_NONE;
     config->rx_pin = ADRV_PIN_NONE;
+    config->interrupt_priority = 5U;
 }
 
 void aDrvUsartHandleStructInit(aDrvUsartHandle_t *handle)
@@ -121,7 +128,7 @@ void aDrvUsartHandleStructInit(aDrvUsartHandle_t *handle)
     handle->parity = ADRV_USART_PARITY_NONE;
     handle->stop_bits = ADRV_USART_STOP_1;
     handle->id = ADRV_USART_0;
-    for (index = 0U; index < ADRV_USART_EXTI_MAX; ++index) {
+    for (index = 0U; index < ADRV_USART_EVENT_MAX; ++index) {
         handle->callbacks[index].function = NULL;
         handle->callbacks[index].argument = NULL;
     }
@@ -144,6 +151,9 @@ aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *config,
         (config->baud_rate == 0U) ||
         (config->parity > ADRV_USART_PARITY_ODD) ||
         (config->stop_bits > ADRV_USART_STOP_2) ||
+        (config->interrupt_priority > 15U) ||
+        (config->interrupt_priority < ADRV_USART_INTERRUPT_PRIORITY_MIN) ||
+        (config->interrupt_priority > ADRV_USART_INTERRUPT_PRIORITY_MAX) ||
         (aDrvResolvePin(config->tx_pin, &tx_gpio) != A_STATUS_OK) ||
         (aDrvResolvePin(config->rx_pin, &rx_gpio) != A_STATUS_OK)) {
         return A_STATUS_INVALID_PARAM;
@@ -192,6 +202,7 @@ aStatus_t aDrvUsartInitStatic(const aDrvUsartConfig_t *config,
     handle->parity = config->parity;
     handle->stop_bits = config->stop_bits;
     handle->id = config->id;
+    handle->irq_priority = config->interrupt_priority;
     handle->owner = ADRV_USART_OWNER_NONE;
     handle->initialized = A_TRUE;
     aDrvPrivateUsartHandleSet(config->id, handle);
@@ -212,7 +223,7 @@ aStatus_t aDrvUsartDeInitStatic(aDrvUsartHandle_t *handle)
     (void)aDrvUsartAsyncRxAbort(handle);
 #endif
 #if ADRV_USART_INTERRUPT_ENABLE
-    aDrvUsartDisableInterrupt(handle);
+    aDrvUsartPauseDispatch(handle);
 #endif
     aDrvPrivateUsartHandleSet(handle->id, NULL);
     usart_disable((uint32_t)handle->instance);

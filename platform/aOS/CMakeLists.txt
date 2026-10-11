@@ -146,6 +146,12 @@ add_library(aOS STATIC
     $<TARGET_OBJECTS:aOS_freertos_kernel>
 )
 
+# 供平台组合层把 ISR 安全范围传给驱动；不引入 aDrv -> aOS 链接依赖。
+set_target_properties(aOS PROPERTIES
+    AOS_ISR_PRIORITY_MIN "${FREERTOS_LIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY}"
+    AOS_ISR_PRIORITY_MAX "${FREERTOS_LIBRARY_LOWEST_INTERRUPT_PRIORITY}"
+)
+
 target_compile_definitions(aOS PUBLIC
     AOS_WORKQUEUE_ENABLE=$<BOOL:${AOS_WORKQUEUE_ENABLE}>
 )

@@ -40,6 +40,7 @@ aStatus_t aDevUsartCreate(const aDevUsartConfig_t *config,
                          aDevUsartHandle_t **handle)
 {
     assert((config->mode & ADEV_USART_RX_MASK) == ADEV_USART_RX_INTERRUPT_BUFFERED);
+    assert(config->drv_config.interrupt_priority == 6U);
     ring = config->rx_buffer; capacity = config->rx_buffer_size;
     assert(ring && capacity == 256U);
     head = tail = used = 0U;

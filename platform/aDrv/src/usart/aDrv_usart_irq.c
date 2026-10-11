@@ -3,7 +3,7 @@
 #include "aDrv_usart_internal.h"
 
 static uint32_t interrupt_value(aDrvUsartId_t id,
-                                aDrvUsartExti_t trigger)
+                                aDrvUsartEvent_t event)
 {
     static const uint32_t regular[] = {
         USART_INT_TBE,
@@ -20,16 +20,16 @@ static uint32_t interrupt_value(aDrvUsartId_t id,
         USART5_INT_ERR,
     };
 
-    return id == ADRV_USART_5 ? usart5[trigger] : regular[trigger];
+    return id == ADRV_USART_5 ? usart5[event] : regular[event];
 }
 
 static void interrupt_config(aDrvUsartHandle_t *handle,
-                             aDrvUsartExti_t trigger, aBool_t enabled)
+                             aDrvUsartEvent_t event, aBool_t enabled)
 {
-    if (trigger == ADRV_USART_EXTI_SOFTWARE) return;
-    const uint32_t interrupt = interrupt_value(handle->id, trigger);
+    if (event == ADRV_USART_EVENT_DISPATCH) return;
+    const uint32_t interrupt = interrupt_value(handle->id, event);
 
-    if (trigger == ADRV_USART_EXTI_ERROR) {
+    if (event == ADRV_USART_EVENT_RX_ERROR) {
         if (handle->id == ADRV_USART_5) {
             if (enabled) usart5_interrupt_enable((uint32_t)handle->instance,
                                                  USART5_INT_PERR);
@@ -64,7 +64,7 @@ static aBool_t has_registered_callback(const aDrvUsartHandle_t *handle)
 {
     size_t index;
 
-    for (index = 0U; index < ADRV_USART_EXTI_MAX; ++index) {
+    for (index = 0U; index < ADRV_USART_EVENT_MAX; ++index) {
         if (handle->callbacks[index].function != NULL) {
             return A_TRUE;
         }
@@ -72,12 +72,12 @@ static aBool_t has_registered_callback(const aDrvUsartHandle_t *handle)
     return A_FALSE;
 }
 
-aStatus_t aDrvUsartPendInterrupt(aDrvUsartHandle_t *handle)
+aStatus_t aDrvUsartRequestDispatch(aDrvUsartHandle_t *handle)
 {
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (!handle->initialized ||
-        !(handle->interrupt_enabled_mask & (1UL << ADRV_USART_EXTI_SOFTWARE)) ||
-        handle->callbacks[ADRV_USART_EXTI_SOFTWARE].function == NULL)
+        !(handle->interrupt_enabled_mask & (1UL << ADRV_USART_EVENT_DISPATCH)) ||
+        handle->callbacks[ADRV_USART_EVENT_DISPATCH].function == NULL)
         return A_STATUS_NOT_READY;
     handle->software_pending = A_TRUE;
     __DMB();
@@ -85,28 +85,28 @@ aStatus_t aDrvUsartPendInterrupt(aDrvUsartHandle_t *handle)
     return A_STATUS_OK;
 }
 
-aBool_t aDrvUsartInterruptIsSupported(void)
+aBool_t aDrvUsartEventIsSupported(void)
 {
     return A_TRUE;
 }
 
 aStatus_t aDrvUsartRegisterCallback(
-    aDrvUsartHandle_t *handle, const aDrvUsartExtiConfig_t *config)
+    aDrvUsartHandle_t *handle, const aDrvUsartCallbackConfig_t *config)
 {
     const aDrvPrivateUsartMapping_t *mapping;
     aStatus_t status;
 
     if ((handle == NULL) || (config == NULL) ||
-        (config->trigger >= ADRV_USART_EXTI_MAX) ||
-        (config->priority > 15U) || (config->callback == NULL)) {
+        (config->event >= ADRV_USART_EVENT_MAX) ||
+        (config->callback == NULL)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
-    if (((config->trigger == ADRV_USART_EXTI_TXE) &&
+    if (((config->event == ADRV_USART_EVENT_TX_READY) &&
          (((uint32_t)handle->owner & ADRV_USART_OWNER_ASYNC_TX) != 0U)) ||
-        ((config->trigger == ADRV_USART_EXTI_RXNE) &&
+        ((config->event == ADRV_USART_EVENT_RX_READY) &&
          (((uint32_t)handle->owner & ADRV_USART_OWNER_ASYNC_RX) != 0U))) {
         return A_STATUS_BUSY;
     }
@@ -118,23 +118,22 @@ aStatus_t aDrvUsartRegisterCallback(
     }
 
     mapping = aDrvPrivateUsartMappingGet(handle->id);
-    handle->callbacks[config->trigger].function = config->callback;
-    handle->callbacks[config->trigger].argument = config->argument;
-    handle->irq_priority = (uint8_t)config->priority;
+    handle->callbacks[config->event].function = config->callback;
+    handle->callbacks[config->event].argument = config->argument;
     if (config->enabled) {
-        handle->interrupt_enabled_mask |= 1UL << config->trigger;
+        handle->interrupt_enabled_mask |= 1UL << config->event;
     } else {
-        handle->interrupt_enabled_mask &= ~(1UL << config->trigger);
+        handle->interrupt_enabled_mask &= ~(1UL << config->event);
     }
     nvic_irq_enable(mapping->irq, handle->irq_priority, 0U);
-    interrupt_config(handle, config->trigger, config->enabled);
+    interrupt_config(handle, config->event, config->enabled);
     return A_STATUS_OK;
 }
 
 aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
-                                      aDrvUsartExti_t trigger)
+                                      aDrvUsartEvent_t event)
 {
-    if ((handle == NULL) || (trigger >= ADRV_USART_EXTI_MAX)) {
+    if ((handle == NULL) || (event >= ADRV_USART_EVENT_MAX)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (handle->initialized == 0U) {
@@ -144,43 +143,43 @@ aStatus_t aDrvUsartUnregisterCallback(aDrvUsartHandle_t *handle,
         return A_STATUS_NOT_READY;
     }
 
-    interrupt_config(handle, trigger, A_FALSE);
-    handle->interrupt_enabled_mask &= ~(1UL << trigger);
-    if (trigger == ADRV_USART_EXTI_SOFTWARE) handle->software_pending = A_FALSE;
-    handle->callbacks[trigger].function = NULL;
-    handle->callbacks[trigger].argument = NULL;
+    interrupt_config(handle, event, A_FALSE);
+    handle->interrupt_enabled_mask &= ~(1UL << event);
+    if (event == ADRV_USART_EVENT_DISPATCH) handle->software_pending = A_FALSE;
+    handle->callbacks[event].function = NULL;
+    handle->callbacks[event].argument = NULL;
     if (!has_registered_callback(handle)) {
-        aDrvUsartDisableInterrupt(handle);
+        aDrvUsartPauseDispatch(handle);
         aDrvPrivateUsartOwnerRelease(handle, ADRV_USART_OWNER_INTERRUPT);
     }
     return A_STATUS_OK;
 }
 
-aStatus_t aDrvUsartSetInterruptEnabled(aDrvUsartHandle_t *handle,
-                                       aDrvUsartExti_t trigger,
-                                       aBool_t enabled)
+aStatus_t aDrvUsartSetEventEnabled(aDrvUsartHandle_t *handle,
+                                   aDrvUsartEvent_t event,
+                                   aBool_t enabled)
 {
-    if ((handle == NULL) || (trigger >= ADRV_USART_EXTI_MAX)) {
+    if ((handle == NULL) || (event >= ADRV_USART_EVENT_MAX)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
     if ((((uint32_t)handle->owner & ADRV_USART_OWNER_INTERRUPT) == 0U) ||
-        (handle->callbacks[trigger].function == NULL)) {
+        (handle->callbacks[event].function == NULL)) {
         return A_STATUS_NOT_READY;
     }
 
-    interrupt_config(handle, trigger, enabled);
+    interrupt_config(handle, event, enabled);
     if (enabled) {
-        handle->interrupt_enabled_mask |= 1UL << trigger;
+        handle->interrupt_enabled_mask |= 1UL << event;
     } else {
-        handle->interrupt_enabled_mask &= ~(1UL << trigger);
+        handle->interrupt_enabled_mask &= ~(1UL << event);
     }
     return A_STATUS_OK;
 }
 
-void aDrvUsartEnableInterrupt(aDrvUsartHandle_t *handle)
+void aDrvUsartResumeDispatch(aDrvUsartHandle_t *handle)
 {
     const aDrvPrivateUsartMapping_t *mapping;
 
@@ -193,7 +192,7 @@ void aDrvUsartEnableInterrupt(aDrvUsartHandle_t *handle)
     nvic_irq_enable(mapping->irq, handle->irq_priority, 0U);
 }
 
-void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *handle)
+void aDrvUsartPauseDispatch(aDrvUsartHandle_t *handle)
 {
     const aDrvPrivateUsartMapping_t *mapping;
 
@@ -206,9 +205,9 @@ void aDrvUsartDisableInterrupt(aDrvUsartHandle_t *handle)
 }
 
 static aBool_t interrupt_pending(const aDrvUsartHandle_t *handle,
-                                 aDrvUsartExti_t trigger)
+                                 aDrvUsartEvent_t event)
 {
-    if (trigger == ADRV_USART_EXTI_ERROR) {
+    if (event == ADRV_USART_EVENT_RX_ERROR) {
         if (handle->id == ADRV_USART_5) {
             return usart5_interrupt_flag_get(handle->instance,
                        USART5_INT_FLAG_ERR_ORERR) != RESET ||
@@ -246,21 +245,21 @@ static aBool_t interrupt_pending(const aDrvUsartHandle_t *handle,
     if (handle->id == ADRV_USART_5) {
         return usart5_interrupt_flag_get(
                    (uint32_t)handle->instance,
-                   (usart5_interrupt_flag_enum)usart5[trigger]) != RESET;
+                   (usart5_interrupt_flag_enum)usart5[event]) != RESET;
     }
 
     return usart_interrupt_flag_get(
                (uint32_t)handle->instance,
-               (usart_interrupt_flag_enum)regular[trigger]) != RESET;
+               (usart_interrupt_flag_enum)regular[event]) != RESET;
 }
 
 static void invoke_callback(aDrvUsartHandle_t *handle,
-                            aDrvUsartExti_t trigger)
+                            aDrvUsartEvent_t event)
 {
-    const aDrvUsartCallback_t callback = handle->callbacks[trigger];
+    const aDrvUsartCallback_t callback = handle->callbacks[event];
 
-    if (((handle->interrupt_enabled_mask & (1UL << trigger)) != 0U) &&
-        (callback.function != NULL) && interrupt_pending(handle, trigger)) {
+    if (((handle->interrupt_enabled_mask & (1UL << event)) != 0U) &&
+        (callback.function != NULL) && interrupt_pending(handle, event)) {
         callback.function(callback.argument);
     }
 }
@@ -278,26 +277,26 @@ static void usart_irq_dispatch(aDrvUsartId_t id)
     }
 
     if (handle->software_pending &&
-        (handle->interrupt_enabled_mask & (1UL << ADRV_USART_EXTI_SOFTWARE))) {
+        (handle->interrupt_enabled_mask & (1UL << ADRV_USART_EVENT_DISPATCH))) {
         handle->software_pending = A_FALSE;
         const aDrvUsartCallback_t callback =
-            handle->callbacks[ADRV_USART_EXTI_SOFTWARE];
+            handle->callbacks[ADRV_USART_EVENT_DISPATCH];
         if (callback.function != NULL) callback.function(callback.argument);
     }
 
     /* 先报告并清除错误，避免 RXNE 读取把错误状态一并清掉。 */
-    invoke_callback(handle, ADRV_USART_EXTI_ERROR);
-    invoke_callback(handle, ADRV_USART_EXTI_RXNE);
-    invoke_callback(handle, ADRV_USART_EXTI_TXE);
-    invoke_callback(handle, ADRV_USART_EXTI_TC);
+    invoke_callback(handle, ADRV_USART_EVENT_RX_ERROR);
+    invoke_callback(handle, ADRV_USART_EVENT_RX_READY);
+    invoke_callback(handle, ADRV_USART_EVENT_TX_READY);
+    invoke_callback(handle, ADRV_USART_EVENT_TX_COMPLETE);
 
     if (((handle->interrupt_enabled_mask &
-          (1UL << ADRV_USART_EXTI_IDLE)) != 0U) &&
-        interrupt_pending(handle, ADRV_USART_EXTI_IDLE)) {
+          (1UL << ADRV_USART_EVENT_RX_IDLE)) != 0U) &&
+        interrupt_pending(handle, ADRV_USART_EVENT_RX_IDLE)) {
         (void)usart_data_receive((uint32_t)handle->instance);
-        if (handle->callbacks[ADRV_USART_EXTI_IDLE].function != NULL) {
-            handle->callbacks[ADRV_USART_EXTI_IDLE].function(
-                handle->callbacks[ADRV_USART_EXTI_IDLE].argument);
+        if (handle->callbacks[ADRV_USART_EVENT_RX_IDLE].function != NULL) {
+            handle->callbacks[ADRV_USART_EVENT_RX_IDLE].function(
+                handle->callbacks[ADRV_USART_EVENT_RX_IDLE].argument);
         }
     }
 

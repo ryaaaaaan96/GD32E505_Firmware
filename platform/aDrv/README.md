@@ -23,6 +23,19 @@ GD32 实现封装 USART0、UART3、USART5 的 TX 与 RX DMA 通道。UART3 与 U
 固定共享 DMA1 Channel 4（TX）和 DMA1 Channel 2（RX），通用 DMA 驱动禁止
 同一通道被多个句柄占用。当前只为三个支持 DMA 的串口分配适配状态。
 
+USART 中断优先级由 `aDrvUsartConfig_t.interrupt_priority` 配置，默认 5。
+`aDrvUsartInitStatic` 在写硬件前校验并保存，之后 USART 回调注册、IDLE、
+单次及循环 DMA 接收统一使用该值；回调配置及 DMA 启动接口不再接收优先级。
+GD32 要求 0..15，同时受当前 OS ISR 安全范围限制。aOS 构建导出范围，
+`platform/CMakeLists.txt` 通过私有编译定义传给 aDrv；驱动不依赖 OS 运行时。
+独立编译驱动时须提供 `ADRV_USART_INTERRUPT_PRIORITY_MIN/MAX`，不能省略安全范围。
+
+USART 对设备层使用事件和回调命名：`aDrvUsartEvent_t`、
+`aDrvUsartCallbackConfig_t.event`、`aDrvUsartSetEventEnabled`、
+`aDrvUsartRequestDispatch`。GD32 内部仍使用 NVIC、外设中断源和 IRQ 入口。
+`PauseDispatch/ResumeDispatch` 只控制 USART 事件派发，不暂停 DMA 回调，
+不支持嵌套、不等待在途回调退出，也不代替任务互斥。调用细节见公共头。
+
 DMA 中断入口、标志消费和循环计数由 `src/dma/aDrv_dma.c` 统一管理。
 `aDrvDmaConfigureInterrupt` 注册 ISR 事件，`aDrvDmaGetProgress` 查询累计搬运
 数量；查询先消费事件时会挂起 DMA IRQ，回调不会转移到查询线程。

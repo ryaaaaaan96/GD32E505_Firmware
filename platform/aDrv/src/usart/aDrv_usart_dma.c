@@ -166,7 +166,7 @@ aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *handle,
         return A_STATUS_NOT_READY;
     }
     if ((handle->interrupt_enabled_mask &
-         (1UL << ADRV_USART_EXTI_TXE)) != 0U) {
+         (1UL << ADRV_USART_EVENT_TX_READY)) != 0U) {
         return A_STATUS_BUSY;
     }
 
@@ -288,7 +288,7 @@ aBool_t aDrvUsartDmaRxIsSupported(aDrvUsartId_t id)
 }
 
 static aStatus_t rx_start(aDrvUsartHandle_t *handle,
-    void *buffer, size_t size, uint8_t priority,
+    void *buffer, size_t size,
     aDrvUsartDmaCallback_t callback, void *argument)
 {
     aDrvPrivateUsartDmaState_t *state;
@@ -303,7 +303,7 @@ static aStatus_t rx_start(aDrvUsartHandle_t *handle,
         return A_STATUS_NOT_READY;
     }
     if ((handle->interrupt_enabled_mask &
-         (1UL << ADRV_USART_EXTI_RXNE)) != 0U) {
+         (1UL << ADRV_USART_EVENT_RX_READY)) != 0U) {
         return A_STATUS_BUSY;
     }
 
@@ -345,8 +345,8 @@ static aStatus_t rx_start(aDrvUsartHandle_t *handle,
         state->rx_size = size;
         state->rx_circular = A_FALSE;
         state->rx_busy = A_TRUE;
-        status = rx_callback_configure(state, priority, callback, argument,
-                                        A_FALSE);
+        status = rx_callback_configure(state, handle->irq_priority, callback,
+                                        argument, A_FALSE);
     }
     if (status == A_STATUS_OK) {
         usart_dma_receive_config((uint32_t)handle->instance,
@@ -369,23 +369,20 @@ static aStatus_t rx_start(aDrvUsartHandle_t *handle,
 aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *handle,
                                 void *buffer, size_t size)
 {
-    return rx_start(handle, buffer, size, 0U, NULL, NULL);
+    return rx_start(handle, buffer, size, NULL, NULL);
 }
 
 aStatus_t aDrvUsartRxDmaStart(
     aDrvUsartHandle_t *handle, void *buffer, size_t size,
-    uint8_t interrupt_priority, aDrvUsartDmaCallback_t callback,
-    void *argument)
+    aDrvUsartDmaCallback_t callback, void *argument)
 {
-    if (callback == NULL || interrupt_priority > 15U)
+    if (callback == NULL)
         return A_STATUS_INVALID_PARAM;
-    return rx_start(handle, buffer, size, interrupt_priority,
-                    callback, argument);
+    return rx_start(handle, buffer, size, callback, argument);
 }
 
 aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
                                         void *buffer, size_t size,
-                                        uint8_t interrupt_priority,
                                         aDrvUsartDmaCallback_t callback,
                                         void *argument)
 {
@@ -395,15 +392,14 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
 
     if ((handle == NULL) || (buffer == NULL) || (size < 2U) ||
         (callback == NULL) ||
-        (size > ADRV_USART_DMA_MAX_TRANSFER) ||
-        (interrupt_priority > 15U)) {
+        (size > ADRV_USART_DMA_MAX_TRANSFER)) {
         return A_STATUS_INVALID_PARAM;
     }
     if (handle->initialized == 0U) {
         return A_STATUS_NOT_READY;
     }
     if ((handle->interrupt_enabled_mask &
-         (1UL << ADRV_USART_EXTI_RXNE)) != 0U) {
+         (1UL << ADRV_USART_EVENT_RX_READY)) != 0U) {
         return A_STATUS_BUSY;
     }
 
@@ -449,7 +445,7 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *handle,
     state->rx_size = size;
     state->rx_circular = A_TRUE;
     state->rx_busy = A_TRUE;
-    status = rx_callback_configure(state, interrupt_priority, callback,
+    status = rx_callback_configure(state, handle->irq_priority, callback,
                                     argument, A_TRUE);
     if (status == A_STATUS_OK) {
         usart_dma_receive_config((uint32_t)handle->instance,

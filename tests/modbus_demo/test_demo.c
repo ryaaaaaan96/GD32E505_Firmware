@@ -207,6 +207,7 @@ static void check_config(const aDevUsartConfig_t *config)
     assert(config->drv_config.baud_rate == 115200U);
     assert(config->drv_config.parity == ADRV_USART_PARITY_NONE);
     assert(config->drv_config.stop_bits == ADRV_USART_STOP_1);
+    assert(config->drv_config.interrupt_priority == 6U);
     assert(config->rs485.mode == ADEV_USART_RS485_GPIO_DE);
     assert(config->rs485.de_pin == ADRV_PIN(ADRV_GPIO_PORT_A, 15));
     assert(config->rs485.de_active_level == ADRV_GPIO_HIGH);

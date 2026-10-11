@@ -8,6 +8,7 @@
 static unsigned route, changes, stage;
 static aBool_t swd_only;
 static unsigned error_flag, data_reads;
+static unsigned clock_writes;
 unsigned usart_flag_get(uint32_t instance, uint32_t flag)
 {
     assert(instance != USART5);
@@ -30,7 +31,8 @@ uint16_t usart_data_receive(uint32_t instance)
     error_flag = 0U;
     return 0x5aU;
 }
-void rcu_periph_clock_enable(rcu_periph_enum clock) { (void)clock; }
+void rcu_periph_clock_enable(rcu_periph_enum clock)
+{ (void)clock; ++clock_writes; }
 uint32_t test_gpio_spd[7];
 void gpio_compensation_config(uint32_t enable) { (void)enable; }
 unsigned gpio_compensation_flag_get(void) { return SET; }
@@ -83,10 +85,30 @@ int main(void)
     unsigned before;
 
     aDrvUsartConfigStructInit(&config);
+    assert(config.interrupt_priority == 5U);
     aDrvUsartHandleStructInit(&handle);
     config.id = ADRV_USART_2;
     config.tx_pin = ADRV_PIN(ADRV_GPIO_PORT_C, 10);
     config.rx_pin = ADRV_PIN(ADRV_GPIO_PORT_C, 11);
+    /* 优先级检查在驱动内完成，拒绝时不能写硬件或占用实例。
+     * 同一测试分别使用默认和收窄后的平台范围编译。 */
+    const uint8_t priorities[] = {0U, 4U, 5U, 6U, 7U, 12U, 13U, 15U, 16U, 255U};
+    for (size_t i = 0U; i < sizeof(priorities); ++i) {
+        const uint8_t priority = priorities[i];
+        config.interrupt_priority = priority;
+        before = clock_writes;
+        if (priority >= ADRV_USART_INTERRUPT_PRIORITY_MIN &&
+            priority <= ADRV_USART_INTERRUPT_PRIORITY_MAX && priority <= 15U) {
+            assert(aDrvUsartInitStatic(&config, &handle) == A_STATUS_OK);
+            config.interrupt_priority = 0U; /* 输入配置不被长期借用。 */
+            assert(handle.irq_priority == priority);
+            assert(aDrvUsartDeInitStatic(&handle) == A_STATUS_OK);
+        } else {
+            assert(aDrvUsartInitStatic(&config, &handle) == A_STATUS_INVALID_PARAM);
+            assert(clock_writes == before && !handle.initialized);
+        }
+    }
+    config.interrupt_priority = ADRV_USART_INTERRUPT_PRIORITY_MIN;
     assert(aDrvUsartInitStatic(&config, &handle) == A_STATUS_OK);
     assert(route == GPIO_USART2_PARTIAL_REMAP);
     assert(aDrvUsartDeInitStatic(&handle) == A_STATUS_OK);
@@ -132,6 +154,6 @@ int main(void)
         assert(aDrvUsartTryReadByte(&handle, &byte) == A_STATUS_OK);
         assert(byte == 0x5aU);
     }
-    puts("USART2 routing and PA15 GPIO/SWD setup passed");
+    puts("USART priority validation/binding, routing and PA15 GPIO/SWD setup passed");
     return 0;
 }

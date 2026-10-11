@@ -46,15 +46,18 @@ if os.environ.get("SANITIZE"):
     flags += ["-fsanitize=address", "-fno-omit-frame-pointer"]
 with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     routes = str(Path(tmp) / "routes")
-    subprocess.run([
-        "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
-        "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
-        "-Itests/modbus_demo/mocks", "-Iplatform/aDrv/src",
-        "-Iplatform/aDrv/include", "-Iplatform/aLib/include",
-        "tests/modbus_demo/test_routes.c", "platform/aDrv/src/gpio/aDrv_gpio.c",
-        "platform/aDrv/src/usart/aDrv_usart.c", "-o", routes,
-    ], cwd=root, check=True)
-    subprocess.run([routes], check=True)
+    for minimum, maximum in ((5, 15), (7, 12)):
+        subprocess.run([
+            "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+            "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+            f"-DADRV_USART_INTERRUPT_PRIORITY_MIN={minimum}",
+            f"-DADRV_USART_INTERRUPT_PRIORITY_MAX={maximum}",
+            "-Itests/modbus_demo/mocks", "-Iplatform/aDrv/src",
+            "-Iplatform/aDrv/include", "-Iplatform/aLib/include",
+            "tests/modbus_demo/test_routes.c", "platform/aDrv/src/gpio/aDrv_gpio.c",
+            "platform/aDrv/src/usart/aDrv_usart.c", "-o", routes,
+        ], cwd=root, check=True)
+        subprocess.run([routes], check=True)
     for master in (0, 1):
         for dynamic in (0, 1):
             executable = str(Path(tmp) / f"demo-{master}-{dynamic}")

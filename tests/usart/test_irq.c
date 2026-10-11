@@ -9,6 +9,7 @@ static const aDrvPrivateUsartMapping_t mapping = {0};
 static unsigned callbacks, register_writes, isr_depth;
 static aBool_t pending, enabled, repend;
 static unsigned hardware_event;
+static unsigned configured_priority;
 
 void USART0_IRQHandler(void);
 void USART5_IRQHandler(void);
@@ -21,7 +22,8 @@ aStatus_t aDrvPrivateUsartOwnerAcquire(aDrvUsartHandle_t *h, aDrvUsartOwner_t ow
 void aDrvPrivateUsartOwnerRelease(aDrvUsartHandle_t *h, aDrvUsartOwner_t owner)
 { h->owner &= ~owner; }
 void nvic_irq_enable(IRQn_Type irq, unsigned priority, unsigned subpriority)
-{ (void)irq; (void)priority; (void)subpriority; enabled = A_TRUE; }
+{ (void)irq; assert(subpriority == 0U);
+  configured_priority = priority; enabled = A_TRUE; }
 void nvic_irq_disable(IRQn_Type irq) { (void)irq; enabled = A_FALSE; }
 void NVIC_SetPendingIRQ(IRQn_Type irq) { (void)irq; pending = A_TRUE; }
 void __DMB(void) {}
@@ -45,7 +47,7 @@ static void callback(void *argument)
     ++callbacks;
     if (repend) {
         repend = A_FALSE;
-        assert(aDrvUsartPendInterrupt(&handle) == A_STATUS_OK);
+        assert(aDrvUsartRequestDispatch(&handle) == A_STATUS_OK);
     }
 }
 
@@ -61,41 +63,48 @@ static void service(void)
 
 int main(void)
 {
-    assert(aDrvUsartPendInterrupt(NULL) == A_STATUS_INVALID_PARAM);
-    assert(aDrvUsartPendInterrupt(&handle) == A_STATUS_NOT_READY);
+    assert(aDrvUsartRequestDispatch(NULL) == A_STATUS_INVALID_PARAM);
+    assert(aDrvUsartRequestDispatch(&handle) == A_STATUS_NOT_READY);
     for (unsigned variant = 0U; variant < 2U; ++variant) {
         memset(&handle, 0, sizeof(handle));
         handle.id = variant ? ADRV_USART_5 : ADRV_USART_0;
         handle.initialized = A_TRUE;
+        handle.irq_priority = variant ? 11U : 6U;
         callbacks = register_writes = hardware_event = 0U;
-        aDrvUsartExtiConfig_t config = {
-            .trigger = ADRV_USART_EXTI_SOFTWARE, .priority = 5U,
+        aDrvUsartCallbackConfig_t config = {
+            .event = ADRV_USART_EVENT_DISPATCH,
             .callback = callback, .argument = &handle, .enabled = A_TRUE,
         };
         assert(aDrvUsartRegisterCallback(&handle, &config) == A_STATUS_OK);
+        assert(configured_priority == (variant ? 11U : 6U));
         assert(register_writes == 0U); /* Software event is not a SPL enum. */
-        assert(aDrvUsartPendInterrupt(&handle) == A_STATUS_OK);
-        assert(aDrvUsartPendInterrupt(&handle) == A_STATUS_OK);
+        assert(aDrvUsartRequestDispatch(&handle) == A_STATUS_OK);
+        assert(aDrvUsartRequestDispatch(&handle) == A_STATUS_OK);
         assert(pending && callbacks == 0U);
         service();
         assert(callbacks == 1U && !handle.software_pending);
         service();
         assert(callbacks == 1U); /* Coalesced / spurious IRQ. */
         repend = A_TRUE;
-        assert(aDrvUsartPendInterrupt(&handle) == A_STATUS_OK);
+        assert(aDrvUsartRequestDispatch(&handle) == A_STATUS_OK);
         service();
         assert(callbacks == 2U && pending);
         service();
         assert(callbacks == 3U && !pending);
-        config.trigger = ADRV_USART_EXTI_TC;
+        config.event = ADRV_USART_EVENT_TX_COMPLETE;
         assert(aDrvUsartRegisterCallback(&handle, &config) == A_STATUS_OK);
+        config.event = ADRV_USART_EVENT_RX_IDLE;
+        assert(aDrvUsartRegisterCallback(&handle, &config) == A_STATUS_OK);
+        aDrvUsartPauseDispatch(&handle);
+        aDrvUsartResumeDispatch(&handle);
+        assert(configured_priority == (variant ? 11U : 6U));
         hardware_event = variant ? USART5_INT_FLAG_TC : USART_INT_FLAG_TC;
-        assert(aDrvUsartPendInterrupt(&handle) == A_STATUS_OK);
+        assert(aDrvUsartRequestDispatch(&handle) == A_STATUS_OK);
         service();
         assert(callbacks == 5U); /* Software and hardware in the same IRQ. */
-        assert(aDrvUsartUnregisterCallback(&handle, ADRV_USART_EXTI_SOFTWARE)
+        assert(aDrvUsartUnregisterCallback(&handle, ADRV_USART_EVENT_DISPATCH)
                == A_STATUS_OK);
-        assert(aDrvUsartPendInterrupt(&handle) == A_STATUS_NOT_READY);
+        assert(aDrvUsartRequestDispatch(&handle) == A_STATUS_NOT_READY);
     }
     puts("USART software IRQ dispatch tests passed");
     return 0;

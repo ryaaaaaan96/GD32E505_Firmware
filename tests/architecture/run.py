@@ -35,6 +35,9 @@ for folder in ("app", "device", "func", "platform/aLib"):
         if path.is_relative_to(root / "func/aPoll"):
             assert not re.search(
                 r'#\s*include\s*[<"](?:aBus|aModbus|aDrv|aDev)', text), path
+        if path.is_relative_to(root / "device/aDev_usart"):
+            assert not re.search(r'\b(?:interrupt_priority|irq_priority|'
+                                 r'aOSValidateIsrPriority)\b', text), path
         if path.is_relative_to(root / "func/aModbus"):
             assert not re.search(r'#\s*include\s*[<"]aPoll', text), path
             assert not re.search(r'#\s*include\s*[<"](?:aDrv|aDev)',

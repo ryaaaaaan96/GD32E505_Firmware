@@ -119,22 +119,35 @@ aDrv 构建直接选择 GD32 厂商库、启动文件和源码。新增 STM32 pr
 位置：[Aclass.cmake](cmake/Aclass.cmake)、
 [aDrv/CMakeLists.txt](platform/aDrv/CMakeLists.txt)。
 
-### 5. USART 中断优先级归属（高，范围已明确）
+### 5. USART 中断优先级归属（高，已修复）
 
 原评审提出 USART 配置和 ISR 回调契约仍带有 MCU 特征。用户明确保留现有
-`aDevUsartConfig_t` 嵌入 `drv_config` 的方式，本项只调整中断优先级归属。
+`aDevUsartConfig_t` 嵌入 `drv_config` 的方式，本项调整中断优先级归属和
+aDev/aDrv 之间的事件、回调命名。
 
-- [ ] 将 `interrupt_priority` 从 aDev 配置下沉到 `aDrvUsartConfig_t`，由
+- [x] 将 `interrupt_priority` 从 aDev 配置下沉到 `aDrvUsartConfig_t`，由
   应用通过 `drv_config.interrupt_priority` 配置。
-- [ ] aDrv 初始化时绑定优先级，USART 回调注册及 DMA 接收直接使用驱动保存的值。
-- [ ] 删除 aDev 对优先级的保存、读取、传递和校验；aDev 不通过
+- [x] aDrv 初始化时绑定优先级，USART 回调注册及 DMA 接收直接使用驱动保存的值。
+- [x] 删除 aDev 对优先级的保存、读取、传递和校验；aDev 不通过
   `config->drv_config.interrupt_priority` 或新增查询包装继续管理它。
-- [ ] 将合法范围与 OS ISR 调用约束的检查安排在驱动或平台配置边界，保持
+- [x] 将合法范围与 OS ISR 调用约束的检查安排在驱动或平台配置边界，保持
   现有中断安全要求，不把检查职责留在 aDev。
-- [ ] 同步板级配置、驱动接口、测试和文档，验证 USART、DMA、IDLE 使用同一绑定值。
+- [x] 同步板级配置、驱动接口、测试和文档，验证 USART、DMA、IDLE 使用同一绑定值。
+- [x] aDev 使用事件、回调和派发接口，硬件 IRQ 命名与实现留在 aDrv 内部；
+  同步类型、事件枚举、调用点和测试，保持现有运行行为。
 
-最新范围约束：**aDev 层其他修改不做。** 不将 `mode`、RS485 配置或 DE 控制
+范围限于优先级归属和接口命名；不将 `mode`、RS485 配置或 DE 控制
 一并搬到 aDrv，不改造回调执行上下文，不借此重写设备状态或同步实现。
+
+实现：aOS 构建导出 ISR 优先级范围，平台组合层通过私有编译定义传给 aDrv。
+驱动初始化在硬件操作前校验 GD32 0..15 及 OS 范围；回调注册配置和 DMA
+启动接口移除优先级参数。默认值保持 5，控制台和 RS485 板级配置保持 6。
+驱动接口使用 Event、Callback、RequestDispatch 和 Pause/ResumeDispatch
+命名。Pause/Resume 仅暂停、恢复 USART 事件派发，不包含 DMA 回调或任务互斥。
+`FromISR`、现有模式和编译开关保持原设计，Linux 回调上下文和同步适配后续处理。
+
+验证：USART、DMA、Modbus 板级端口、控制台及架构主机回归通过；完整固件
+构建受本机 ARM GCC 和 Ninja 缺失阻塞，尚未进行板上验证。
 
 位置：[aDev_usart.h](device/aDev_usart/include/aDev_usart.h)、
 [aDrv_usart.h](platform/aDrv/include/aDrv_usart.h)、
@@ -146,7 +159,7 @@ USART ring 状态使用 `volatile`，任务与 ISR 通过临界区协调；aOS �
 说明不提供跨核互斥。当前 GD32 可按这一模型工作，但 Linux 多线程或多核
 不能把 `volatile` 或单核屏蔽中断当作同步机制。
 
-原决定为修复；后续用户限定 aDev 只调整中断优先级，因此本节保留问题和
+原决定为修复；当前 aDev 修改限于中断优先级归属和接口命名，因此本节保留问题和
 后续修复目标，不据此扩大本轮 aDev 修改范围。
 
 - [ ] 梳理每个共享对象的生产者、消费者、锁、内存可见性及生命周期约束。

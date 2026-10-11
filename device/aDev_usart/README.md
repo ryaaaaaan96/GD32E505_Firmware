@@ -17,6 +17,15 @@ OPTION_RX_IDLE 是接收附加功能。普通、Direct、Async 都使用对应�
 不再有 direct_tx_backend/direct_rx_backend 或第二份后端选择。
 DMA_BUFFERED 名称表示具备缓冲流能力；不提供 ring 时可用于显式用户 buffer 操作。
 
+应用在 `drv_config.interrupt_priority` 设置 USART/DMA 中断优先级；默认值、
+校验和保存均由 aDrv 完成，aDev 只传递完整 `drv_config`，不读取或传递其中的
+优先级。现有 mode、IRQ 回调上下文和同步方式保持不变。
+
+aDev 通过 `aDrvUsartEvent_t` 和事件回调与驱动交互：`SetEventEnabled` 控制
+事件使能，`RequestDispatch` 请求派发，`PauseDispatch/ResumeDispatch` 短暂
+暂停和恢复 USART 事件派发。它们不包含 DMA 回调，也不提供任务互斥。
+具体 IRQ 操作留在 aDrv；当前 `FromISR` 上下文约束及中断/DMA 模式开关仍保留。
+
 - 轮询：普通与 Direct 可用；不支持 Async。
 - 中断缓冲：普通收发、持续 ReadAsync 可用；当前不实现中断 Direct/TX Async，返回 UNSUPPORTED。
 - DMA：提供 ring 时支持普通缓冲收发；TX Direct/Async 使用用户 buffer。
@@ -31,7 +40,8 @@ DMA_BUFFERED 名称表示具备缓冲流能力；不提供 ring 时可用于显�
 ## Async 与接收字节回调
 
 不提供 CallbackSet、RegisterEventCallback、RegisterIsrEventCallback。
-硬件 IRQ 分发始终由 aDev 注册。缓冲模式通过 ReadAsync/WriteAsync 请求传入回调。
+驱动事件回调由 aDev 内部注册，GD32 由 aDrv 的 IRQ 入口派发。
+缓冲模式通过 ReadAsync/WriteAsync 请求传入业务回调。
 活动期间不替换回调：RX 先 Cancel，再重新 ReadAsync；TX 等本次终结后再提交。
 
 所有 Async 回调统一在 USART/DMA ISR 中执行。TX 超时由 aOS 定时服务记录终态，

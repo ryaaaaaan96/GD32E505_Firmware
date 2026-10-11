@@ -16,10 +16,10 @@ static const aDevUsartConfig_t usart_config = {
         .stop_bits = ADRV_USART_STOP_1,
         .tx_pin = ADRV_PIN(ADRV_GPIO_PORT_C, 10),
         .rx_pin = ADRV_PIN(ADRV_GPIO_PORT_C, 11),
+        .interrupt_priority = 6U,
     },
     .mode = ADEV_USART_TX_INTERRUPT_BUFFERED |
             ADEV_USART_RX_INTERRUPT_CALLBACK,
-    .interrupt_priority = 6U,
     .tx_buffer = tx_buffer,
     .tx_buffer_size = sizeof(tx_buffer),
     .rs485 = {
