@@ -29,13 +29,12 @@ void aModbusServiceConfigStructInit(aModbusServiceConfig_t *config)
 {
     if (config != NULL) {
         const aModbusServiceConfig_t defaults = {
+            .request_timeout = A_TIMEOUT_MS(1000U),
             .error_delay_ms = 5U
         };
         *config = defaults;
         aModbusConfigStructInit(&config->modbus);
         aModbusServerProcessRequestStructInit(&config->server);
-        aOSTaskConfigStructInit(&config->task);
-        config->task.name = "modbus";
     }
 }
 
@@ -97,6 +96,8 @@ void aModbusBusMapStructInit(aModbusBusMap_t *map)
 {
     if (map != NULL) {
         const aModbusBusMap_t defaults = {
+            .area = AMODBUS_AREA_HOLDING_REGISTERS,
+            .quantity = 0U,
             .flags = AMODBUS_ACCESS_READ | AMODBUS_ACCESS_WRITE,
             .target.paramIndex = AMODBUS_SIG_WHOLE
         };
@@ -480,7 +481,8 @@ static aStatus_t config_check(const aModbusConfig_t *config)
     } else if (config->transport_type != AMODBUS_TRANSPORT_TCP) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (config->role == AMODBUS_ROLE_SERVER && config->range_count == 0U) {
+    if (config->role == AMODBUS_ROLE_SERVER &&
+        config->range_count == 0U && config->map_count == 0U) {
         return A_STATUS_INVALID_PARAM;
     }
     return aModbusBusDefinitionsCheck(config);
@@ -494,6 +496,10 @@ static aStatus_t instance_init(const aModbusConfig_t *config,
     memset(handle, 0, sizeof(*handle));
     atomic_init(&handle->active, A_FALSE);
     handle->config = *config;
+    if (handle->config.snapshot == NULL) {
+        handle->config.snapshot = handle->snapshot;
+        handle->config.snapshot_size = sizeof(handle->snapshot);
+    }
     handle->dynamic = dynamic;
     nmbs_platform_conf_create(&platform);
     platform.transport = config->transport_type == AMODBUS_TRANSPORT_RTU ?
@@ -763,6 +769,61 @@ aStatus_t aModbusClientWrite(aModbusHandle_t *handle,
     error = client_write(handle, request->unit_id, access->area,
         access->address, access->quantity, access->data);
     return operation_end(handle, error, request->result);
+}
+
+aStatus_t aModbusClientReadBatch(aModbusHandle_t *handle,
+    const aModbusClientBatchRequest_t *request)
+{
+    const aModbusPoll_t *first;
+    uint16_t registers[AMODBUS_MAX_REGISTERS];
+    nmbs_bitfield bits;
+    size_t count = 0U;
+    uint16_t quantity = 0U;
+    aStatus_t status, finished;
+    nmbs_error error = NMBS_ERROR_NONE;
+    void *data;
+
+    if (request == NULL || request->completed == NULL) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    *request->completed = 0U;
+    if (request->items == NULL || request->count == 0U) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    first = request->items;
+    status = operation_begin(handle, AMODBUS_ROLE_CLIENT,
+                              request->timeout, request->result);
+    if (status != A_STATUS_OK) return status;
+    while (count < request->count) {
+        const aModbusPoll_t *item = &request->items[count];
+        uint16_t limit = aModbusAreaIsBits(first->area) ?
+                         AMODBUS_MAX_BITS : AMODBUS_MAX_REGISTERS;
+        if (item->area != first->area ||
+            (count != 0U &&
+             (item->flags & AMODBUS_POLL_FLAG_BREAK_BEFORE) != 0U) ||
+            item->address != (uint32_t)first->address + quantity) break;
+        status = aModbusClientPollCheck(
+            &handle->config, item, request->unit_id);
+        if (status != A_STATUS_OK) break;
+        if (item->quantity > limit - quantity) break;
+        quantity = (uint16_t)(quantity + item->quantity);
+        count++;
+    }
+    if (count == 0U || status != A_STATUS_OK) {
+        /* 无效项在启动检查时应已拒绝，运行期失败也允许调用方前进。 */
+        *request->completed = count + 1U;
+        atomic_store(&handle->active, A_FALSE);
+        return status == A_STATUS_OK ? A_STATUS_INVALID_PARAM : status;
+    }
+    *request->completed = count;
+    data = aModbusAreaIsBits(first->area) ? (void *)bits : registers;
+    error = client_read(handle, request->unit_id, first->area,
+                        first->address, quantity, data);
+    if (error == NMBS_ERROR_NONE) {
+        status = aModbusBusPublish(handle, request->items, count, data);
+    }
+    finished = operation_end(handle, error, request->result);
+    return finished != A_STATUS_OK ? finished : status;
 }
 
 static aStatus_t client_sig(aModbusHandle_t *handle,

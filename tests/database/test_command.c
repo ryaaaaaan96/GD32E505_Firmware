@@ -1,7 +1,7 @@
 #define main database_fixture_main
 #include "test_database.c"
 #undef main
-#include "database_service.h"
+#include "system_init.c"
 #include <stdarg.h>
 
 int test_database_command(int argc, char **argv);
@@ -46,7 +46,7 @@ int main(void)
 
     memset(memory, 0xFF, sizeof(memory));
     assert(memory_start() == A_STATUS_OK);
-    assert(appDatabaseInit() == A_STATUS_OK && erases == 0U);
+    assert(databaseInit() == A_STATUS_OK && erases == 0U);
     assert(command(4, get) == -1);
     assert(command(2, init) == 0);
     assert(command(5, set) == 0);

@@ -118,6 +118,24 @@ typedef struct {
 aStatus_t aBusGetSigInfo(aBusHandle_t *handle,
     const aBusSigQuery_t *query, aBusSigInfo_t *info);
 
+/** 在调用者工作区修改完整快照；回调只做内存操作，禁止重入总线。
+ * 回调失败或最终范围检查失败时不提交。工作区不与 SIG 存储重叠。
+ * 回调、工作区仅本次调用借用；锁覆盖读取、编辑、校验、提交整个过程。
+ * 锁仍遵循 LOCK_MODE 与 SIG 标志；无锁时由应用同步。
+ * 若回调使用结构体指针访问，工作区必须满足对应对齐要求。
+ */
+typedef struct {
+    aBusSigQuery_t target;
+    void *buffer;
+    size_t capacity;
+    aStatus_t (*edit)(void *context, void *data, size_t size);
+    void *context;
+    aTimeout_t timeout;
+} aBusUpdateRequest_t;
+
+aStatus_t aBusUpdateSig(aBusHandle_t *handle,
+    const aBusUpdateRequest_t *request);
+
 /** @brief 按下标整组写入；缓冲区不得别名总线存储。 */
 typedef struct {
     uint16_t deviceID; /**< handle 内的目标设备。 */

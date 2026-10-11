@@ -147,12 +147,12 @@ aclass_add_libraries(CONFIG_FILE <绝对路径>)，最后自行创建应用目�
 本示例布局为 config/aMemory_layout.h；当前容量为 8 MiB，KV 和 TSDB
 分区分别为 128 KiB 和 512 KiB。不同产品注册各自的布局。
 ADATABASE_STATIC_ENABLE / DYNAMIC_ENABLE 控制实例创建接口；至少启用一种。
-当前产品开启数据库，顶层先初始化 Flash，再注册 aMemory 分区，随后由
-appDatabaseInit 初始化数据库模块并打开已有实例，首次格式化由 db init 显式触发。
+当前产品开启数据库，顶层通过 aMemory 初始化注册的存储设备和区域，随后由
+databaseInit 初始化数据库模块并打开已有实例，首次格式化由 db init 显式触发。
 
 ### Flash 手动测试源码
 
-`app/task/system/flash_test.c` 默认不加入构建。需要复测时，在同目录
+`app/task/system/command_flash.c` 默认不加入构建。需要复测时，在同目录
 `CMakeLists.txt` 取消 `target_sources` 对应行的注释，再重新编译。
 测试依赖 `ADEV_FLASH25Q_ENABLE` 和 `ASHELL_ENABLE`，参与编译后注册
 `flash` 命令；Flash 初始化及数据库的存储链路由各自的配置控制。

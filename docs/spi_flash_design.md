@@ -252,13 +252,15 @@ aclass_project_options。项目配置开启 SFUD 内部断言，关闭调试输�
 不引入上游静态日志缓冲区。配置宏涉及 sfud_flash 布局，所有使用方使用
 同一配置。公开业务头文件没有 SFUD 类型，静态实例头文件包含其内部布局。
 
-app/devices/system/flash_device.c 私有持有 bus 和 handle，使用
+app/devices/system/system_device.c 的存储段私有持有 bus 和 handle，使用
 ADRV_SPI_1 / PB13(SCK) / PB15(MOSI) / PB14(MISO) / PB12(CS)，
 Mode 0、64 分频。SPI 编号已改为 ADRV_SPI_0/1/2，与 GD32 完全一致。
-aSystemInit 在 Shell 状态初始化后探测 Flash，启动信息先入队，不自动擦写。
-随后顶层依次注册 aMemory 分区、打开数据库及初始化其他服务，最后启动
-Shell 任务。Flash 设备初始化本身不初始化数据库。
-应用通过 GetInfo 获取真实容量和擦除粒度；整片擦除由显式全容量 Erase 请求表达。
+aSystemInit 通过私有 memoryInit 装配设备层配置并调用 aMemoryInit，后者调用
+Flash 的 init 回调探测芯片并核对几何参数，启动信息先入队，不自动擦写。
+随后顶层打开数据库及初始化其他服务，最后放行 Shell 任务。
+业务通过 aMemoryFind / GetInfo / Read / Write / Erase 访问具体区域，
+不直接调用 Flash 驱动。数据库配置由应用传入 aMemory 区域句柄。
+aMemory 的 DeInit 按逆序调用设备释放回调；须先关闭数据库及其他使用者。
 
 未来 Linux 后端可在 port 层提供事务操作，公共设备读写语义保持一致；
 不要求模拟 GD32 寄存器、GPIO 或中断模型。

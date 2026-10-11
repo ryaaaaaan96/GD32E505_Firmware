@@ -1,4 +1,4 @@
-#include "data_bus_service.h"
+#include "system_init.h"
 #include "aShell.h"
 #include "aOS.h"
 #include <errno.h>
@@ -267,6 +267,25 @@ static int command_sig(int argc, char **argv)
     aBool_t field;
     aBool_t all;
 
+#if APP_DATABASE_ENABLE
+    if (argc >= 2 && (strcmp(argv[1], "save") == 0 ||
+                      strcmp(argv[1], "load") == 0)) {
+        if (argc != 2 && argc != 4) goto usage;
+        if (argc == 4) {
+            if (number_parse(argv[2], &device) != A_STATUS_OK ||
+                number_parse(argv[3], &id) != A_STATUS_OK ||
+                device < 0 || device > UINT16_MAX ||
+                id < 0 || id > UINT16_MAX) goto usage;
+            key.deviceID = (uint16_t)device;
+            key.sigKey = (uint16_t)id;
+        }
+        status = strcmp(argv[1], "save") == 0 ?
+            dataBusSave(argc == 2 ? NULL : &key) :
+            dataBusRestore(argc == 2 ? NULL : &key);
+        ASHELL_REPLY("SIG persistence: %d\r\n", (int)status);
+        return status == A_STATUS_OK ? 0 : -1;
+    }
+#endif
     if (argc < 3 || argc > 6) goto usage;
     writing = strcmp(argv[1], "set") == 0;
     if ((!writing && strcmp(argv[1], "get") != 0) ||
@@ -369,6 +388,10 @@ usage:
     ASHELL_REPLY("sig get <deviceID> [sigKey [paramIndex]]\r\n"
                  "sig set <deviceID> <sigKey> [paramIndex] <value>\r\n"
                  "RAW: exact-length hex; STRUCT: set a param\r\n");
+#if APP_DATABASE_ENABLE
+    ASHELL_REPLY("sig save [deviceID sigKey]\r\n"
+                 "sig load [deviceID sigKey]\r\n");
+#endif
     return -1;
 }
 ASHELL_CMD_EXPORT(sig, command_sig, "Read/write SIG by stable key");

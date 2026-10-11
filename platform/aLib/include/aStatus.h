@@ -22,7 +22,8 @@ typedef enum {
     A_STATUS_NOT_READY = -6, /**< 对象/前置状态未就绪。 */
     A_STATUS_NO_MEMORY = -7, /**< 无法分配所需内存。 */
     A_STATUS_CANCELLED = -8, /**< 请求已取消。 */
-    A_STATUS_NOT_FOUND = -9 /**< 指定对象或标识不存在。 */
+    A_STATUS_NOT_FOUND = -9, /**< 指定对象或标识不存在。 */
+    A_STATUS_DATA_MISMATCH = -10 /**< 已有数据格式与当前定义不兼容。 */
 } aStatus_t;
 
 #endif

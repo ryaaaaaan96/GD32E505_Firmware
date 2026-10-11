@@ -36,6 +36,12 @@ size 显式指定，整数必须与 aDataTypeSize 一致，RAW 表示字节数�
 未登记字段和填充字节仍参加整组复制；允许字段描述重叠，写入必须满足
 所有受影响的范围规则。定义、范围对象都应使用 static const。
 
+已知 STRUCT 字段互不重叠时，可设置 ABUS_SIG_FLAG_DISJOINT。
+定义检查启用时在初始化验证此约束；随后单字段写入只检查该字段的范围。
+不设置此标志仍兼容重叠字段，并检查所有受影响规则。
+关闭定义检查时，由配置者保证此约束成立。
+
+
 ## 定义示例
 
 ```c
@@ -94,6 +100,42 @@ default_data 非 NULL 时提供 size 字节整组默认数据，否则整组清�
 没有逐字段默认值。定义、规则及默认数据在实例使用期间保持有效且不变。
 关闭定义检查后，应用仍须保证初始值符合范围规则。
 含指针结构体仅浅拷贝，不管理指向对象；本地快照不是跨平台传输格式。
+
+## 可选参数长度检查
+
+`aBusSigParamSizeCheck(const aBusSig_t *sig)` 在 `aBus_table.h` 提供，应用可以
+在初始化前主动调用，检查 STRUCT 的 `size` 是否等于全部 `param.size` 的和。
+`sig->size` 应填写真实结构体的 `sizeof`，字段大小填写成员的 `sizeof`。
+
+```c
+/* config_sig 为应用持有的 STRUCT 定义，params 描述保持有效。 */
+aStatus_t status = aBusSigParamSizeCheck(&config_sig);
+if (status != A_STATUS_OK) {
+    return status;
+}
+```
+
+函数不需要 handle、不访问业务数据、不加锁、不分配内存，只需借用只读定义。
+耗时 O(参数数)，累计前检查剩余长度以避免溢出。返回值如下：
+
+| 返回值 | 含义 |
+| --- | --- |
+| `A_STATUS_OK` | 所有非零字段长度的总和等于 SIG 大小 |
+| `A_STATUS_UNSUPPORTED` | SIG 不是 STRUCT |
+| `A_STATUS_INVALID_PARAM` | 空指针、空参数表、零长度或总长度不等 |
+
+由用户决定是否调用；初始化、Set/Get 不自动调用，不增加强制配置开关。
+显式调用不受 `ABUS_DEF_CHECK_ENABLE` 或 `NDEBUG` 影响。允许只描述部分字段
+或带填充的普通 aBus SIG 继续使用原有初始化方式。
+
+这只是长度求和，不检查 offset、字段重叠、类型、上下限或偶数字节要求。
+例如重复登记一个字段、遗漏另一个等长字段，仍可能返回 OK。因此通过不代表
+布局连续，也不代表可以直接映射为 Modbus 寄存器。协议使用方仍需检查自身
+依赖的边界和布局规则；Modbus 整组映射额外要求字段连续且为偶数字节。
+
+如果用户希望在编译时检查结构体与成员大小之和，可以使用
+[aLib 布局断言](../../platform/aLib/README.md#可选布局断言)。普通 C 的 const
+参数数组不能用于编译期断言。主机检查：`python3 tests/layout/run.py`。
 
 ## 创建与释放
 
@@ -271,7 +313,7 @@ sigIndex 是数组下标，不在 aBusSig_t 内重复存储；业务使用枚举
 初始化定义表。sigKey 是同表唯一的稳定业务键，无需有序或连续，不复用已发布
 含义，可用于通信和持久化。多张表共享存储空间时还需稳定的表标识。
 持久化数据格式版本与 sigKey 分开管理。本模块不实现持久化或重复键扫描，
-唯一性由应用/生成工具保证。
+唯一性由应用/生成工具保证。当前产品构建使用 scripts/check_sig.py 校验清单。
 
 按下标调用 aBusSetByIndex / aBusGetByIndex，使用对应的
  aBusSetIndexRequest_t / aBusGetIndexRequest_t。请求字段为 deviceID、sigIndex、
@@ -308,7 +350,7 @@ paramIndex、src/dst、size、timeout；各有 StructInit，默认 NO_WAIT。
 未知参数返回 NOT_FOUND，非 STRUCT 返回 UNSUPPORTED，长度错误返回
 INVALID_PARAM。无锁或应用直接访问绑定变量时，同步仍由应用决定。
 
-应用的 `task/system/data_bus_command.c` 不维护独立类型表，先解析稳定键，
+应用的 `task/system/command_data_bus.c` 不维护独立类型表，先解析稳定键，
 再根据查询到的定义进行解析：
 
 ```text
@@ -338,8 +380,8 @@ sig get 1
 ```
 
 省略 sigKey 时按下标顺序显示设备 1 的全部 SIG，STRUCT 展开登记字段，
-RAW 显示十六进制。保留 `sig get 2 1001`（整个 Motor）和
-`sig get 2 1001 0`（Motor.speed）的用法。
+RAW 显示十六进制。当前产品用 `sig get 2 2001` 查看组合 TEST，
+用 `sig get 2 2001 0` 查看其第一个字段。
 每个 SIG 单独读取快照，整张表不保证来自同一时刻；读取失败时停止并报告错误。
 
 ## 实例归属与链接段
@@ -361,3 +403,14 @@ status = aBusCreate(1U, tables, table_count, &handle);
 设备号和下标收集；无关实例的绑定不参与校验。不需要按实例划分链接段，
 读写期间不扫描注册段。未匹配的存储在静态模式返回 NOT_FOUND，在动态模式
 按原规则分配内存补齐。链接脚本无需随 handle 数量变化。
+
+## 在同一临界区修改多个字段
+
+aBusUpdateSig 使用请求中的调用者工作区，读取完整 SIG 快照，调用 edit，
+校验整个结果后一次提交。回调错误、范围错误或锁等待失败不会修改目标值；
+解锁失败不回滚已经提交的数据。工作区大小至少等于完整 SIG，且不得与目标
+存储重叠。若回调用结构体指针访问，调用者还须保证工作区的相应对齐。
+
+锁策略仍遵循 ABUS_LOCK_MODE 和 ABUS_SIG_FLAG_LOCK。回调在持锁期间运行，
+只做有界内存操作，不调用 I/O、不阻塞、不重入总线。此接口只对一个 SIG
+提供一致修改，跨 SIG 不提供事务；无锁和直接绑定变量访问由应用同步。

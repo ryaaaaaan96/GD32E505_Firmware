@@ -55,6 +55,9 @@ int main(void)
     assert(_fdb_flash_read(&db, 0U, buffer, 4U) == FDB_READ_ERR);
     assert(calls == 0U);
     assert(aDataBaseOperationBegin(A_TIMEOUT_MS(5000U)) == A_STATUS_OK);
+    /* 初始化只认预先绑定的句柄，path 不再用于寻找区域。 */
+    assert(_fdb_init_ex(&db, "db", "unregistered-path", FDB_DB_TYPE_KV,
+                        NULL) == FDB_NO_ERR);
     assert(_fdb_flash_read(&db, 0U, buffer, 4U) == FDB_NO_ERR);
     assert(buffer[0] == 0x5A);
     assert(_fdb_flash_write(&db, 0U, buffer, 4U, true) == FDB_NO_ERR);

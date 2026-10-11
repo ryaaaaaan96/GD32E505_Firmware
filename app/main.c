@@ -1,6 +1,7 @@
 #include "aDrv.h"
 #include "aOS.h"
 #include "system_init.h"
+#include "test_task.h"
 
 static void appFatal(aOSFaultCode_t code, aStatus_t status,
                      const char *context)
@@ -12,10 +13,18 @@ static void appFatal(aOSFaultCode_t code, aStatus_t status,
 
 static void appInitTask(void *argument)
 {
+    aStatus_t status;
+
     (void)argument;
-    const aStatus_t status = aSystemInit();
+    status = aSystemInit();
     if (status != A_STATUS_OK) {
         appFatal(AOS_FAULT_APP_INIT, status, "aSystemInit");
+    }
+
+    /* 基础服务和协议已就绪，统一启动应用测试任务。 */
+    status = appTestTaskInit();
+    if (status != A_STATUS_OK) {
+        appFatal(AOS_FAULT_APP_INIT, status, "appTestTaskInit");
     }
 
     /* Shell/status 仍在各自模块内完成任务初始化。

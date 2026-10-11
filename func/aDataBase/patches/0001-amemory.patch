@@ -52,7 +52,7 @@ index 8de2b2a..424f96f 100644
 +        aMemoryInfo_t info;
 +        size_t block_size;
 +
-+        db->storage.memory = aMemoryFind(path);
++        /* 区域由 aDataBase 在初始化前绑定；path 仅保留官方诊断参数。 */
 +        if (db->storage.memory == NULL) return FDB_PART_NOT_FOUND;
 +        if (aMemoryGetInfo(db->storage.memory, &info) != A_STATUS_OK)
 +            return FDB_INIT_FAILED;

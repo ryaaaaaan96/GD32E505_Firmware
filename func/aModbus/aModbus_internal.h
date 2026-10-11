@@ -9,6 +9,8 @@ typedef struct {
     size_t size;
     const aBusRange_t *range;
     uint16_t quantity;
+    const aBusParam_t *params;
+    size_t param_count;
 } aModbusValueInfo_t;
 
 /* 所有内部入口由已取得实例使用权的 Process/Client 调用。 */
@@ -34,5 +36,9 @@ aStatus_t aModbusBusRead(aModbusHandle_t *handle,
     const aModbusAddressReadRequest_t *request);
 aStatus_t aModbusBusWrite(aModbusHandle_t *handle,
     const aModbusAddressWriteRequest_t *request);
+/* 批量采集的解码检查与按 SIG 发布；协议已经完整接收。 */
+aStatus_t aModbusBusPublish(aModbusHandle_t *handle,
+    const aModbusPoll_t *items, size_t count,
+    const void *data);
 
 #endif

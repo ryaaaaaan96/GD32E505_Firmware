@@ -51,7 +51,7 @@ void aDataBaseKvConfigStructInit(aDataBaseKvConfig_t *config)
 {
     if (config == NULL) return;
     *config = (aDataBaseKvConfig_t){
-        .name = NULL, .partition = NULL, .format_if_needed = A_FALSE,
+        .name = NULL, .memory = NULL, .format_if_needed = A_FALSE,
         .timeout = A_TIMEOUT_MS(5000U)
     };
 }
@@ -60,7 +60,7 @@ void aDataBaseTsConfigStructInit(aDataBaseTsConfig_t *config)
 {
     if (config == NULL) return;
     *config = (aDataBaseTsConfig_t){
-        .name = NULL, .partition = NULL, .max_record_size = 256U,
+        .name = NULL, .memory = NULL, .max_record_size = 256U,
         .rollover = A_TRUE, .format_if_needed = A_FALSE,
         .timeout = A_TIMEOUT_MS(5000U)
     };
@@ -110,37 +110,41 @@ void aDataBaseTsIterateRequestStructInit(aDataBaseTsIterateRequest_t *request)
     };
 }
 
-static aStatus_t partition_get(const char *name,
-                               const aMemoryHandle_t **partition)
+/* 只接收应用传入的区域句柄，不依赖产品名称或全局布局。 */
+static aStatus_t partition_check(
+    const aMemoryHandle_t *memory, aMemoryInfo_t *info)
 {
-    *partition = aMemoryFind(name);
-    if (*partition == NULL) return A_STATUS_NOT_FOUND;
-    if (aDataBasePartitionIsUsed(*partition)) return A_STATUS_BUSY;
+    aStatus_t status;
+
+    status = aMemoryGetInfo(memory, info);
+    if (status != A_STATUS_OK) return status;
+    if (aDataBasePartitionIsUsed(memory)) return A_STATUS_BUSY;
     return A_STATUS_OK;
 }
 
 static aStatus_t kv_initialize(const aDataBaseKvConfig_t *config,
                                aDataBaseKvHandle_t *handle, aBool_t dynamic)
 {
-    const aMemoryHandle_t *partition;
+    aMemoryInfo_t info;
     aStatus_t status;
     bool not_format;
     fdb_err_t result;
 
     if (config == NULL || handle == NULL || config->name == NULL ||
-        config->name[0] == '\0' || config->partition == NULL)
+        config->name[0] == '\0' || config->memory == NULL)
         return A_STATUS_INVALID_PARAM;
     status = aDataBaseOperationBegin(config->timeout);
     if (status != A_STATUS_OK) return status;
-    status = partition_get(config->partition, &partition);
+    status = partition_check(config->memory, &info);
     if (status != A_STATUS_OK) return aDataBaseOperationEnd(status);
     memset(handle, 0, sizeof(*handle));
-    handle->instance.partition = partition;
+    handle->instance.partition = config->memory;
+    handle->db.parent.storage.memory = config->memory;
     status = aDataBaseIndexPrepare(handle, config, dynamic);
     if (status != A_STATUS_OK) return aDataBaseOperationEnd(status);
     not_format = !config->format_if_needed;
     fdb_kvdb_control(&handle->db, FDB_KVDB_CTRL_SET_NOT_FORMAT, &not_format);
-    result = fdb_kvdb_init(&handle->db, config->name, config->partition,
+    result = fdb_kvdb_init(&handle->db, config->name, info.name,
                            NULL, handle);
     status = result_get(result);
     if (status == A_STATUS_OK && aDataBaseStorageError() == A_STATUS_OK)
@@ -166,7 +170,6 @@ static fdb_time_t unused_clock(void)
 static aStatus_t ts_initialize(const aDataBaseTsConfig_t *config,
                                aDataBaseTsHandle_t *handle)
 {
-    const aMemoryHandle_t *partition;
     aMemoryInfo_t info;
     aStatus_t status;
     bool not_format;
@@ -174,23 +177,22 @@ static aStatus_t ts_initialize(const aDataBaseTsConfig_t *config,
     fdb_err_t result;
 
     if (config == NULL || handle == NULL || config->name == NULL ||
-        config->name[0] == '\0' || config->partition == NULL ||
+        config->name[0] == '\0' || config->memory == NULL ||
         config->max_record_size == 0U) return A_STATUS_INVALID_PARAM;
     status = aDataBaseOperationBegin(config->timeout);
     if (status != A_STATUS_OK) return status;
-    status = partition_get(config->partition, &partition);
+    status = partition_check(config->memory, &info);
     if (status != A_STATUS_OK) return aDataBaseOperationEnd(status);
-    status = aMemoryGetInfo(partition, &info);
-    if (status != A_STATUS_OK ||
-        info.geometry.erase_granularity <= record_overhead ||
+    if (info.geometry.erase_granularity <= record_overhead ||
         config->max_record_size >
         info.geometry.erase_granularity - record_overhead)
         return aDataBaseOperationEnd(A_STATUS_INVALID_PARAM);
     memset(handle, 0, sizeof(*handle));
-    handle->instance.partition = partition;
+    handle->instance.partition = config->memory;
+    handle->db.parent.storage.memory = config->memory;
     not_format = !config->format_if_needed;
     fdb_tsdb_control(&handle->db, FDB_TSDB_CTRL_SET_NOT_FORMAT, &not_format);
-    result = fdb_tsdb_init(&handle->db, config->name, config->partition,
+    result = fdb_tsdb_init(&handle->db, config->name, info.name,
                            unused_clock, config->max_record_size, handle);
     status = result_get(result);
     if (not_format && result == FDB_READ_ERR &&
@@ -466,7 +468,7 @@ aStatus_t aDataBaseSigGet(
     if (fdb_kv_get_obj(&handle->db, handle->active_key, &kv) == NULL)
         return kv_end(handle, A_STATUS_NOT_FOUND);
     if (kv.value_len != request->size)
-        return kv_end(handle, A_STATUS_INVALID_PARAM);
+        return kv_end(handle, A_STATUS_DATA_MISMATCH);
     fdb_blob_make(&blob, request->data, request->size);
     fdb_kv_to_blob(&kv, &blob);
     status = fdb_blob_read(&handle->db.parent, &blob) == request->size

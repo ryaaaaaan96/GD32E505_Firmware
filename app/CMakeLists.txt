@@ -19,9 +19,17 @@ endif()
 target_compile_definitions(${APP_TARGET} PRIVATE
     APP_LOG_ENABLE=$<BOOL:${app_log_enable}>)
 
-# 本产品数据库使用板载 Flash，配置与服务按同一条件裁剪。
+# 本产品的存储注册表当前包含 SPI Flash；以后在此纳入其他设备。
+set(app_memory_enable OFF)
+if(AMEMORY_ENABLE AND ADEV_FLASH25Q_ENABLE)
+    set(app_memory_enable ON)
+endif()
+target_compile_definitions(${APP_TARGET} PRIVATE
+    APP_MEMORY_ENABLE=$<BOOL:${app_memory_enable}>)
+
+# 数据库仅依赖本产品已注册的 aMemory 区域。
 set(app_database_enable OFF)
-if(ADATABASE_ENABLE AND ADEV_FLASH25Q_ENABLE)
+if(ADATABASE_ENABLE AND app_memory_enable)
     set(app_database_enable ON)
 endif()
 target_compile_definitions(${APP_TARGET} PRIVATE

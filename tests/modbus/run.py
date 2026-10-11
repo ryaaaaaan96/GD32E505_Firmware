@@ -48,6 +48,18 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-") as directory:
         subprocess.run(common + flags + [str(p) for p in sources]
                        + ["-o", executable], check=True)
         subprocess.run([executable], check=True, timeout=20)
+        if client and server:
+            struct_test = str(Path(directory) / (name + "-struct"))
+            subprocess.run(common + flags + [str(p) for p in sources[:-1]]
+                           + [str(root / "tests/modbus/test_struct.c"),
+                              "-o", struct_test], check=True)
+            subprocess.run([struct_test], check=True, timeout=20)
+        if server:
+            routing = str(Path(directory) / (name + "-routing"))
+            subprocess.run(common + flags + [str(p) for p in sources[:-1]]
+                           + [str(root / "tests/modbus/test_routing.c"),
+                              "-o", routing], check=True)
+            subprocess.run([routing], check=True, timeout=20)
         obj = str(Path(directory) / (name + ".o"))
         subprocess.run(common + flags + ["-c", str(module / "aModbus.c"),
                        "-o", obj], check=True)
@@ -71,3 +83,15 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-") as directory:
         str(root / "tests/modbus/test_rtu.c"), "-o", executable,
     ], check=True)
     subprocess.run([executable], check=True, timeout=20)
+
+    for lock in (1, 2):
+        executable = str(Path(directory) / f"consistency-{lock}")
+        subprocess.run(common + [
+            "-DAMODBUS_CLIENT_ENABLE=1", "-DAMODBUS_SERVER_ENABLE=1",
+            "-DAMODBUS_STATIC_ENABLE=1", "-DAMODBUS_DYNAMIC_ENABLE=1",
+            f"-DABUS_LOCK_MODE={lock}", "-Wl,--wrap=aOSMutexUnlock",
+            *[str(p) for p in sources[:-1]],
+            str(root / "tests/modbus/test_consistency.c"),
+            "-o", executable,
+        ], check=True)
+        subprocess.run([executable], check=True, timeout=20)

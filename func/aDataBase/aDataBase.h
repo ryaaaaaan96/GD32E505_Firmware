@@ -2,6 +2,7 @@
 #define ADATABASE_H
 
 #include "aLib.h"
+#include "aMemory.h"
 #include "aBus_table.h"
 
 #ifndef ADATABASE_STATIC_ENABLE
@@ -28,7 +29,7 @@ typedef struct {
 
 typedef struct {
     const char *name; /**< 实例名，借用至反初始化或销毁。 */
-    const char *partition; /**< 产品布局中的分区名，仅初始化时读取。 */
+    const aMemoryHandle_t *memory; /**< 应用关联的区域，借用至关闭。 */
     aBool_t format_if_needed; /**< 允许官方初始化修复或格式化，默认关闭。 */
     aTimeout_t timeout; /**< 初始化总预算，包含锁等待及全部存储访问。 */
     const aBusTable_t *tables; /**< 可选 SIG 定义；借用至关闭，不修改 aBus。 */
@@ -70,7 +71,7 @@ typedef struct {
 
 typedef struct {
     const char *name;
-    const char *partition;
+    const aMemoryHandle_t *memory; /**< 应用关联的区域，借用至关闭。 */
     size_t max_record_size; /**< 单条记录上限，必须小于擦除块减去元数据。 */
     aBool_t rollover; /**< 空间耗尽时覆盖最旧扇区，默认开启。 */
     aBool_t format_if_needed;
@@ -175,7 +176,8 @@ aStatus_t aDataBaseKvDelete(
     aDataBaseKvHandle_t *handle, const aDataBaseKvDeleteRequest_t *request);
 /** 仅保存/读取请求中的字节快照，不自动同步 aBus RAM，不校验业务范围。
  * 磁盘标识为分区内的 deviceID + sigKey，保留键前缀 "@sig:"。
- * 未保存返回 NOT_FOUND；旧值长度不符返回 INVALID_PARAM，不修改输出。
+ * 未保存返回 NOT_FOUND；旧值长度不符返回 DATA_MISMATCH，不修改输出。
+ * 请求长度不符返回 INVALID_PARAM；Get 不删除记录，由恢复流程决定作废。
  * 定长记录格式及跨版本迁移由应用管理；不自动格式化或写默认值。
  * 查找设备 O(表数)；配置 sig_slots 后表内 O(1)，否则二分持久化清单。
  * 正常查询不扫描 Flash 记录；记录 CRC 仍需读取当前记录的数据。

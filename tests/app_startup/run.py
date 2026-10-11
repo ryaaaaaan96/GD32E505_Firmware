@@ -7,13 +7,16 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 with tempfile.TemporaryDirectory(prefix="aclass-startup-") as directory:
     executable = str(Path(directory) / "test_startup")
-    subprocess.run([
-        "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
-        "-Iplatform/aDrv/include", "-Iplatform/aOS/public",
-        "-Iplatform/aLib/include", "-Iapp/task/system",
-        "tests/app_startup/test_startup.c", "-o", executable,
-    ], cwd=root, check=True)
-    subprocess.run([executable], check=True)
+    for bus in (0, 1):
+        subprocess.run([
+            "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+            f"-DABUS_ENABLE={bus}", "-Ifunc/aBus/include",
+            "-Iapp/task/test", "-Iplatform/aDrv/include",
+            "-Iplatform/aOS/public", "-Iplatform/aLib/include",
+            "-Iapp/task/system", "tests/app_startup/test_startup.c",
+            "-o", executable,
+        ], cwd=root, check=True)
+        subprocess.run([executable], check=True)
 print("Application startup sequencing/self-delete/failure tests passed")
 
 with tempfile.TemporaryDirectory(prefix="aclass-system-") as directory:
@@ -22,27 +25,35 @@ with tempfile.TemporaryDirectory(prefix="aclass-system-") as directory:
                 "platform/aLib/include", "device/aDev_LED",
                 "device/aDev_Flash25q", "app", "app/task/system",
                 "app/devices/system",
-                "app/protocol/inc", "app/task/sig", "func/aShell/include",
+                "app/protocol/inc", "app/task/test", "func/aShell/include",
                 "func/aMemory", "func/aDataBase", "func/aLog",
-                "func/aBus/include")
+                "func/aBus/include", "func/aDataBase/config",
+                "func/aDataBase/FlashDB/inc", "config")
     command = [
         "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+        "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+        "-DABUS_STATIC_ENABLE=1", "-DADATABASE_STATIC_ENABLE=1",
         *["-I" + path for path in includes],
         *["-D" + feature + "=1" for feature in (
             "ASHELL_ENABLE", "APP_LOG_ENABLE", "ALOG_ENABLE",
             "ADEV_FLASH25Q_ENABLE",
-            "AMEMORY_ENABLE", "APP_DATABASE_ENABLE", "ABUS_ENABLE",
+            "AMEMORY_ENABLE", "APP_MEMORY_ENABLE", "APP_DATABASE_ENABLE",
+            "ABUS_ENABLE",
             "APP_MODBUS_ENABLE")],
         "app/task/system/system_init.c", "tests/app_startup/test_system.c",
         "func/aLog/aLog_config.c", "-DALOG_OUTPUT_LEVEL=5",
         "-o", executable,
     ]
     for master in (0, 1):
-        subprocess.run(command + [f"-DAPP_MODBUS_MASTER_ENABLE={master}"],
-                       cwd=root, check=True)
-        # 每个场景使用新进程，符合系统仅初始化一次的契约。
-        for failure in range(10):
-            subprocess.run([executable, str(failure)], check=True)
-        for failure in (4, 5):
-            subprocess.run([executable, str(failure), "cleanup_failure"],
-                           check=True)
+        for dynamic in (0, 1):
+            subprocess.run(command + [
+                f"-DAPP_MODBUS_MASTER_ENABLE={master}",
+                f"-DABUS_DYNAMIC_ENABLE={dynamic}",
+                f"-DADATABASE_DYNAMIC_ENABLE={dynamic}"],
+                cwd=root, check=True)
+            # 每个场景使用新进程，符合系统仅初始化一次的契约。
+            for failure in range(12):
+                subprocess.run([executable, str(failure)], check=True)
+            for failure in (4, 6, 10):
+                subprocess.run([executable, str(failure), "cleanup_failure"],
+                               check=True)

@@ -17,6 +17,7 @@ struct aModbusHandle {
     aBool_t fault;
     aBool_t recover_input;
     atomic_bool active;
+    uint8_t snapshot[AMODBUS_MAX_VALUE_SIZE];
 };
 
 #endif

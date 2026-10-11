@@ -1,9 +1,16 @@
 #include "system_device.h"
+#if APP_MEMORY_ENABLE || APP_DATABASE_ENABLE
+#include "aMemory_layout.h"
+#endif
 #include "aDev_led_instance.h"
 #if ASHELL_ENABLE
 #include "aDev_usart.h"
 #include "aOS.h"
 #include "aShell.h"
+#endif
+
+#if APP_MEMORY_ENABLE
+#include "aDev_flash25q_instance.h"
 #endif
 
 /* --------------------------------------------------------------------------
@@ -177,6 +184,182 @@ aStatus_t appSystemConsoleDeInit(void)
 #endif
 
 /* --------------------------------------------------------------------------
+ * 系统存储设备：SPI1 Flash 回调与 aMemory 设备、区域注册配置。
+ * -------------------------------------------------------------------------- */
+#if APP_MEMORY_ENABLE
+
+static aDevFlash25qBus_t flash_bus;
+static aDevFlash25qHandle_t *flash_handle;
+#if !ADEV_FLASH25Q_DYNAMIC_ENABLE
+static aDevFlash25qHandle_t flash_instance;
+#endif
+
+/* Shell 已完成初始化，aLog 尚未启动；启动信息直接用 ASHELL_PRINT 入队。
+ * Shell 任务在全部服务就绪后统一发送，关闭 Shell 时裁剪打印。 */
+static aStatus_t flash_init(
+    void *context, const aMemoryGeometry_t *geometry)
+{
+    aDevFlash25qBusConfig_t bus_config;
+    aDevFlash25qConfig_t config;
+    aStatus_t status;
+    aDevFlash25qInfo_t info;
+
+    (void)context;
+    aDevFlash25qBusConfigStructInit(&bus_config);
+    /* 芯片 SPI1：PB13=SCK，PB14=MISO，PB15=MOSI。 */
+    bus_config.spi.spiId = ADRV_SPI_1;
+    bus_config.spi.sckPin = ADRV_PIN(ADRV_GPIO_PORT_B, 13);
+    bus_config.spi.misoPin = ADRV_PIN(ADRV_GPIO_PORT_B, 14);
+    bus_config.spi.mosiPin = ADRV_PIN(ADRV_GPIO_PORT_B, 15);
+    status = aDevFlash25qBusInitStatic(&bus_config, &flash_bus);
+    if (status != A_STATUS_OK) return status;
+
+    aDevFlash25qConfigStructInit(&config);
+    config.bus = &flash_bus;
+    config.cs_pin = ADRV_PIN(ADRV_GPIO_PORT_B, 12);
+    /* 型号与容量由 SFUD 探测，启动不擦除或编程数据。 */
+#if ADEV_FLASH25Q_DYNAMIC_ENABLE
+    status = aDevFlash25qCreate(&config, &flash_handle);
+#else
+    status = aDevFlash25qInitStatic(&config, &flash_instance);
+    if (status == A_STATUS_OK) flash_handle = &flash_instance;
+#endif
+    if (status != A_STATUS_OK) {
+#if ASHELL_ENABLE
+        ASHELL_PRINT("SPI1 Flash init failed: %d\r\n", (int)status);
+#endif
+        return status;
+    }
+    status = aDevFlash25qGetInfo(flash_handle, &info);
+    if (status != A_STATUS_OK) return status;
+    if (info.capacity != geometry->capacity ||
+        info.erase_size != geometry->erase_granularity)
+        return A_STATUS_INVALID_PARAM;
+#if ASHELL_ENABLE
+    ASHELL_PRINT("SPI1 Flash: JEDEC %02X %02X %02X, "
+                 "%lu bytes, erase %lu bytes\r\n",
+                 (unsigned)info.manufacturer_id,
+                 (unsigned)info.memory_type,
+                 (unsigned)info.capacity_id,
+                 (unsigned long)info.capacity,
+                 (unsigned long)info.erase_size);
+#endif
+    return A_STATUS_OK;
+}
+
+/* 由 aMemory 逆序调用；支持初始化中断后的清理及释放失败重试。 */
+static aStatus_t flash_deinit(void *context)
+{
+    aStatus_t status;
+
+    (void)context;
+    if (flash_handle != NULL) {
+#if ADEV_FLASH25Q_DYNAMIC_ENABLE
+        status = aDevFlash25qDestroy(flash_handle);
+#else
+        status = aDevFlash25qDeInitStatic(flash_handle);
+#endif
+        if (status != A_STATUS_OK) return status;
+        flash_handle = NULL;
+    }
+    if (flash_bus.spi.initialized)
+        return aDevFlash25qBusDeInitStatic(&flash_bus);
+    return A_STATUS_OK;
+}
+
+static aStatus_t flash_read(
+    void *context, const aMemoryReadRequest_t *request)
+{
+    aDevFlash25qReadRequest_t flash_request;
+
+    (void)context;
+    if (request->address > UINT32_MAX) return A_STATUS_INVALID_PARAM;
+    aDevFlash25qReadRequestStructInit(&flash_request);
+    flash_request.address = (uint32_t)request->address;
+    flash_request.data = request->data;
+    flash_request.size = request->size;
+    flash_request.timeout = request->timeout;
+    return aDevFlash25qRead(flash_handle, &flash_request);
+}
+
+static aStatus_t flash_write(
+    void *context, const aMemoryWriteRequest_t *request)
+{
+    aDevFlash25qWriteRequest_t flash_request;
+
+    (void)context;
+    if (request->address > UINT32_MAX) return A_STATUS_INVALID_PARAM;
+    aDevFlash25qWriteRequestStructInit(&flash_request);
+    flash_request.address = (uint32_t)request->address;
+    flash_request.data = request->data;
+    flash_request.size = request->size;
+    flash_request.timeout = request->timeout;
+    return aDevFlash25qWrite(flash_handle, &flash_request);
+}
+
+static aStatus_t flash_erase(
+    void *context, const aMemoryEraseRequest_t *request)
+{
+    aDevFlash25qEraseRequest_t flash_request;
+
+    (void)context;
+    if (request->address > UINT32_MAX) return A_STATUS_INVALID_PARAM;
+    aDevFlash25qEraseRequestStructInit(&flash_request);
+    flash_request.address = (uint32_t)request->address;
+    flash_request.size = request->size;
+    flash_request.timeout = request->timeout;
+    return aDevFlash25qErase(flash_handle, &flash_request);
+}
+
+static const aMemoryOps_t flash_ops = {
+    .init = flash_init, .deinit = flash_deinit,
+    .read = flash_read, .write = flash_write, .erase = flash_erase
+};
+
+/* 设备及句柄均为私有，业务仅借用 aMemory 区域句柄。 */
+AMEMORY_DEVICE_DEFINE(flash_memory_device,
+    .name = AMEMORY_FLASH_DEVICE_NAME,
+    .context = NULL,
+    .ops = &flash_ops,
+    .geometry = {
+        .capacity = AMEMORY_FLASH_CAPACITY_BYTES,
+        .read_granularity = 1U, .write_granularity = 1U,
+        .erase_granularity = AMEMORY_FLASH_BLOCK_SIZE,
+        .program_bits = 1U, .erased_value = 0xFFU
+    }
+);
+
+AMEMORY_PARTITION_DEFINE(parameters, AMEMORY_PART_PARAM_NAME,
+    flash_memory_device,
+    AMEMORY_PART_PARAM_OFFSET, AMEMORY_PART_PARAM_SIZE, AMEMORY_ACCESS_ALL);
+AMEMORY_PARTITION_DEFINE(records, AMEMORY_PART_LOG_NAME,
+    flash_memory_device,
+    AMEMORY_PART_LOG_OFFSET, AMEMORY_PART_LOG_SIZE, AMEMORY_ACCESS_ALL);
+
+AMEMORY_PARTITION_DEFINE(test_region, AMEMORY_PART_TEST_NAME,
+    flash_memory_device,
+    AMEMORY_PART_TEST_OFFSET, AMEMORY_PART_TEST_SIZE, AMEMORY_ACCESS_ALL);
+
+static const aMemoryDevice_t *const memory_devices[] = { &flash_memory_device };
+static const aMemoryPartition_t *const memory_partitions[] = {
+    &parameters, &records, &test_region
+};
+
+void appSystemMemoryConfigInit(aMemoryConfig_t *config)
+{
+    if (config == NULL) return;
+
+    aMemoryConfigStructInit(config);
+    config->devices = memory_devices;
+    config->device_count = sizeof(memory_devices) / sizeof(memory_devices[0]);
+    config->partitions = memory_partitions;
+    config->partition_count =
+        sizeof(memory_partitions) / sizeof(memory_partitions[0]);
+}
+
+#endif
+
+/* --------------------------------------------------------------------------
  * 系统日志输出：复用控制台串口，提供 aLog 的产品配置。
  * -------------------------------------------------------------------------- */
 #if APP_LOG_ENABLE
@@ -207,6 +390,33 @@ void appSystemLogConfigInit(aLogConfig_t *config)
     if (config == NULL) return;
     aLogConfigStructInit(config);
     config->output = console_output;
+}
+
+#endif
+
+/* --------------------------------------------------------------------------
+ * 系统数据库配置：关联 aMemory 区域，不打开或格式化数据库。
+ * -------------------------------------------------------------------------- */
+#if APP_DATABASE_ENABLE
+
+void appSystemDatabaseKvConfigInit(aDataBaseKvConfig_t *config)
+{
+    if (config == NULL) return;
+    aDataBaseKvConfigStructInit(config);
+    config->name = "parameters";
+    config->memory = aMemoryFind(AMEMORY_PART_PARAM_NAME);
+    config->timeout = A_TIMEOUT_MS(30000U);
+}
+
+void appSystemDatabaseTsConfigInit(aDataBaseTsConfig_t *config)
+{
+    if (config == NULL) return;
+    aDataBaseTsConfigStructInit(config);
+    config->name = "records";
+    config->memory = aMemoryFind(AMEMORY_PART_LOG_NAME);
+    /* 预留给采集记录；时间戳和记录格式由业务提供。 */
+    config->max_record_size = 256U;
+    config->timeout = A_TIMEOUT_MS(30000U);
 }
 
 #endif

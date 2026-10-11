@@ -23,6 +23,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 
 | 范围 | 命令 |
 | --- | --- |
+| 可选布局断言与 SIG 参数长度求和（需要 C/C++ 编译器） | `python3 tests/layout/run.py` |
 | OS 通知、定时器与工作队列 | `python3 tests/aos/run.py` |
 | LED/GPIO 状态、静态/动态生命周期与接口裁剪 | `python3 tests/led/run.py` |
 | SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |
@@ -82,7 +83,34 @@ ELF 的静态 RAM 统计包含预留区，不等同于运行时堆使用量或�
 | Shell / 日志 | 交互延迟、后台输出并发及队列满时行为 |
 
 板上操作步骤见[应用联调入口](README.md#应用与联调)。Flash 测试默认不编译，
-需先在 app/task/system/CMakeLists.txt 中取消 flash_test.c 对应行的注释，
+需先在 app/task/system/CMakeLists.txt 中取消 command_flash.c 对应行的注释，
 再重新编译和烧录。Flash 测试会改变指定区域，数据库首次格式化也由应用
 命令显式触发；按各演示文档选择测试区域。
 当前 Modbus Demo 使用 ISR 周期时间戳分帧，硬件边界精度与使用限制见其应用说明。
+
+## TEST 点表与协议挂载回归
+
+- `python3 tests/bus/test_sig_check.py`：构建期 Key 检查。
+- `python3 tests/bus/run.py`：锁模式、分配模式、NDEBUG、定义检查，
+  包含整组编辑失败不提交和 DISJOINT 范围检查。
+- `python3 tests/modbus/run.py`：协议编解码、同 SIG 快照/提交、连续采集合并，
+  从站显式长度缺失/不匹配的初始化拒绝、U32/RAW 部分读取和半值写入拒绝，
+  20 字节 STRUCT 的全部读取子区间、字段边界写入、范围拒绝、混合字序、
+  自定义整组/字段回调、主站整组采集和一次提交，非法布局及容量的拒绝，
+  以及平级路由的交叉重叠、空洞预检、跨回调/映射读写和回调失败的处理。
+- `python3 tests/modbus_demo/run.py`：实际应用主从/静动态路径、混合类型映射、
+  FAN 的 30 个 SIG 整组/标量采集、30 项自动合并及显式断帧、未采集 20 项保持原值，
+  主从显式寄存器数量不匹配、整组字段调序时在打开端口前拒绝，
+  统一设备超时和整轮周期，以及三个地址段回调 Demo 的真实报文；通过普通 C 数组扩展
+  映射与轮询项，检查空洞、权限、无效映射及采集目标在打开端口前拒绝。
+- `python3 tests/database/run.py`：FlashDB 与应用 100 SIG 点表，验证选定项保存、
+  重开恢复、六种类型和范围错误；未选中项不写入 Flash。覆盖旧记录长度变大/变小
+  后的逻辑删除、保留默认值、继续恢复、重开和新格式保存，以及读取/删除失败上报。
+  普通 Get 区分参数错误与记录长度不兼容，均不修改 Flash。
+- `python3 tests/protocol_tasks/run.py`：点表展开、配置生命周期与重复查询，
+  持久化清单自动计数，以及点表配置不依赖 FlashDB 私有布局的检查。
+- `python3 tests/app_startup/run.py`：参数恢复在协议与测试任务启动前完成。
+
+IDU/FAN 各 50 项。主机测试模拟介质与串口，不替代板上的串口时序、
+真实掉电恢复和 FreeRTOS 栈余量检查。命令与寄存器见
+[产品协议说明](../app/protocol/README.md)。

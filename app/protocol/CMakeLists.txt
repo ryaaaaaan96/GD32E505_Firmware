@@ -3,6 +3,16 @@ target_include_directories(${APP_TARGET} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/inc")
 
 if(ABUS_ENABLE)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    # 构建期检查固定 Key；不增加固件 RAM 或初始化的重复扫描。
+    add_custom_target(app_sig_check
+        COMMAND ${Python3_EXECUTABLE}
+            "${ACLASS_PRODUCT_DIR}/scripts/check_sig.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/sig/IDU_test.inc"
+            "${CMAKE_CURRENT_SOURCE_DIR}/sig/FAN_test.inc"
+        VERBATIM)
+    add_dependencies(${APP_TARGET} app_sig_check)
+    target_sources(${APP_TARGET} PRIVATE protocol_tables.c)
     target_link_libraries(${APP_TARGET} PRIVATE aBus)
 endif()
 

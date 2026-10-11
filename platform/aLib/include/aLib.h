@@ -1,6 +1,6 @@
 /**
  * @file aLib.h
- * @brief 通用布尔类型、整数计算、流式结果、errno 映射与纯时间运算。
+ * @brief 通用类型、布局断言、整数计算、流式结果与纯时间运算。
  * @see docs/interface_contract.md 公共类型、错误、超时与生命周期约定。
  *
  * 本层不读取系统时钟，不保存线程错误状态，也不等待或分配内存。
@@ -11,6 +11,7 @@
 #ifndef A_LIB_H
 #define A_LIB_H
 
+#include "aLayout.h"
 #include "aStatus.h"
 
 #include <stdbool.h>
@@ -99,6 +100,7 @@ static inline aErrno_t aStatusToErrno(aStatus_t status)
     case A_STATUS_CANCELLED:
         return A_ECANCELED;
     case A_STATUS_ERROR:
+    case A_STATUS_DATA_MISMATCH:
     default:
         return A_EIO;
     }

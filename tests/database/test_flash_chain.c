@@ -2,27 +2,18 @@
 #define main flash_model_existing_main
 #include "../flash25q/test_flash25q.c"
 #undef main
-#include "memory_config.h"
+#include "system_device.h"
 #include "aDataBase_instance.h"
 #include <assert.h>
 
-static aDevFlash25qHandle_t *test_flash;
-
-aStatus_t appSystemFlashGetInfo(aDevFlash25qInfo_t *info)
+/* 本测试仅执行存储链路，不启动系统状态灯。 */
+aStatus_t aDevLedInitStatic(const aDevLedConfig_t *config,
+                           aDevLedHandle_t *handle)
 {
-    return aDevFlash25qGetInfo(test_flash, info);
-}
-aStatus_t appSystemFlashRead(const aDevFlash25qReadRequest_t *request)
-{
-    return aDevFlash25qRead(test_flash, request);
-}
-aStatus_t appSystemFlashWrite(const aDevFlash25qWriteRequest_t *request)
-{
-    return aDevFlash25qWrite(test_flash, request);
-}
-aStatus_t appSystemFlashErase(const aDevFlash25qEraseRequest_t *request)
-{
-    return aDevFlash25qErase(test_flash, request);
+    (void)config;
+    (void)handle;
+    assert(0);
+    return A_STATUS_ERROR;
 }
 
 static size_t records;
@@ -36,10 +27,7 @@ static aBool_t verify_record(const aDataBaseTsRecord_t *record, void *context)
 
 int main(void)
 {
-    aDevFlash25qBusConfig_t bc;
-    aDevFlash25qBus_t bus;
-    aDevFlash25qConfig_t fc;
-    aDevFlash25qHandle_t flash;
+    aMemoryConfig_t memory_config;
     aDataBaseKvConfig_t kc;
     aDataBaseTsConfig_t tc;
     aDataBaseKvHandle_t kv;
@@ -52,23 +40,21 @@ int main(void)
     size_t length;
 
     memset(memory, 0xFF, sizeof(memory));
-    aDevFlash25qBusConfigStructInit(&bc);
-    bc.spi.spiId = ADRV_SPI_1;
-    assert(aDevFlash25qBusInitStatic(&bc, &bus) == A_STATUS_OK);
-    aDevFlash25qConfigStructInit(&fc);
-    fc.bus = &bus;
-    fc.cs_pin = ADRV_PIN(ADRV_GPIO_PORT_B, 12);
-    assert(aDevFlash25qInitStatic(&fc, &flash) == A_STATUS_OK);
-    test_flash = &flash;
-    assert(appSystemMemoryInit() == A_STATUS_OK);
+    appSystemMemoryConfigInit(&memory_config);
+    /* 实际产品回调的失败回滚也必须释放总线和 OS 对象。 */
+    fail_mutex = 1;
+    assert(aMemoryInit(&memory_config) == A_STATUS_NO_MEMORY);
+    assert(allocation_count == 0U);
+    fail_mutex = 0;
+    unknown_id = 1;
+    assert(aMemoryInit(&memory_config) == A_STATUS_NOT_FOUND);
+    assert(aMemoryFind("param") == NULL && allocation_count == 0U);
+    unknown_id = 0;
+    assert(aMemoryInit(&memory_config) == A_STATUS_OK);
     assert(aDataBaseInit() == A_STATUS_OK);
-    aDataBaseKvConfigStructInit(&kc);
-    kc.name = "kv";
-    kc.partition = "param";
+    appSystemDatabaseKvConfigInit(&kc);
     kc.format_if_needed = A_TRUE;
-    aDataBaseTsConfigStructInit(&tc);
-    tc.name = "ts";
-    tc.partition = "log";
+    appSystemDatabaseTsConfigInit(&tc);
     tc.format_if_needed = A_TRUE;
     assert(aDataBaseKvInitStatic(&kc, &kv) == A_STATUS_OK);
     assert(aDataBaseTsInitStatic(&tc, &ts) == A_STATUS_OK);
@@ -106,8 +92,8 @@ int main(void)
     assert(aDataBaseTsDeInitStatic(&ts) == A_STATUS_OK);
     assert(aDataBaseDeInit() == A_STATUS_OK);
     assert(aMemoryDeInit() == A_STATUS_OK);
-    assert(aDevFlash25qDeInitStatic(&flash) == A_STATUS_OK);
-    assert(aDevFlash25qBusDeInitStatic(&bus) == A_STATUS_OK);
+    assert(aMemoryInit(&memory_config) == A_STATUS_OK);
+    assert(aMemoryDeInit() == A_STATUS_OK);
     assert(allocation_count == 0U);
     puts("FlashDB → aMemory → Flash25q → SFUD → SPI 整条链路验证通过");
     return 0;

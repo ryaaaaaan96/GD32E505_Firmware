@@ -1,5 +1,5 @@
 /* 通用命令仅从这些测试点表查询；不链接任何产品点表。 */
-#include "data_bus_service.h"
+#include "system_init.c"
 #include "aBus_instance.h"
 #include "aOS.h"
 #include <assert.h>
@@ -88,6 +88,16 @@ static const aBusTable_t tables[] = {
 static aBusHandle_t handle;
 static aBusSigState_t states[SIG_COUNT + 1];
 
+aStatus_t protocolBusConfigInit(dataBusConfig_t *config)
+{
+    aBusInstanceStructInit(&handle, states, SIG_COUNT + 1U);
+    config->instanceID = 0U;
+    config->tables = tables;
+    config->table_count = sizeof(tables) / sizeof(tables[0]);
+    config->instance = &handle;
+    return A_STATUS_OK;
+}
+
 int test_command(int argc, char **argv);
 static int run(int argc, char **argv)
 {
@@ -102,7 +112,6 @@ static int run(int argc, char **argv)
 
 int main(void)
 {
-    dataBusConfig_t config;
     aBusSigKeyQuery_t key = {.deviceID = 90U, .sigKey = 400U};
     size_t index = SIZE_MAX;
     char *set[] = {"sig", "set", "90", "10", "10"};
@@ -121,18 +130,13 @@ int main(void)
     assert(strcmp(aBusSigFlagName(ABUS_SIG_FLAG_LOCK), "LOCK") == 0);
     assert(strcmp(aBusSigFlagName(0x8000U), "UNKNOWN") == 0);
 
-    assert(dataBusInit(NULL) == A_STATUS_INVALID_PARAM);
     assert(dataBusResolveKey(&key, &index) == A_STATUS_NOT_READY);
     assert(index == SIZE_MAX);
     aBusInstanceStructInit(&handle, states, SIG_COUNT + 1U);
     assert(aBusResolveKey(&handle, &key, &index) == A_STATUS_NOT_READY);
     assert(index == SIZE_MAX);
-    dataBusConfigStructInit(&config);
-    config.tables = tables;
-    config.table_count = sizeof(tables) / sizeof(tables[0]);
-    config.instance = &handle;
-    assert(dataBusInit(&config) == A_STATUS_OK);
-    assert(dataBusInit(&config) == A_STATUS_BUSY);
+    assert(busInit() == A_STATUS_OK);
+    assert(busInit() == A_STATUS_BUSY);
     assert(dataBusResolveKey(NULL, &index) == A_STATUS_INVALID_PARAM);
     assert(dataBusResolveKey(&key, NULL) == A_STATUS_INVALID_PARAM);
     assert(dataBusResolveKey(&key, &index) == A_STATUS_OK && index == U16);

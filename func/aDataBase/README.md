@@ -30,19 +30,21 @@
 ## 对象和初始化
 
 aMemory 支持注册多个设备和分区，每个分区最多有一个活动数据库实例。
-数据库按分区名选取存储，不绑定唯一全局介质。
+区域由应用查询并传入配置的 `memory` 句柄，不绑定唯一全局介质。
+aDataBase 与 FlashDB 的 aMemory 适配均不通过名称自行查找区域；
+FlashDB 初始化的 path 参数仅供原有接口和诊断使用。
 KV 和 TSDB 使用不同句柄，可以同时存在。句柄既可由应用静态提供，
 也可通过 Create 动态创建；不拥有底层 Flash。
 
-1. 应用初始化设备并注册到 aMemory，然后调用 aDataBaseInit。
-2. 对配置调用 StructInit，补齐 name 和 partition。
+1. 应用调用 aMemoryInit，由它初始化注册的设备，再调用 aDataBaseInit。
+2. 对配置调用 StructInit，补齐 name 及 memory 区域句柄。
 3. 调用 KvInitStatic / KvCreate 或 TsInitStatic / TsCreate。
 4. 使用请求结构体调用读写接口。
 5. 停止使用者，关闭全部数据库，再调用 aDataBaseDeInit、
-   aMemoryDeInit，最后销毁底层设备。
+   aMemoryDeInit；注册设备的释放回调由 aMemory 调用。
 
 静态实例需要包含 aDataBase_instance.h；该头文件的布局不是稳定 ABI。
-配置 name 借用至实例关闭；请求和数据仅在本次调用期间借用。
+配置 name 和 memory 借用至实例关闭；请求和数据仅在本次调用期间借用。
 全部生命周期必须由应用串行编排，不得与业务操作并发。
 存在活动实例时 DeInit 返回 BUSY，同一分区重复创建返回 BUSY。
 aDataBaseInit 至 DeInit 期间持有 aMemory 引用，阻止存储提前反初始化。
@@ -140,7 +142,8 @@ static const uint16_t *const table_slots[] = { slots };
 aDataBaseKvConfig_t config;
 aDataBaseKvConfigStructInit(&config);
 config.name = "parameters";
-config.partition = "param";
+config.memory = aMemoryFind("param");
+if (config.memory == NULL) return A_STATUS_NOT_FOUND;
 config.tables = bus_tables;
 config.table_count = 1U;
 config.persist_sigs = persistent;
@@ -188,9 +191,12 @@ status = aDataBaseSigSet(handle, &save);
 
 Get/ Delete 分别使用 `aDataBaseSigGetRequest_t`、
 `aDataBaseSigDeleteRequest_t` 及对应 StructInit。
-Get 长度必须同时匹配当前 SIG 定义和已存记录，长度不符返回 INVALID_PARAM，
-不会截断或覆盖输出。稳定键只解决身份对应；结构体字段布局、字节序、
-类型变化及默认值恢复策略仍由应用处理。
+Get 的请求长度必须匹配当前 SIG 定义，否则返回 INVALID_PARAM；请求合法但
+已存记录长度不符则返回 DATA_MISMATCH。两种失败均不覆盖输出、不修改 Flash。
+应用恢复流程可据此调用 SigDelete 将旧记录标记作废，FlashDB 同步更新索引，
+存储空间以后由 GC 回收。不要将普通参数错误当成作废依据。
+稳定键只解决身份对应；相同长度下的字段布局、字节序或类型变化仍需应用通过
+格式版本或迁移策略识别，长度检查无法识别这些变化。
 
 ### 一致性与开销
 
@@ -294,3 +300,19 @@ TSDB 循环覆盖及禁止覆盖、64 位时间戳、重开持久化、超时和
 稳定键跨表重排、删除重开、长度变化、CRC 损坏及各写入步骤的失败注入。
 当前 4 字节测试值的正常替换为 5 次介质读回调，查询已知不存在项为零次；
 这些是主机 NOR 模型的调用计数，不是板上耗时或完整掉电可靠性证明。
+
+## 当前产品的 SIG 保存与恢复
+
+产品通过 protocolPersistenceConfigInit 将同一份点表及持久化清单关联给 KVDB，
+aDataBase 不引用 IDU/FAN 测点。system 在创建总线后、启动通信任务前恢复记录。
+当前两张 TEST 表各 50 项，只为清单选定的 12 项保存 SIG 偏移索引。
+U8/U16/U32/S32、RAW 和 STRUCT 均按完整 SIG 字节保存，恢复后还需经过 aBus
+长度和范围校验。已有记录长度不符时，system 调用 SigDelete 逻辑删除旧记录，
+保留 RAM，启动时即保留 aBus 已设置的默认值，继续恢复其他项。
+不自动保存默认值；下一次显式保存才按同一键写入新格式。
+单项 sig load 作废记录后返回 NOT_FOUND，不修改当前 RAM；批量恢复跳过缺失项。
+范围错误、介质读取错误及删除失败仍上报，不作成功处理。保存/恢复由应用串行化。
+相同长度的布局变更以及需要保留旧值的迁移仍由产品负责。
+
+Shell 的 sig save/load 支持全部选定项或单项；RAM 更新不自动写 Flash。
+完整用法和默认值见 [产品协议说明](../../app/protocol/README.md)。

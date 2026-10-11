@@ -42,6 +42,12 @@ for folder in ("app", "device", "func", "platform/aLib"):
         if path.name in ("FAN_modbus_master.c", "IDU_modbus_slave.c"):
             assert not re.search(r'\b(?:aOSCreateTask|aModbusCreate|'
                                  r'rs485PortOpen)\s*\(', text), path
+            assert not re.search(r'\.(?:task|stack_bytes|priority)\s*=',
+                                 text), path
+        if path.name == "protocol_tables.c":
+            assert not re.search(
+                r'\b(?:aDataBase_instance|aMemory_layout|kvdb_sec_info|'
+                r'aDataBaseKvIndexStorage_t)\b', text), path
         if path.is_relative_to(root / "app/protocol"):
             assert not re.search(r'#\s*include\s*[<"](?:aDrv|aDev)',
                                  text), path
@@ -57,7 +63,7 @@ includes = ["platform/aLib/include", "platform/aOS/public",
             "device/aDev_Flash25q", "func/aBus/include", "func/aMemory",
             "func/aDataBase", "func/aShell/include", "func/aLog",
             "func/aModbus", "app/protocol/inc"]
-headers = ("aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
+headers = ("aLayout.h", "aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
            "aDrv_dma.h", "aDev_led.h", "aDev_led_instance.h",
            "aBus.h", "aMemory.h", "aDataBase.h", "aShell.h", "aLog.h",
            "aModbus.h", "aModbus_rtu.h", "aModbus_rtu_instance.h",
@@ -68,12 +74,12 @@ command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
 for header in headers:
     subprocess.run(command, input=f'#include "{header}"\n',
                    text=True, cwd=root, check=True)
-# 应用入口和设备数据头不需要 aBus、aModbus 的头文件搜索路径。
+# 设备数据头不依赖 aBus/aModbus；protocol.h 显式借用 aBus。
 subprocess.run([
     "cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only",
     "-Iplatform/aLib/include", "-Iapp/protocol/inc",
     "-DAPP_MODBUS_ENABLE=1", "-DABUS_ENABLE=1", "-x", "c", "-",
-], input=('#include "protocol.h"\n#include "IDU_sig_table.h"\n'
+], input=('#include "IDU_sig_table.h"\n'
           '#include "FAN_sig_table.h"\n'
           '#if defined(ABUS_SIG) || defined(ABUS_PARAMS) || '
           'defined(ABUS_PARAM) || defined(ABUS_PARAM_REF)\n'

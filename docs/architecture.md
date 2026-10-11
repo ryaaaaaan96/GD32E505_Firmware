@@ -124,7 +124,7 @@ device 提供硬件无关的设备组合，例如 `RS485 = USART + DE GPIO`（�
 aDevUsart 可选配置，统一收发接口，详见 [RS485 设计](usart_design.md)）、
 `Flash25Q` 已在原模块内封装 SFUD，通过 SPI port 对接 aDrvSpi，
 详见 [Flash25Q 链路设计](spi_flash_design.md)。QSPI port 尚未实现。
-不新增 a25q，aMemory 在 func 层提供设备注册、分区和同步读写擦除。
+不新增 a25q，aMemory 在 func 层管理注册设备的生命周期、分区和同步读写擦除。
 device 依赖 aOS 的单调时基实现软件超时，但
 aDrv 不依赖 aOS。func 在其上构成 aDataBase、aModbus 和 aShell 等功能。
 FlashDB 的项目适配直接调用 aMemory，并提供 KV 索引扩展；本地源码已修改，
@@ -136,26 +136,39 @@ aBus_table.h 单独提供只读定义，CMake 的 aBusTable 目标仅依赖 aLib
 aDataBase 借用该契约，无需启用 aBus 的 RAM 实例、锁或分配接口；
 aModbus 需要读写运行值，因此仍依赖完整 aBus。
 aModbus 在模块内部提供地址段、SIG 映射及编码转换，不设置独立 backend 目录。
+主站采集项和从站离散映射显式声明协议 quantity，模块校验其与 aBus 目标匹配；
+协议数量使用寄存器或位为单位，本地业务长度仍以字节表达。
 协议实例借用 aBus 和传输，应用管理任务、设备、采样周期与重连策略；
 主站从远端采集后发布 aBus，从站根据地址映射读写 aBus。
 详见 [aModbus](../func/aModbus/README.md)。
 
 当前板级[产品协议](../app/protocol/README.md)使用 USART2 和 PA15 手动 DE，
 默认 RTU 从站 1，可通过应用宏切换为主站。应用协议配置位于
-app/protocol 根目录，测点清单位于 sig/IDU_sig.inc 和 sig/FAN_sig.inc，
+app/protocol 根目录，测点清单位于 sig/IDU_test.inc 和 sig/FAN_test.inc，
 由 X-Macro 生成索引、固定 Key 常量和只读描述，点表无需跨文件 extern。
-STRUCT 字段同样生成名称和描述；mapping/ 下的独立清单生成从站映射组、
-地址段与主站采集数组，目标引用这些名称，协议地址不随字段顺序改变。
-端口配置和初始化位于 app/devices/rs485。system 只调用 protocolInit，
-由 protocol.c 统一挂载
-IDU/FAN 两张表、初始化协议并创建任务；主从文件仅提供只读业务配置。
+STRUCT 字段同样生成名称和描述；主从配置文件直接定义从站离散映射、
+地址段与主站采集数组。字段映射引用字段枚举；整组映射用 WHOLE 引用 SIG，
+要求参数按内存偏移连续覆盖全部结构体，字段长度为偶数，地址为起点加 offset/2。
+整组布局由应用显式维护，修改字段偏移会改变协议地址；编解码与访问校验由
+aModbus 承担。默认路径按 SIG 取快照/更新，自定义部分写按完整字段回调。
+从站回调段 ranges 与离散映射 maps 在配置中平级，未命中回调段才查映射。
+两表分别有序且完整地址范围互不重叠；回调失败直接返回，不触发兜底访问。
+SIG 的多用途定义保留 X-Macro，协议数组使用普通 C 初始化，不再单独维护映射清单。
+端口配置和初始化位于 app/devices/rs485。system 显式初始化数据总线、恢复选定持久化参数，再调用 protocolInit(bus_handle)，
+点表由 protocol_tables.c 提供，system 挂载 IDU/FAN 两张表；
+protocol.c 按链路配置任务资源，初始化协议并创建任务；主从文件提供
+只读采集项、地址映射、地址段业务回调及通信策略，不携带任务栈容量或优先级。
+protocol_tables.c 提供数据定义、可选字段长度检查、RAM 存储计划和持久化选择，不包含
+FlashDB 私有索引布局或 aMemory 分区尺寸。
 func/aModbus 通过 aStream 收发，通用 RTU 实例负责分帧、时序与事务收尾；
 app/devices/rs485/rs485_device.c 只持有串口，提供 ISR、DWT 和线路完成操作，
 不依赖 aModbus。app/protocol/protocol.c 统一持有协议和 RTU 实例，
 根据主从配置装配资源并创建通信任务，不设置通用任务注册框架。
 通用 RTU 通过回调使用时基、同步及收发，不依赖设备或具体芯片。
 aModbus 库不引入 aDevUsart 和 aDrv 依赖，RTU/TCP 均由应用选择端口。
-SIG 模块通过内部装配接口借用私有 aBus handle，不向业务公开全局 handle。
+protocol 通过初始化参数借用 system 的私有 aBus handle，不向业务公开全局 handle。
+当前 IDU、FAN 各有 50 个 TEST，均覆盖六种数据类型。协议按 SIG 获取快照或
+编辑提交，跨 SIG 不提供事务；主站支持连续地址合并及整轮周期调度。
 
 工程不设置集中式 board 目录。引脚、外部器件型号、总线参数和设备句柄由使用它
 们的应用模块持有。platform 不提供 `main()` 或自动初始化注册表。
@@ -177,23 +190,32 @@ SIG 模块通过内部装配接口借用私有 aBus handle，不向业务公开�
 启动顺序为 main → aDrvInit → aOSInit → 创建 appInit 任务 → aOSRun。
 调度器启动后，由 main.c 内的 appInitTask 调用 aSystemInit。状态灯任务可先运行；
 控制台及 Shell 先完成状态初始化并创建 Shell 任务，任务等待就绪门控，
-启动文字仅入队。随后单独初始化日志、Flash、
-aMemory 分区、数据库、SIG 服务及测试任务，再初始化 Modbus 和通信任务，
+启动文字仅入队。随后初始化 aMemory 存储、日志、SIG 数据总线及数据库，
+再初始化 Modbus 和通信任务，
 全部成功后放行 Shell 任务，开放命令输入与队列发送。对应功能关闭时跳过该步骤。
-数据库模块初始化由 appDatabaseInit 管理，Flash 初始化只负责设备探测。
-产品数据库配置位于 app/devices/system/database_config.c；KV/TSDB 实例管理
-与调试命令位于 app/task/system/database_service.c、database_command.c。
+存储的设备回调、私有实例与区域配置合并在 system_device.c 的存储段，
+appSystemMemoryConfigInit 只填充配置；system_init.c 的私有 memoryInit
+调用 aMemoryInit，后者校验注册表并完成设备探测，全部成功才开放分区。
+memoryInit 在 logInit 之前，应用设备回调直接使用 ASHELL_PRINT 输出探测信息，
+不依赖日志模块；启动文字先入队，全部服务就绪后才发送。
+未来依赖数据库的日志输出须在数据库就绪后挂接。
+数据库模块初始化由 system_init.c 的私有 databaseInit 管理，应用配置向 KV/TSDB 注入区域句柄，
+数据库和 FlashDB 适配均不按产品名称查找区域，也不初始化物理设备。
+产品数据库配置位于 app/devices/system/system_device.c；KV/TSDB 实例管理
+与调试命令位于 app/task/system/system_init.c、command_database.c。
+持久化索引 RAM 与 KV/TSDB 实例同在 system_init.c；SIG 槽位数由产品清单
+自动计数，扇区缓存按参数分区配置分配，不在点表文件中管理数据库资源。
 初始化任务优先级为 HIGH，阻塞期间允许已就绪的状态灯任务运行；Shell 命令
-不会与服务初始化交错。初始化成功后自删除，不复用为 workqueue。
+不会与服务初始化交错。aSystemInit 成功后由 appInitTask 调用 appTestTaskInit 创建应用测试任务，再自删除，不复用为 workqueue。
 初始化任务通过 aOSTaskExit() 自退出，无需保存全局任务句柄；
 aOSDeleteTask(handle) 仍用于删除指定任务，传入 NULL 保持空操作语义。
 system_init.c 内部的静态函数 statusInit 调用 appSystemStatusLedInit 并创建状态任务；
 同文件内 shellInit 初始化控制台、Shell 并创建任务，
-aSystemInit 随后调用同文件内的私有 logInit，完成配置装配、日志初始化、
+aSystemInit 随后依次调用同文件内的私有 memoryInit 和 logInit，后者完成配置装配、日志初始化、
 失败清理与启动日志；顶层编排只调用并检查返回值。
 日志输出适配及配置合并在 app/devices/system/system_device.c 的独立日志段，
 由 system_device.h 声明配置入口；调试命令位于
-app/task/system/log_command.c；不再提供独立日志服务初始化接口。
+app/task/system/command_log.c；不再提供独立日志服务初始化接口。
 日志直接调用公开只读 app_system_console_stream，与 Shell 共用 console_write
 中的 TX 锁；日志可能先于仍在 Shell 队列中的启动文字输出。
 Shell 任务通过原子就绪标志等待，服务全部就绪前不调用 Process。

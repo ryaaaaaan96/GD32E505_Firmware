@@ -90,7 +90,10 @@ static aStatus_t definitions_check(const aBusTable_t *table)
         const aBusSig_t *def = &table->sigs[i];
 
         if (!type_valid(def->type, def->size, def->range) ||
-            (def->flags & ~ABUS_SIG_FLAG_LOCK) != 0U ||
+            (def->flags & ~(ABUS_SIG_FLAG_LOCK |
+                           ABUS_SIG_FLAG_DISJOINT)) != 0U ||
+            ((def->flags & ABUS_SIG_FLAG_DISJOINT) != 0U &&
+             def->type != ALIB_DATA_STRUCT) ||
             (def->param_count != 0U && def->params == NULL) ||
             (def->type != ALIB_DATA_STRUCT &&
              (def->params != NULL || def->param_count != 0U))) {
@@ -105,6 +108,15 @@ static aStatus_t definitions_check(const aBusTable_t *table)
                 field->offset > def->size ||
                 field->size > def->size - field->offset) {
                 return A_STATUS_INVALID_PARAM;
+            }
+            if ((def->flags & ABUS_SIG_FLAG_DISJOINT) != 0U) {
+                for (size_t k = 0U; k < j; k++) {
+                    const aBusParam_t *other = &def->params[k];
+                    if (field->offset < other->offset + other->size &&
+                        other->offset < field->offset + field->size) {
+                        return A_STATUS_INVALID_PARAM;
+                    }
+                }
             }
         }
         if (values_check(def, def->default_data) != A_STATUS_OK) {
@@ -456,6 +468,64 @@ aStatus_t aBusGetSigInfo(aBusHandle_t *handle,
     return A_STATUS_OK;
 }
 
+aStatus_t aBusUpdateSig(aBusHandle_t *handle,
+    const aBusUpdateRequest_t *request)
+{
+    const aBusTable_t *table;
+    const aBusSig_t *sig;
+    aBusSigState_t *entry;
+    size_t offset;
+    uintptr_t buffer, data;
+    aStatus_t status;
+#if ABUS_LOCK_MODE != ABUS_LOCK_NONE
+    aOSMutex_t mutex = NULL;
+#endif
+
+    if (handle == NULL || request == NULL || request->buffer == NULL ||
+        request->edit == NULL || !aTimeoutIsValid(request->timeout)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (handle->tables == NULL) return A_STATUS_NOT_READY;
+    table = table_find(handle->tables, handle->table_count,
+                       request->target.deviceID, &offset);
+    if (table == NULL || request->target.sigIndex >= table->sig_count) {
+        return A_STATUS_NOT_FOUND;
+    }
+    sig = &table->sigs[request->target.sigIndex];
+    entry = &handle->sigs[offset + request->target.sigIndex];
+    buffer = (uintptr_t)request->buffer;
+    data = (uintptr_t)entry->data;
+    if (request->capacity < sig->size || buffer > UINTPTR_MAX - sig->size ||
+        data > UINTPTR_MAX - sig->size ||
+        (buffer < data + sig->size && data < buffer + sig->size)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+#if ABUS_LOCK_MODE != ABUS_LOCK_NONE
+    if ((sig->flags & ABUS_SIG_FLAG_LOCK) != 0U) {
+#if ABUS_LOCK_MODE == ABUS_LOCK_BUS
+        mutex = handle->mutex;
+#else
+        mutex = entry->mutex;
+#endif
+        status = aOSMutexLock(mutex, request->timeout);
+        if (status != A_STATUS_OK) return status;
+    }
+#endif
+    memcpy(request->buffer, entry->data, sig->size);
+    status = request->edit(request->context, request->buffer, sig->size);
+    if (status == A_STATUS_OK) status = values_check(sig, request->buffer);
+    if (status == A_STATUS_OK) {
+        memcpy(entry->data, request->buffer, sig->size);
+    }
+#if ABUS_LOCK_MODE != ABUS_LOCK_NONE
+    if (mutex != NULL) {
+        aStatus_t unlocked = aOSMutexUnlock(mutex);
+        if (status == A_STATUS_OK) status = unlocked;
+    }
+#endif
+    return status;
+}
+
 aStatus_t aBusSetByIndex(aBusHandle_t *handle,
                     const aBusSetIndexRequest_t *request)
 {
@@ -651,6 +721,10 @@ static aStatus_t patch_check(const aBusSig_t *sig,
     const aBusParam_t *target, const void *data, const void *src)
 {
     size_t end = target->offset + target->size;
+
+    if ((sig->flags & ABUS_SIG_FLAG_DISJOINT) != 0U) {
+        return range_check(target->type, target->range, src);
+    }
 
     for (size_t i = 0U; i < sig->param_count; i++) {
         const aBusParam_t *field = &sig->params[i];

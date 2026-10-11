@@ -127,36 +127,36 @@ static aStatus_t address_write(void *context,
 }
 
 #define READ_WRITE (AMODBUS_ACCESS_READ | AMODBUS_ACCESS_WRITE)
-#define MAP(addr, index) \
-    {.address = addr, .flags = READ_WRITE, \
+#define MAP(addr, count, index) \
+    {.area = AMODBUS_AREA_HOLDING_REGISTERS, \
+     .address = addr, .quantity = count, .flags = READ_WRITE, \
      .target = {1, index, AMODBUS_SIG_WHOLE}}
-static const aModbusBusMap_t coil_maps[] = {
-    MAP(0, 0), MAP(1, 1), MAP(2, 2), MAP(3, 3), MAP(4, 4)
-};
-static const aModbusBusMap_t holding_maps[] = {
-    MAP(0, WORD), MAP(1, COUNTER), MAP(3, SIGNED),
-    {.address = 5, .flags = READ_WRITE, .target = {1, MOTOR, 0}},
-    MAP(7, RAW),
-    {.address = 10, .flags = READ_WRITE,
-     .target = {2, 0, AMODBUS_SIG_WHOLE}}
-};
-static const aModbusBusMap_t input_maps[] = {
-    {.address = 0, .flags = AMODBUS_ACCESS_READ,
+#define COIL_MAP(addr) \
+    {.area = AMODBUS_AREA_COILS, .address = addr, \
+     .quantity = 1U, .flags = READ_WRITE, \
+     .target = {1, addr, AMODBUS_SIG_WHOLE}}
+static const aModbusBusMap_t maps[] = {
+    COIL_MAP(0), COIL_MAP(1), COIL_MAP(2), COIL_MAP(3), COIL_MAP(4),
+    MAP(0, 1U, WORD), MAP(1, 2U, COUNTER), MAP(3, 2U, SIGNED),
+    {.area = AMODBUS_AREA_HOLDING_REGISTERS,
+     .address = 5, .quantity = 2U,
+     .flags = READ_WRITE, .target = {1, MOTOR, 0}},
+    MAP(7, 3U, RAW),
+    {.area = AMODBUS_AREA_HOLDING_REGISTERS,
+     .address = 10, .quantity = 2U, .flags = READ_WRITE,
+     .target = {2, 0, AMODBUS_SIG_WHOLE}},
+    {.area = AMODBUS_AREA_INPUT_REGISTERS,
+     .address = 0, .quantity = 2U, .flags = AMODBUS_ACCESS_READ,
      .target = {1, COUNTER, AMODBUS_SIG_WHOLE},
      .word_order = AMODBUS_WORD_LOW_FIRST}
 };
+#undef COIL_MAP
 static const aModbusAddressRange_t ranges[] = {
-    {.area = AMODBUS_AREA_COILS, .address = 0, .quantity = 5,
-     .flags = READ_WRITE, .maps = coil_maps, .map_count = 5},
     {.area = AMODBUS_AREA_COILS, .address = 5, .quantity = 5,
      .flags = READ_WRITE, .read = address_read, .write = address_write,
      .context = &bus},
     {.area = AMODBUS_AREA_DISCRETE_INPUTS, .quantity = 10,
-     .flags = AMODBUS_ACCESS_READ, .read = address_read, .context = &bus},
-    {.area = AMODBUS_AREA_HOLDING_REGISTERS, .quantity = 12,
-     .flags = READ_WRITE, .maps = holding_maps, .map_count = 6},
-    {.area = AMODBUS_AREA_INPUT_REGISTERS, .quantity = 2,
-     .flags = AMODBUS_ACCESS_READ, .maps = input_maps, .map_count = 1}
+     .flags = AMODBUS_ACCESS_READ, .read = address_read, .context = &bus}
 };
 
 static aStatus_t sig_read(void *context,
@@ -407,6 +407,8 @@ static aModbusConfig_t configuration(endpoint_t *endpoint,
     config.transport.prepare_frame = port_prepare;
     config.transport.wait_transmit_complete = port_complete;
     if (role == AMODBUS_ROLE_SERVER) {
+        config.maps = maps;
+        config.map_count = sizeof(maps) / sizeof(maps[0]);
         config.ranges = ranges;
         config.range_count = sizeof(ranges) / sizeof(ranges[0]);
     }
@@ -626,6 +628,9 @@ static void end_to_end(aModbusTransportType_t type, aBool_t callbacks)
     assert(read_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
         2, 1, registers, sizeof(registers), &result) == A_STATUS_OK);
     assert(registers[0] == 0x5678);
+    assert(read_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
+        1, 1, registers, sizeof(registers), &result) == A_STATUS_OK);
+    assert(registers[0] == 0x1234);
     registers[0] = 0xCAFE;
     registers[1] = 0xBABE;
     assert(write_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
@@ -633,6 +638,10 @@ static void end_to_end(aModbusTransportType_t type, aBool_t callbacks)
     assert(counter == 0xCAFEBABEU);
     assert(write_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
         2, 1, registers, sizeof(registers), &result) == A_STATUS_ERROR);
+    assert(result.exception == 2U && counter == 0xCAFEBABEU);
+    /* 从高字开始但长度不足，同样禁止半值写入。 */
+    assert(write_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
+        1, 1, registers, sizeof(registers), &result) == A_STATUS_ERROR);
     assert(result.exception == 2U && counter == 0xCAFEBABEU);
     registers[0] = 999;
     registers[1] = 0;
@@ -655,6 +664,14 @@ static void end_to_end(aModbusTransportType_t type, aBool_t callbacks)
     assert(write_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
         7, 3, registers, sizeof(registers), &result) == A_STATUS_OK);
     assert(raw[0] == 0xAA && raw[4] == 0xEE);
+    /* RAW 允许读取其中一个寄存器，写入必须覆盖完整映射。 */
+    assert(read_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
+        8, 1, registers, sizeof(registers), &result) == A_STATUS_OK);
+    assert(registers[0] == 0xCCDDU);
+    assert(write_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
+        7, 2, registers, sizeof(registers), &result) == A_STATUS_ERROR);
+    assert(result.exception == 2U && raw[0] == 0xAA && raw[4] == 0xEE);
+    registers[0] = 0xAABB;
     registers[2] = 0xEE01;
     assert(write_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
         7, 3, registers, sizeof(registers), &result) == A_STATUS_ERROR);
@@ -782,6 +799,8 @@ static void maximum_frames(aModbusTransportType_t type)
     uint16_t registers[125];
     uint8_t bits[251];
     aModbusResult_t result;
+    server_config.maps = NULL;
+    server_config.map_count = 0U;
     server_config.ranges = maximum_ranges;
     server_config.range_count = 2U;
     link.server = open_instance(&server_config, &server_storage);
@@ -870,13 +889,12 @@ static void malformed_frames(void)
     config.ranges = invalid_ranges;
     config.range_count = 2;
     assert(invalid_config(&config) == A_STATUS_INVALID_PARAM);
-    aModbusBusMap_t invalid_map = holding_maps[0];
-    invalid_map.target.sigIndex = MOTOR;
-    invalid_ranges[0] = ranges[3];
-    invalid_ranges[0].maps = &invalid_map;
-    invalid_ranges[0].map_count = 1;
-    config.range_count = 1;
-    assert(invalid_config(&config) == A_STATUS_UNSUPPORTED);
+    aModbusBusMap_t invalid_map = MAP(0U, 3U, MOTOR);
+    config.ranges = NULL;
+    config.range_count = 0U;
+    config.maps = &invalid_map;
+    config.map_count = 1U;
+    assert(invalid_config(&config) == A_STATUS_INVALID_PARAM);
 }
 #endif
 

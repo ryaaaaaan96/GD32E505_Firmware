@@ -81,7 +81,7 @@ int main(void)
     for (unsigned pass = 0U; pass < 2U; ++pass) {
         for (size_t i = 0U; i < 2U; ++i) {
             config.name = parts[i].name;
-            config.partition = parts[i].name;
+            config.memory = aMemoryFind(parts[i].name);
             config.format_if_needed = pass == 0U;
 #if ADATABASE_DYNAMIC_ENABLE
             assert(aDataBaseKvCreate(&config, &handles[i]) == A_STATUS_OK);
@@ -113,6 +113,7 @@ int main(void)
     assert(aMemoryInit(&memory_config) == A_STATUS_OK);
     assert(aDataBaseInit() == A_STATUS_OK);
     accesses = 0U;
+    config.memory = aMemoryFind(parts[1].name);
 #if ADATABASE_DYNAMIC_ENABLE
     assert(aDataBaseKvCreate(&config, &handles[1]) == A_STATUS_NOT_READY);
     assert(handles[1] == NULL);

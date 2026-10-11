@@ -12,6 +12,51 @@
 除数必须大于零；宏参数会重复求值，须无副作用且求值期间保持稳定。
 FreeRTOS 栈元素类型和默认栈容量仍由 aOS 后端管理。
 
+## 可选布局断言
+
+`aLayout.h` 提供编译期检查，也由 `aLib.h` 包含。由定义结构体的应用层
+选择调用，C11/C++11 均支持；不受 `NDEBUG` 影响，不产生运行时代码。
+
+| 宏 | 检查内容 |
+| --- | --- |
+| `ALIB_STATIC_ASSERT(condition, message)` | 常量条件成立，否则报告指定消息 |
+| `ALIB_ASSERT_TYPE_SIZE(type, bytes)` | 类型大小等于指定常量字节数 |
+| `ALIB_ASSERT_MEMBER_OFFSET(type, member, offset)` | 成员位于指定常量偏移 |
+
+```c
+#include "aLayout.h"
+#include <stdint.h>
+
+typedef struct {
+    uint16_t mode;
+    uint16_t reserved;
+    uint32_t speed;
+} Example_t;
+
+/* 应用决定是否检查结构体总大小等于成员大小之和。 */
+ALIB_ASSERT_TYPE_SIZE(Example_t,
+    sizeof(((Example_t *)0)->mode) +
+    sizeof(((Example_t *)0)->reserved) +
+    sizeof(((Example_t *)0)->speed));
+
+/* 如需固定对外布局，可额外声明预期总大小和成员偏移。 */
+ALIB_ASSERT_TYPE_SIZE(Example_t, 8U);
+ALIB_ASSERT_MEMBER_OFFSET(Example_t, speed, 4U);
+```
+
+调用放在完整类型定义之后，并以分号结束。成员清单由调用者保证完整且不重复；
+总长度相等不能独立证明成员顺序、连续性或没有重叠。`sizeof` 中的成员表达式
+不会访问空指针。检查适用于固定大小类型，偏移检查不支持位域，C++ 使用
+标准布局类型。宏不修改对齐方式，也不保证字节序或并发访问安全。
+
+普通 C 的 `const` 描述数组元素不能用于编译期断言。如果长度来自 aBus 的
+`params[]`，应用可调用 `aBusSigParamSizeCheck()`，见
+[aBus 可选长度检查](../../../func/aBus/README.md#可选参数长度检查)。
+aLib 不依赖 aBus，也不强制两字节寄存器规则。
+
+验证：`python3 tests/layout/run.py` 检查 C11/C++11、Debug/Release 下的通过
+和预期编译失败，以及 aBus 长度检查的溢出边界。需要主机 C/C++ 编译器。
+
 ## 布尔类型
 
 项目自研代码统一使用 `aBool_t`、`A_TRUE` 和 `A_FALSE`，不在其他层直接暴露

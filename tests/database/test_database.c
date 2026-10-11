@@ -163,10 +163,12 @@ int main(void)
     assert(aDataBaseInit() == A_STATUS_OK);
     aDataBaseKvConfigStructInit(&kc);
     kc.name = "kv";
-    kc.partition = AMEMORY_PART_PARAM_NAME;
+    assert(kv_open(&kc) == A_STATUS_INVALID_PARAM);
+    kc.memory = aMemoryFind(AMEMORY_PART_PARAM_NAME);
     aDataBaseTsConfigStructInit(&tc);
     tc.name = "ts";
-    tc.partition = AMEMORY_PART_LOG_NAME;
+    assert(ts_open(&tc) == A_STATUS_INVALID_PARAM);
+    tc.memory = aMemoryFind(AMEMORY_PART_LOG_NAME);
     /* 空白介质不得在默认初始化时被擦写。 */
     assert(kv_open(&kc) == A_STATUS_NOT_READY);
     assert(ts_open(&tc) == A_STATUS_NOT_READY);

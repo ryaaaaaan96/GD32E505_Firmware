@@ -51,6 +51,13 @@ typedef struct {
  * write 不隐式擦除；不支持的操作填 NULL，返回 UNSUPPORTED。
  * 回调必须遵守传入超时，不得重入同一设备的不支持重入的驱动。 */
 typedef struct {
+    /** 可选生命周期回调，必须成对提供；均在应用初始化任务中执行。
+     * init 配置硬件并核对实际几何参数，不擦写业务区域。
+     * init 失败后也会调用 deinit，故 deinit 必须支持部分初始化。
+     * deinit 失败须保留尚未释放的资源，允许再次调用。
+     * 设备由本注册表独占生命周期，回调不得重入 Init / DeInit。 */
+    aStatus_t (*init)(void *context, const aMemoryGeometry_t *geometry);
+    aStatus_t (*deinit)(void *context);
     aStatus_t (*read)(void *context, const aMemoryReadRequest_t *request);
     aStatus_t (*write)(void *context, const aMemoryWriteRequest_t *request);
     aStatus_t (*erase)(void *context, const aMemoryEraseRequest_t *request);
@@ -72,7 +79,8 @@ typedef struct {
 } aMemoryPartition_t;
 
 /** 所有表、名称、回调及上下文借用至 DeInit，期间禁止修改或移动。
- * 不拥有设备，应用先初始化设备并核对实际几何参数，再初始化本模块。 */
+ * 提供生命周期回调时由 aMemory 管理设备，否则设备须由外部提前就绪。
+ * config 本身仅在 Init 期间借用，两个指针数组须保留至释放完成。 */
 typedef struct {
     const aMemoryDevice_t *const *devices;
     size_t device_count;
@@ -103,7 +111,10 @@ void aMemoryReadRequestStructInit(aMemoryReadRequest_t *request);
 void aMemoryWriteRequestStructInit(aMemoryWriteRequest_t *request);
 void aMemoryEraseRequestStructInit(aMemoryEraseRequest_t *request);
 
-/** 固定容量注册表，不分配堆；失败时不注册任何设备或分区。
+/** 固定容量注册表，不分配堆；先检查全部定义，再依次初始化设备。
+ * 全部成功后才发布分区；失败按逆序清理，包括初始化失败的设备。
+ * 清理失败时返回清理错误；不开放访问，须重试 DeInit 后才能重新 Init。
+ * DeInit 先撤销访问，再逆序释放设备；失败后也须保留配置并重试。
  * 生命周期和 Retain/Release 由应用串行编排，不得与读写并发。
  * 分区不得重叠；同一物理设备只能注册一个设备对象。
  * DeInit 后所有借用句柄失效，调用者必须丢弃后重新查找。 */

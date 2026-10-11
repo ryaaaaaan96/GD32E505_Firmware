@@ -85,7 +85,7 @@ fdb_err_t _fdb_init_ex(fdb_db_t db, const char *name, const char *path, fdb_db_t
         aMemoryInfo_t info;
         size_t block_size;
 
-        db->storage.memory = aMemoryFind(path);
+        /* 区域由 aDataBase 在初始化前绑定；path 仅保留官方诊断参数。 */
         if (db->storage.memory == NULL) return FDB_PART_NOT_FOUND;
         if (aMemoryGetInfo(db->storage.memory, &info) != A_STATUS_OK)
             return FDB_INIT_FAILED;

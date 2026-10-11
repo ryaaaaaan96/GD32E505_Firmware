@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-log-") as directory:
                       "aShell_nr.c")]
     shell_sources += [shell / "nr_micro_shell/src/nr_micro_shell_core.c",
                       root / "app/devices/system/system_device.c",
-                      root / "app/task/system/log_command.c",
+                      root / "app/task/system/command_log.c",
                       root / "tests/log/test_shell.c"]
     for capacity in (256, 512):
         subprocess.run(common + flags

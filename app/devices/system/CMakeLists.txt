@@ -40,7 +40,6 @@ if(app_log_enable)
 endif()
 
 if(app_database_enable)
-    target_sources(${APP_TARGET} PRIVATE database_config.c)
     target_include_directories(${APP_TARGET} PRIVATE
         "${ACLASS_PRODUCT_DIR}/config")
     target_link_libraries(${APP_TARGET} PRIVATE aDataBase)
@@ -54,13 +53,8 @@ target_compile_definitions(${APP_TARGET} PRIVATE
     ADEV_FLASH25Q_ENABLE=$<BOOL:${ADEV_FLASH25Q_ENABLE}>
     AMEMORY_ENABLE=$<BOOL:${AMEMORY_ENABLE}>
 )
-if(ADEV_FLASH25Q_ENABLE)
-    target_sources(${APP_TARGET} PRIVATE flash_device.c)
+if(app_memory_enable)
     target_link_libraries(${APP_TARGET} PRIVATE aFlash25q)
-endif()
-
-if(AMEMORY_ENABLE AND ADEV_FLASH25Q_ENABLE)
-    target_sources(${APP_TARGET} PRIVATE memory_config.c)
     target_include_directories(${APP_TARGET} PRIVATE
         "${ACLASS_PRODUCT_DIR}/config")
     target_link_libraries(${APP_TARGET} PRIVATE aMemory)

@@ -181,7 +181,7 @@ int main(void)
     assert(aDataBaseInit() == A_STATUS_OK);
     aDataBaseKvConfigStructInit(&config);
     config.name = "indexed";
-    config.partition = AMEMORY_PART_PARAM_NAME;
+    config.memory = aMemoryFind(AMEMORY_PART_PARAM_NAME);
     config.tables = tables;
     config.table_count = 2U;
     config.persist_sigs = persist;
@@ -317,11 +317,17 @@ int main(void)
     wide_get.deviceID = 2U;
     wide_get.data = &wider;
     wide_get.size = sizeof(wider);
-    assert(aDataBaseSigGet(kv, &wide_get) == A_STATUS_INVALID_PARAM);
+    before = writes;
+    assert(aDataBaseSigGet(kv, &wide_get) == A_STATUS_DATA_MISMATCH);
     assert(wider == UINT64_MAX);
+    /* 请求自身长度错误与旧记录不兼容是两种状态，均不能隐式删除。 */
+    wide_get.size = sizeof(value);
+    assert(aDataBaseSigGet(kv, &wide_get) == A_STATUS_INVALID_PARAM);
+    assert(wider == UINT64_MAX && writes == before);
     close_db();
     other_sig.size = sizeof(value);
     assert(open_db(&config) == A_STATUS_OK);
+    assert(get(2U, 0U, &value) == A_STATUS_OK);
     /* 总超时使实例失效，重新打开重建 RAM 缓存。 */
     fail_read = 1;
     assert(get(2U, 0U, &value) == A_STATUS_TIMEOUT);

@@ -11,6 +11,9 @@ struct aMemoryHandle {
 static aMemoryHandle_t handles[AMEMORY_MAX_PARTITIONS];
 static size_t handle_count;
 static size_t references;
+/* 只保留注册表及清理进度，不为每个设备增加运行时分配。 */
+static const aMemoryDevice_t *const *active_devices;
+static size_t active_device_count;
 
 void aMemoryConfigStructInit(aMemoryConfig_t *config)
 {
@@ -57,6 +60,8 @@ static aBool_t device_valid(const aMemoryDevice_t *device)
     const aMemoryGeometry_t *geometry;
 
     if (device == NULL || !name_valid(device->name) || device->ops == NULL)
+        return A_FALSE;
+    if ((device->ops->init == NULL) != (device->ops->deinit == NULL))
         return A_FALSE;
     geometry = &device->geometry;
     if (geometry->capacity == 0U || geometry->read_granularity == 0U ||
@@ -108,11 +113,31 @@ static aBool_t partition_valid(const aMemoryPartition_t *partition,
     return A_TRUE;
 }
 
+static aStatus_t devices_release(void)
+{
+    const aMemoryDevice_t *device;
+    aStatus_t status;
+
+    while (active_device_count != 0U) {
+        device = active_devices[active_device_count - 1U];
+        if (device->ops->deinit != NULL) {
+            status = device->ops->deinit(device->context);
+            if (status != A_STATUS_OK) return status;
+        }
+        --active_device_count;
+    }
+    active_devices = NULL;
+    return A_STATUS_OK;
+}
+
 aStatus_t aMemoryInit(const aMemoryConfig_t *config)
 {
     size_t i, j;
+    const aMemoryDevice_t *device;
+    aStatus_t status;
+    aStatus_t cleanup_status;
 
-    if (handle_count != 0U) return A_STATUS_BUSY;
+    if (active_devices != NULL) return A_STATUS_BUSY;
     if (config == NULL || config->devices == NULL ||
         config->device_count == 0U || config->partitions == NULL ||
         config->partition_count == 0U) return A_STATUS_INVALID_PARAM;
@@ -141,6 +166,17 @@ aStatus_t aMemoryInit(const aMemoryConfig_t *config)
                 return A_STATUS_INVALID_PARAM;
         }
     }
+    active_devices = config->devices;
+    for (i = 0U; i < config->device_count; ++i) {
+        device = config->devices[i];
+        ++active_device_count;
+        if (device->ops->init == NULL) continue;
+        status = device->ops->init(device->context, &device->geometry);
+        if (status != A_STATUS_OK) {
+            cleanup_status = devices_release();
+            return cleanup_status == A_STATUS_OK ? status : cleanup_status;
+        }
+    }
     for (i = 0U; i < config->partition_count; ++i)
         handles[i].partition = config->partitions[i];
     handle_count = config->partition_count;
@@ -149,11 +185,11 @@ aStatus_t aMemoryInit(const aMemoryConfig_t *config)
 
 aStatus_t aMemoryDeInit(void)
 {
-    if (handle_count == 0U) return A_STATUS_NOT_READY;
+    if (active_devices == NULL) return A_STATUS_NOT_READY;
     if (references != 0U) return A_STATUS_BUSY;
     memset(handles, 0, sizeof(handles));
     handle_count = 0U;
-    return A_STATUS_OK;
+    return devices_release();
 }
 
 aStatus_t aMemoryRetain(void)

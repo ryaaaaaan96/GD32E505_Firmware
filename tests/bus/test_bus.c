@@ -713,6 +713,19 @@ static unsigned char ranged_bytes[8];
 ABUS_RAM_BIND_EXPORT(range_scalar, 0U, 30U, 0U, ranged_scalar);
 ABUS_RAM_BIND_EXPORT(range_bytes, 0U, 30U, 1U, ranged_bytes);
 
+static aStatus_t edit_byte(void *context, void *data, size_t size)
+{
+    assert(size == 8U);
+    ((uint8_t *)data)[0] = *(const uint8_t *)context;
+    return A_STATUS_OK;
+}
+
+static aStatus_t reject_edit(void *context, void *data, size_t size)
+{
+    (void)edit_byte(context, data, size);
+    return A_STATUS_ERROR;
+}
+
 static void range_param_tests(void)
 {
     static const aBusRange_t scalar_range = {.max.u32 = 100U};
@@ -722,7 +735,7 @@ static void range_param_tests(void)
         {.type = ALIB_DATA_U8, .size = 1U, .range = &byte_range},
         {.offset = 1U, .type = ALIB_DATA_RAW, .size = 7U}
     };
-    static const aBusSig_t sigs[] = {
+    static aBusSig_t sigs[] = {
         {.type = ALIB_DATA_U32, .size = 4U, .range = &scalar_range},
         {.type = ALIB_DATA_STRUCT, .size = 8U, .params = params,
          .param_count = 3U, .flags = ABUS_SIG_FLAG_LOCK}
@@ -782,6 +795,62 @@ static void range_param_tests(void)
     input[0] = 255U;
     assert(aBusSetParam(handle, &write) == A_STATUS_OK);
     assert(ranged_bytes[0] == 10U && ranged_bytes[1] == 255U);
+    /* 更新回调失败、最终范围失败和缓冲区别名均不能污染当前值。 */
+    {
+        uint8_t scratch[8];
+        uint8_t replacement = 11U;
+        aBusUpdateRequest_t update = {
+            .target = {30U, 1U}, .buffer = scratch,
+            .capacity = sizeof(scratch), .edit = edit_byte,
+            .context = &replacement, .timeout = A_TIMEOUT_NO_WAIT
+        };
+        assert(aBusUpdateSig(handle, &update) == A_STATUS_INVALID_PARAM);
+        assert(ranged_bytes[0] == 10U);
+        replacement = 9U;
+        update.edit = reject_edit;
+        assert(aBusUpdateSig(handle, &update) == A_STATUS_ERROR);
+        assert(ranged_bytes[0] == 10U);
+        update.edit = edit_byte;
+        update.buffer = ranged_bytes;
+        assert(aBusUpdateSig(handle, &update) == A_STATUS_INVALID_PARAM);
+        update.buffer = scratch;
+#if ABUS_LOCK_MODE != ABUS_LOCK_NONE
+        fail_lock = 1;
+        assert(aBusUpdateSig(handle, &update) == A_STATUS_TIMEOUT);
+        assert(ranged_bytes[0] == 10U);
+        fail_lock = 0;
+#endif
+        assert(aBusUpdateSig(handle, &update) == A_STATUS_OK);
+        assert(ranged_bytes[0] == 9U);
+    }
+#if ABUS_STATIC_ENABLE
+    assert(aBusDeInitStatic(handle) == A_STATUS_OK);
+#else
+    assert(aBusDestroy(handle) == A_STATUS_OK);
+#endif
+    sigs[1].flags |= ABUS_SIG_FLAG_DISJOINT;
+#if ABUS_DEF_CHECK_ENABLE
+#if ABUS_STATIC_ENABLE
+    assert(aBusInitStatic(0U, &table, 1U, &instance) ==
+           A_STATUS_INVALID_PARAM);
+#else
+    assert(aBusCreate(0U, &table, 1U, &handle) == A_STATUS_INVALID_PARAM);
+#endif
+#endif
+    sigs[1].params = &params[1];
+    sigs[1].param_count = 1U;
+#if ABUS_STATIC_ENABLE
+    assert(aBusInitStatic(0U, &table, 1U, &instance) == A_STATUS_OK);
+    handle = &instance;
+#else
+    assert(aBusCreate(0U, &table, 1U, &handle) == A_STATUS_OK);
+#endif
+    write.paramIndex = 0U;
+    write.size = 1U;
+    input[0] = 11U;
+    assert(aBusSetParam(handle, &write) == A_STATUS_INVALID_PARAM);
+    input[0] = 10U;
+    assert(aBusSetParam(handle, &write) == A_STATUS_OK);
 #if ABUS_STATIC_ENABLE
     assert(aBusDeInitStatic(handle) == A_STATUS_OK);
 #else

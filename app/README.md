@@ -8,33 +8,33 @@
 
 | 职责 | 文件名示例 |
 | --- | --- |
-| 业务测点清单 | `sig/IDU_sig.inc`、`sig/FAN_sig.inc` |
-| 系统服务配置与生命周期 | `system_init.c`、`database_service.c`、`data_bus_service.c` |
-| 协议映射及采集清单 | `mapping/FAN_modbus_master.inc`、`mapping/IDU_modbus_slave.inc` |
+| 业务测点清单 | `sig/IDU_test.inc`、`sig/FAN_test.inc` |
+| 系统服务配置与生命周期 | `system_init.c/h` |
+| 协议映射及采集数组 | `FAN_modbus_master.c`、`IDU_modbus_slave.c` |
 | 协议角色和服务参数 | `FAN_modbus_master.c`、`IDU_modbus_slave.c` |
-| 任务创建与运行循环 | `protocol.c`、`sig_task.c` |
-| 板级资源配置与注册 | `rs485_device.c`、`memory_config.c`、`system_device.c` |
-| 设备实例与访问入口 | `system_device.c`、`flash_device.c` |
-| Shell 命令 | `data_bus_command.c`、`database_command.c`、`log_command.c` |
+| 任务创建与运行循环 | `protocol.c`、`test_task.c` |
+| 板级资源配置与注册 | `rs485_device.c`、`system_device.c` |
+| 设备实例与访问入口 | `system_device.c` |
+| Shell 命令 | `command_data_bus.c`、`command_database.c`、`command_log.c`、`command_flash.c` |
 | 测点标识与共享数据类型 | `IDU_sig_table.h`、`FAN_sig_table.h` |
-| 数据总线与协议的装配接口 | `data_bus_modbus.h` |
+| 数据总线与协议的装配接口 | `protocol.h` 的显式总线参数 |
 | 系统启动编排 | `system_init.c` |
 
-`main.c` 和 `flash_test.c` 保留已有的职责名称。应用总配置使用
+`main.c` 保留入口名称，Shell 命令文件统一使用 `command_功能.c`。应用总配置使用
 `app_config.h`，与 `main.c` 同级；这是集中配置的固定名称。
 文件名不要求与接口前缀一致，头文件保护宏仍使用 `APP_` 命名空间。
 protocol 按设备归属与职责命名：点表类使用 `IDU_sig_*`，
 通信类使用 `IDU_modbus_slave.c` 与 `FAN_modbus_master.c`，分别表示
 IDU 对上提供服务与向风扇控制板采集；FAN 为风扇控制板的统一简称。
 当前固件运行在 IDU 板，上级为 CSU 板，下级为风扇控制板。
-通用数据接口使用 `dataBus...`，协议绑定入口使用 `dataBusModbus...`；
-IDU_sig.inc、FAN_sig.inc 提供测点的唯一清单，
-头文件由清单生成索引及固定 Key，protocol.c 生成只读数组并统一挂载。
-Modbus 主从文件仅提供只读业务配置，由 `app_config.h` 选择角色。
-protocol.c 统一持有协议实例并创建任务，protocol 对 system 只提供 protocolInit。
-通信配置对象的 extern 声明集中在 protocol.c，点表对象为本文件私有。
-公共头文件只提供
-初始化入口、设备标识和共享数据类型，不引入 aBus 或 aModbus 的配置定义。
+通用数据接口使用 `dataBus...`，协议通过 `protocolInit(bus)` 借用系统总线；
+IDU_test.inc、FAN_test.inc 提供测点的唯一清单，
+头文件由清单生成索引及固定 Key，protocol_tables.c 生成只读数组，system 统一挂载。
+Modbus 主从文件提供只读业务配置及从站地址段回调，由 `app_config.h` 选择角色。
+protocol.c 统一持有协议实例并创建任务；protocol.h 提供点表配置填充和协议初始化接口。
+通信配置对象的 extern 声明集中在 protocol.c，点表对象由 protocol_tables.c 私有持有。
+protocol.h 使用 aBus 类型表达装配依赖，不暴露通信配置对象；
+设备数据头文件仅提供设备标识和共享数据类型。
 
 ## 目录职责
 
@@ -44,41 +44,43 @@ protocol.c 统一持有协议实例并创建任务，protocol 对 system 只提�
 app/
 ├── devices/           # 板级设备、存储和输出配置
 ├── task/              # 系统启动、运行任务和系统调试入口
-│   └── system/        # 日志、数据库、数据总线服务和可选 Flash 测试
+│   ├── system/        # 日志、数据库、数据总线服务和可选 Flash 测试
+│   └── test/          # 应用测试任务，当前为 TEST_001 静态绑定测试
 ├── protocol/          # 点表、协议装配与通信任务创建
 │   ├── inc/           # protocol.h 与产品数据头文件
 │   ├── config/        # 后续 JSON 配置输入
-│   ├── sig/           # IDU_sig.inc、FAN_sig.inc 测点清单
-│   ├── mapping/       # 从站映射组/地址段与主站采集清单
-│   ├── protocol.c         # 唯一入口、协议实例与通信任务
+│   ├── sig/           # IDU_test.inc、FAN_test.inc 测点清单
+│   ├── persistence/   # 需要持久化的测点清单
+│   ├── protocol.c         # 协议实例与通信任务
+│   ├── protocol_tables.c  # 点表生成、静态绑定及配置提供
 │   ├── FAN_modbus_master.c
 │   └── IDU_modbus_slave.c
 ├── main.c
 └── app_config.h
 ```
 
-`protocol` 集中管理围绕 aBus 的应用逻辑：由 IDU_sig.inc 与 FAN_sig.inc
+`protocol` 集中管理围绕 aBus 的应用逻辑：由 IDU_test.inc 与 FAN_test.inc
 生成本板、风扇板的只读点表，RAM 绑定放在变量所属的 .c 中，
 主从配置将协议寄存器与点表连接，完成采集和转发。通用协议实现仍在 func 层。
 
 - 系统 console 实例随 ASHELL_ENABLE 启用或裁剪，不再单独设置应用 USART 开关。
 - devices/system/system_device.h：系统设备的 LED 句柄、console 流专用初始化接口。
-- devices/system/system_device.c：统一管理 LED、控制台串口及日志输出适配；配置、缓冲区和私有句柄按功能分段组织。
-- task/system/system_init.c：统一管理 LED、Shell 任务和日志初始化，内部逐项初始化设备、服务并创建任务；对外仅提供 aSystemInit。
-- task/system/system_init.h：声明系统服务启动入口 aSystemInit。
-- task/system/log_command.c：日志调试命令，服务初始化由 system_init.c 的私有 logInit 完成。
-- devices/system/database_config.c：数据库分区选择、超时和记录容量配置。
-- task/system/database_service.c：数据库实例管理和读写；database_command.c 提供调试命令。
+- devices/system/system_device.c：统一管理 LED、控制台、日志输出、存储注册及数据库配置，按功能分段组织。
+- task/system/system_init.c：统一初始化各服务，私有持有 aBus 和 KV/TSDB 实例，提供通用数据访问。
+- task/system/system_init.h：声明 aSystemInit、dataBus 通用访问及数据库操作接口。
+- task/system/command_log.c：日志调试命令，服务初始化由 system_init.c 的私有 logInit 完成。
+- task/system/command_database.c：数据库调试命令，通过 system_init.h 使用私有实例。
 - app_config.h：aBus 绑定实例号、调试角色和站号配置，默认 Modbus 从站 1。
 - devices/rs485/：提供板载串口配置与端口生命周期、Stream 和时序适配。
-- protocol/sig/IDU_sig.inc、FAN_sig.inc：测点标识、类型、默认值和规则；新增测点由清单同步生成枚举及数组。
-- task/system/data_bus_*：应用私有 aBus 实例、通用读写和 Shell 命令。
-- protocol/mapping/：定义从站映射组、地址段与主站采集项，引用生成的 SIG/字段标识。
-- protocol/FAN_modbus_master.c、IDU_modbus_slave.c：展开清单、配置主从服务参数，默认从站 1；
+- protocol/sig/IDU_test.inc、FAN_test.inc：测点标识、类型、默认值和规则；新增测点由清单同步生成枚举及数组。
+- task/system/command_data_bus.c：通用 SIG Shell 命令，类型和范围从点表查询。
+- protocol/FAN_modbus_master.c、IDU_modbus_slave.c：直接定义采集、映射和地址段数组，
+  回调段与离散映射平级，引用 SIG 清单生成的标识并配置主从服务参数，默认从站 1；
   RTU 分帧由 func/aModbus 提供，串口与时基在 devices/rs485/rs485_device.c；
-  protocol.c 生成并挂载只读点表，持有 FAN Motor 副本、协议与 RTU 并创建任务。
-- task/system/flash_test.c：手动擦写测试，默认不加入 CMake 源码列表。
-- main.c：初始化驱动和 OS，创建 appInitTask 后启动调度器；初始化任务完成系统功能初始化后通过 aOSTaskExit 自退出。
+  protocol_tables.c 生成只读点表并持有 FAN TEST_001 数据；protocol.c 持有协议与 RTU 并创建任务。
+- task/system/command_flash.c：手动擦写测试，默认不加入 CMake 源码列表。
+- main.c：初始化驱动和 OS，创建 appInitTask 后启动调度器；任务先调用 aSystemInit，
+  成功后调用 appTestTaskInit 统一创建应用测试任务，最后通过 aOSTaskExit 自退出。
 
 初始化仅在启动阶段单线程执行。运行阶段使用已取得的私有句柄，
 不通过重复 Init 获取句柄。protocolInit 成功或失败后再次调用均返回 BUSY，
@@ -95,13 +97,18 @@ app/
 func 不创建/删除任务，不配置任务优先级和栈大小。
 协议配置、注册和扩展步骤见 [protocol 说明](protocol/README.md)。
 
-日志由 aSystemInit 在 Shell 初始化完成后调用同文件内的私有 logInit，
+日志由 aSystemInit 在 Shell 和存储初始化完成后调用同文件内的私有 logInit，
 该函数负责装配配置、初始化、失败清理和启动日志，顶层只检查返回状态。
 Shell 任务在 shellInit 中创建，等待全部服务就绪后才处理命令及输出，
 不创建单独日志任务。
-Flash 探测、aMemory 分区注册、数据库和 protocolInit 由 aSystemInit 显式编排；
-全部成功后才放行 Shell 任务。appSystemFlashInit 不再启动存储或数据库服务，
-appDatabaseInit 负责 aDataBaseInit 及打开应用数据库。启动失败不开放命令输入。
+aSystemInit 在 shellInit 后依次调用 memoryInit、logInit、busInit、databaseInit，
+再调用 protocolInit(bus_handle)；
+全部系统服务成功后放行 Shell 任务，随后 main 创建应用测试任务。system_device.c 的存储段提供私有 Flash 实例、
+设备回调和区域表，由 appSystemMemoryConfigInit 填充配置；
+system_init.c 的私有 memoryInit 调用 aMemoryInit，初始化设备并发布区域。
+存储探测信息直接通过 ASHELL_PRINT 入队，不依赖日志模块初始化。
+业务只访问 aMemory 区域；system_device.c 将区域句柄关联到 KV/TSDB，
+system_init.c 的 databaseInit 负责数据库初始化和打开实例。启动失败不开放命令输入。
 数据库配置和 `db` 命令用法见 [数据库演示](task/system/database.md)。
 `log test`、`log level verbose` 和 `log info` 的用法见
 [系统任务与日志调试](task/system/README.md)。
@@ -139,75 +146,53 @@ RS485 只由选定的 Modbus 协议任务调用，不额外创建串口互斥锁
 
 ## SIG 数据与测试任务
 
-IDU_sig.inc 和 FAN_sig.inc 配置两张点表，`app/task/system/data_bus_service.c` 私有持有
-aBus handle。aSystemInit 在 Shell 初始化后调用 protocolInit，
-由它装配 IDU/FAN 两张表并统一挂载，再启动计数测试和通信任务。关闭 Shell 时数据与测试任务仍初始化；
-关闭 aBus 时一并裁剪。
+IDU、FAN 点表各 50 个 SIG，统一命名 TEST_001～050，deviceID 分别为 1、2，
+sigKey 均为 2001～2050。两表分别覆盖 U8、U16、U32、S32、RAW 和 STRUCT。
+不保留旧 Counter/Motor 及旧 Key。唯一清单位于 protocol/sig 的
+IDU_test.inc、FAN_test.inc；枚举、只读定义和静态存储均由同一清单展开。
 
-业务统一通过 `dataBusSet(request)`、`dataBusGet(request)` 整组读写。
-请求使用 aBusSetIndexRequest_t / aBusGetIndexRequest_t，通过对应
-StructInit 初始化后填写 sigIndex、缓冲区、长度和锁等待时间。
-sigIndex 是对应 IDU_sig_table.h 或 FAN_sig_table.h 的枚举下标，不是稳定 sigKey。
-未初始化返回 NOT_READY，未知下标返回 NOT_FOUND，长度错误返回
-INVALID_PARAM。请求与缓冲区只在调用期间借用。
+system_init.c 私有持有 aBus handle，业务通过 dataBusSet/dataBusGet 及
+Param 接口访问，协议通过 protocolInit(bus) 借用总线。sigIndex 是枚举下标，
+Shell 使用稳定 sigKey。查询配置不会重置活动实例。
 
-FAN Motor 初始值为转速 100、温度 25，转速允许 0..6000。
-Counter 初值为 0，在 app/task/sig/sig_task.c 中定义为静态变量，
-通过旁边的 ABUS_RAM_BIND_EXPORT 分散注册绑定。任务每次延时
-1000 ms 后直接 counter++，UINT32_MAX 后回绕到零。
-实际周期包含调度时间，不作为精确计时器。
+IDU TEST_001 的 RAM 属于 task/test/test_task.c，通过 ABUS_RAM_BIND_EXPORT
+绑定，每秒直接加 1，UINT32_MAX 后回绕到零。直接访问绑定变量的同步仍由应用
+决定；此测试不与 Shell 设置互斥。aBus 接口内部继续遵循配置的锁策略。
+main 在系统服务与通信初始化后调用 appTestTaskInit；关闭 aBus 时不创建空任务。
+FAN TEST_001 同样显式绑定；其余数据在动态模式一次分配，在静态模式按 C 类型
+生成 RAM。总线本身仍支持多实例。
 
-IDU_sig.inc 与 FAN_sig.inc 分别定义测点。protocol.c 展开为 static const
-描述及表数组，通过 dataBusConfig_t 一次性挂载；handle 由系统数据总线私有持有。
-sigIndex 按清单顺序自增，sigKey 按清单固定取值，数量自动统计。
-默认值、范围及字段数组同样具有静态存储期，初始化不复制顶层表描述到 RAM。
-注册直接使用 ABUS_RAM_BIND_EXPORT，实例号取自 app_config.h 中的
-PROTOCOL_BUS_INSTANCE_ID，设备号和下标取自对应 sig_table.h。
-aBus 按 instanceID + deviceID + sigIndex 匹配，
-只使用 .abus_bindings 收集；描述和收集指针均为 const，存放 Flash。
-包含绑定的同一 instanceID 只允许一个活动实例，由应用保证。
-绑定只关联存储，不额外提供并发保护。直接访问绑定变量的同步策略
-由应用自行决定；当前自增测试不做同步，Shell 设置值可能被自增覆盖。
-通用读写仍遵循 aBus 锁配置，timeout 仅用于 aBus 锁等待，不能保护
-任务绕过接口直接访问绑定变量。
-动态创建启用时分配实例元数据，否则使用静态实例；两个测点的数据
-均静态绑定。aBus 自身保持多实例能力。
-
-### Shell 命令
-
-命令在 app/task/system/data_bus_command.c 注册，按 deviceID + sigKey 访问：
-
-- `sig get 1 42`：读取 Counter（IDU_SIG_COUNTER）。
-- `sig set 1 42 100`：设置 Counter 为 100，任务随后继续自增。
-
-当前 Shell 支持标量、RAW 和 STRUCT，类型和参数描述均来自点表。
-ID 和整数值采用十进制，RAW 使用十六进制；非法输入不修改数据。
-命令默认不等待锁，忙时返回错误，用户可重试。
-通用测点命令归 task/system 管理；protocol 内部完成通信服务与测点的装配。
-
-当前挂载 IDU、FAN 两张表，deviceID 分别为 1、2。
-IDU Counter 使用键 42；FAN Motor 使用键 1001，原 Motor 命令的设备号需改成 2。
-同一 handle 按 deviceID 路由，SIG 下标分别从零开始。Shell 显式接收 deviceID 和 sigKey，先调用 dataBusResolveKey 转成下标，
-再通过 dataBusGetInfo 查询类型和长度，
-不维护测点类型表，也不引用具体测点枚举。
+数据库选定 12 个 SIG 持久化：IDU TEST_001～009、FAN TEST_002～004。
+启动时在通信与测试任务之前恢复记录，缺失记录保留默认值；范围或长度错误
+停止启动并返回错误。数据更新不自动写 Flash，通过 sig save 显式保存。
 
 ### 通用 SIG 命令
 
 ```text
-sig get 2 1001           # Motor：显示全部已登记字段
-sig get 2 1001 0         # Motor.speed
-sig set 2 1001 0 200     # speed 范围为 0..6000
-sig set 2 1001 1 -10     # temperature：S32，无业务上下限
-sig get 1 42             # Counter
-sig set 1 42 100         # Counter：U32，无业务上下限
+sig get 1                    # 显示 IDU 全表及类型、flags、范围
+sig get 2                    # 显示 FAN 全表
+sig get 1 2001               # 静态绑定的自增测试值
+sig set 1 2002 123           # U8
+sig set 1 2003 12345         # U16
+sig set 1 2004 1234          # U32
+sig set 1 2005 -123          # S32
+sig set 1 2006 1122334455667788  # RAW[8]
+sig get 1 2007               # 组合类型的所有字段
+sig set 1 2007 0 200         # STRUCT.U32
+sig set 1 2007 1 -10         # STRUCT.S32
+sig set 1 2007 2 3           # STRUCT.U8
+sig set 1 2007 3 112233      # STRUCT.RAW[3]
+
+db init                      # 空白介质首次显式初始化
+sig save                     # 保存全部选定项
+sig save 2 2003              # 保存单项
+sig load 2 2003              # 恢复单项
+sig load                     # 恢复所有已有记录
 ```
 
-命令从 SIG 定义获取类型和字段描述。RAW SIG/字段也支持按完整长度进行连续
-十六进制读写；Motor 为 STRUCT，必须指定参数才能文本赋值。
-SIG 和 Param 都通过可选 range 指针指定上下限，NULL 表示不限制业务范围。
-字段操作由 aBus 在原 SIG 锁内完成；任务直接修改绑定变量的同步仍由应用负责。
+命令位于 task/system/command_data_bus.c，通过元信息处理类型和字段，
+不引用具体点表枚举。ID、整数采用十进制，RAW 为完整长度的连续十六进制。
+sig get/set 默认不等待锁；忙时可重试。STRUCT 写入须指定 paramIndex，
+其数字随字段顺序变化；C 代码应使用生成的字段名称。
 
-Shell 的原 sigIndex 参数已改为 sigKey，旧命令需调整。SIG 顺序变化不影响键的定位；
-STRUCT 的 paramIndex 仍随字段描述顺序变化；C 代码使用生成的字段名称，
-如 FAN_MOTOR_SPEED，避免直接填写数字下标。点表挂载与设备关系见
-[产品协议](protocol/README.md)。
+协议寄存器映射、各字段范围和持久化限制见 [产品协议](protocol/README.md)。

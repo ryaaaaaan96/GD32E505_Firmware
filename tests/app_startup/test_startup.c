@@ -43,9 +43,14 @@ aStatus_t aSystemInit(void)
     assert(stage++ == 4U); /* 必须在调度器启动后执行，不能由 main 直接调用。 */
     return scenario == 2U ? A_STATUS_ERROR : A_STATUS_OK;
 }
-void aOSTaskExit(void)
+aStatus_t appTestTaskInit(void)
 {
     assert(stage++ == 5U);
+    return scenario == 3U ? A_STATUS_NO_MEMORY : A_STATUS_OK;
+}
+void aOSTaskExit(void)
+{
+    assert(stage++ == 6U);
     longjmp(done, 1);
 }
 void aOSRecordFault(aOSFaultCode_t code, aStatus_t status, const char *context)
@@ -56,15 +61,17 @@ void aOSRecordFault(aOSFaultCode_t code, aStatus_t status, const char *context)
 }
 int main(void)
 {
-    for (scenario = 0U; scenario < 3U; ++scenario) {
+    for (scenario = 0U; scenario < 4U; ++scenario) {
         stage = 0U;
         fault = NULL;
         if (setjmp(done) == 0) (void)firmware_main();
-        if (scenario == 0U) assert(stage == 6U && fault == NULL);
+        if (scenario == 0U) assert(stage == 7U && fault == NULL);
         if (scenario == 1U)
             assert(stage == 3U && strcmp(fault, "aOSCreateTask(appInit)") == 0);
         if (scenario == 2U)
             assert(stage == 5U && strcmp(fault, "aSystemInit") == 0);
+        if (scenario == 3U)
+            assert(stage == 6U && strcmp(fault, "appTestTaskInit") == 0);
     }
     return 0;
 }

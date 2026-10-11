@@ -12,7 +12,7 @@ with tempfile.TemporaryDirectory(prefix="database-spi-") as directory:
     sources = [root / "tests/database/test_flash_chain.c",
                database / "aDataBase.c", database / "aDataBase_index.c",
                database / "port/memory_port.c",
-               root / "app/devices/system/memory_config.c",
+               root / "app/devices/system/system_device.c",
                root / "func/aMemory/aMemory.c"]
     sources += [database / "FlashDB/src" / name for name in
                 ("fdb.c", "fdb_kvdb.c", "fdb_tsdb.c", "fdb_utils.c")]
@@ -21,20 +21,25 @@ with tempfile.TemporaryDirectory(prefix="database-spi-") as directory:
                  "port/aDev_flash25q_sfud_port.c", "SFUD/sfud/src/sfud.c",
                  "SFUD/sfud/src/sfud_sfdp.c")]
     command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
-               "-fsanitize=undefined", "-fno-sanitize-recover=all"]
+               "-fsanitize=undefined", "-fno-sanitize-recover=all",
+               "-DAPP_DATABASE_ENABLE=1", "-DAPP_MEMORY_ENABLE=1", "-DADEV_LED_STATIC_ENABLE=1"]
     for path in (database, database / "config", database / "FlashDB/inc",
                  root / "func/aMemory", root / "func/aBus/include",
                  root / "app/devices/system", flash, flash / "config",
                  flash / "SFUD/sfud/inc", root / "config",
-                 root / "platform/aLib/include",
+                 root / "platform/aLib/include", root / "device/aDev_LED",
                  root / "platform/aOS/public", root / "platform/aDrv/include"):
         command += ["-I", str(path)]
-    objects = []
-    for i, source in enumerate(sources):
-        obj = Path(directory) / f"{i}.o"
-        flags = ["-Wno-unused-parameter"] if "FlashDB" in source.parts else []
-        subprocess.run(command + flags + ["-c", str(source), "-o", str(obj)],
-                       check=True)
-        objects.append(str(obj))
-    subprocess.run(command + objects + ["-o", str(executable)], check=True)
-    subprocess.run([str(executable)], check=True, timeout=20)
+    for dynamic in (0, 1):
+        variant = command + [f"-DADEV_FLASH25Q_DYNAMIC_ENABLE={dynamic}"]
+        objects = []
+        for i, source in enumerate(sources):
+            obj = Path(directory) / f"{i}.o"
+            flags = (["-Wno-unused-parameter"]
+                     if "FlashDB" in source.parts else [])
+            subprocess.run(variant + flags +
+                           ["-c", str(source), "-o", str(obj)],
+                           check=True)
+            objects.append(str(obj))
+        subprocess.run(variant + objects + ["-o", str(executable)], check=True)
+        subprocess.run([str(executable)], check=True, timeout=20)

@@ -12,11 +12,17 @@
 #ifndef APP_SYSTEM_DEVICE_H
 #define APP_SYSTEM_DEVICE_H
 #include "aDev_led.h"
+#if APP_DATABASE_ENABLE
+#include "aDataBase.h"
+#endif
 #if ASHELL_ENABLE
 #include "aStream.h"
 #endif
 #if APP_LOG_ENABLE
 #include "aLog.h"
+#endif
+#if APP_MEMORY_ENABLE
+#include "aMemory.h"
 #endif
 
 /**
@@ -66,5 +72,18 @@ aStatus_t appSystemConsoleDeInit(void);
  * 回调直接共享控制台，使用 20 ms 总发送预算，部分提交返回 ERROR，不重试。
  * 日志锁由 aLog 管理，串口 TX 锁由控制台管理；此处不增加互斥对象。 */
 void appSystemLogConfigInit(aLogConfig_t *config);
+#endif
+
+#if APP_MEMORY_ENABLE
+/* 只填充注册配置，不访问硬件；描述及数组具有静态生命周期。
+ * system_init.c 调用 aMemoryInit，后者负责设备探测、失败清理及区域发布。
+ * 业务通过 aMemoryFind / Read / Write / Erase 访问区域。 */
+void appSystemMemoryConfigInit(aMemoryConfig_t *config);
+#endif
+
+#if APP_DATABASE_ENABLE
+/* 填充数据库配置并关联已注册的 aMemory 区域；不打开或格式化数据库。 */
+void appSystemDatabaseKvConfigInit(aDataBaseKvConfig_t *config);
+void appSystemDatabaseTsConfigInit(aDataBaseTsConfig_t *config);
 #endif
 #endif

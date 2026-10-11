@@ -1,2 +1,2 @@
 add_subdirectory(system)
-add_subdirectory(sig)
+add_subdirectory(test)

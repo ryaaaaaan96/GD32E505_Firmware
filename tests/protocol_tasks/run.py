@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""验证协议统一入口、任务调度和部分启动失败语义。"""
+"""验证产品点表配置、清单扩展及不依赖任务创建的协议入口。"""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -10,41 +10,53 @@ flags = [
     "cc", "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
     "-fsanitize=undefined", "-fno-sanitize-recover=all",
     "-Iplatform/aLib/include", "-Iplatform/aOS/public",
-    "-Ifunc/aBus/include", "-Ifunc/aModbus", "-Iapp", "-Iapp/protocol",
-    "-Iapp/protocol/inc", "-Iapp/task/sig", "-Iapp/task/system",
+    "-Ifunc/aBus/include", "-Ifunc/aModbus", "-Ifunc/aDataBase",
+    "-Ifunc/aMemory", "-Iapp", "-Iapp/protocol",
+    "-Iapp/protocol/inc", "-Iapp/task/test", "-Iapp/task/system",
 ]
 with tempfile.TemporaryDirectory(prefix="aclass-protocol-tasks-") as folder:
     executable = str(Path(folder) / "tasks")
-    # 每次运行模拟一次开机，检查双点表装配及依赖失败传播；通信路径由 modbus_demo 覆盖。
-    for bus, dynamic in ((1, 0), (1, 1), (0, 1)):
+    # 配置装配不创建总线或任务；启动顺序由 app_startup 验证。
+    # 点表即使配置持久化，也无需 FlashDB 私有头或 Flash 分区配置头。
+    for bus, dynamic, database in ((1, 0, 0), (1, 1, 0), (0, 1, 0),
+                                   (1, 0, 1), (1, 1, 1)):
         subprocess.run(flags + [
             f"-DABUS_ENABLE={bus}", "-DAPP_MODBUS_ENABLE=0",
             f"-DABUS_DYNAMIC_ENABLE={dynamic}",
+            f"-DAPP_DATABASE_ENABLE={database}",
+            f"-DADATABASE_DYNAMIC_ENABLE={dynamic}",
             "tests/protocol_tasks/test_init.c", "app/protocol/protocol.c",
+            "app/protocol/protocol_tables.c",
             "-o", executable,
         ], cwd=root, check=True)
-        failures = range(3 if bus else 1)
-        for failure in failures:
-            subprocess.run([executable, str(failure)], check=True)
+        subprocess.run([executable], check=True)
     # 只修改临时副本中的清单，验证新增测点不要求修改头文件或装配代码。
     fixture = Path(folder) / "protocol"
     shutil.copytree(root / "app/protocol/inc", fixture / "inc")
     shutil.copytree(root / "app/protocol/sig", fixture / "sig")
-    shutil.copy(root / "app/protocol/protocol.c", fixture / "protocol.c")
-    definition = fixture / "sig/IDU_sig.inc"
-    definition.write_text('''ABUS_SIG(SPARE, 900U,
+    shutil.copytree(root / "app/protocol/persistence", fixture / "persistence")
+    for name in ("protocol.c", "protocol_tables.c"):
+        shutil.copy(root / "app/protocol" / name, fixture / name)
+    definition = fixture / "sig/IDU_test.inc"
+    definition.write_text('''ABUS_SIG(SPARE, 900U, uint16_t,
     .type = ALIB_DATA_U16,
-    .size = sizeof(uint16_t),
+
     .default_data = &(const uint16_t){7U}
 )
 ''' + definition.read_text())
+    selection = fixture / "persistence/sig_persist.inc"
+    selection.write_text('PERSIST_SIG(IDU_SIG_DEVICE_ID, IDU_SIG_SPARE_KEY)\n'
+                         + selection.read_text())
     for dynamic in (0, 1):
         subprocess.run(flags[:1] + ["-I" + str(fixture / "inc")]
                        + flags[1:] + [
             "-DABUS_ENABLE=1", "-DAPP_MODBUS_ENABLE=0", "-DTEST_ADDED_SIG=1",
+            "-DAPP_DATABASE_ENABLE=1",
+            f"-DADATABASE_DYNAMIC_ENABLE={dynamic}",
             f"-DABUS_DYNAMIC_ENABLE={dynamic}",
             "tests/protocol_tasks/test_init.c", str(fixture / "protocol.c"),
+            str(fixture / "protocol_tables.c"),
             "-o", executable,
         ], cwd=root, check=True)
-        subprocess.run([executable, "0"], check=True)
-print("Protocol initialization/order/failure/disabled/list expansion passed")
+        subprocess.run([executable], check=True)
+print("Protocol configuration/lifetime/disabled/list expansion passed")

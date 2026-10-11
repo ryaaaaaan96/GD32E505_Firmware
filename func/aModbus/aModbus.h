@@ -38,7 +38,7 @@
 
 #define AMODBUS_ACCESS_READ (1U << 0)
 #define AMODBUS_ACCESS_WRITE (1U << 1)
-/** paramIndex 的特殊值，表示整个标量或 RAW SIG。 */
+/** paramIndex 的特殊值，表示整个标量、RAW 或符合连续布局的 STRUCT SIG。 */
 #define AMODBUS_SIG_WHOLE SIZE_MAX
 #define AMODBUS_MAX_REGISTERS 125U
 #define AMODBUS_MAX_BITS 2000U
@@ -109,7 +109,7 @@ typedef struct {
     aTimeout_t timeout;
 } aModbusAddressWriteRequest_t;
 
-/** 定位一个 aBus 标量/RAW SIG，或 STRUCT 中的一个 Param。 */
+/** 定位整个 SIG，或 STRUCT 中的一个 Param。 */
 typedef struct {
     uint16_t deviceID;
     size_t sigIndex;
@@ -134,6 +134,9 @@ typedef struct {
  * OK 必须完成整项请求；禁止重入当前 Modbus 实例。
  * 地址回调接收协议数值，SIG 回调接收本地类型字节；不得绕过业务权限/范围。
  * SIG 回调为 NULL 时默认访问配置中的 aBus。
+ * 整组 STRUCT 读取/完整写入回调一次，target 为 WHOLE，size 为完整结构体。
+ * 部分 STRUCT 写入先校验所有输入，再逐个完整字段回调，target 为字段下标；
+ * 不先读后写整组。回调提供者负责同步，字段间失败不回滚。
  */
 typedef aStatus_t (*aModbusAddressReadFn_t)(void *context,
     const aModbusAddressReadRequest_t *request);
@@ -144,31 +147,40 @@ typedef aStatus_t (*aModbusSigReadFn_t)(void *context,
 typedef aStatus_t (*aModbusSigWriteFn_t)(void *context,
     const aModbusSigWriteRequest_t *request);
 
-/** 只读映射；长度、类型、范围来自 aBus，不重复保存。
- * address 在所属地址段内，按地址严格递增且不得相互覆盖。
+/** 离散映射的只读定义；quantity 显式配置，类型和范围来自 aBus。
+ * quantity 必须非零，并与目标类型的寄存器数或位数匹配。
+ * 初始化拒绝长度不匹配，不自动补全、截断或扩展目标值。
+ * 映射表及 aBus 目标定义在实例使用期间必须保持不变。
+ * 按 area、address 排序，同一区域的完整映射范围不得相互覆盖，
+ * 也不得与地址段回调重叠；允许地址空洞，不需要外围地址段。
  * U8/U16 占一寄存器，U32/S32 占两寄存器；位映射仅支持值为 0/1 的 U8。
  * RAW 每寄存器先放前一字节，奇数长度最后一个低字节补零。
- * STRUCT 必须通过 paramIndex 映射字段，不导出结构体布局和填充字节。
+ * STRUCT 可通过 paramIndex 映射字段，或用 WHOLE 严格整组映射：
+ * params 按 offset 连续覆盖全部 size，每项非零且为偶数字节，不支持嵌套；
+ * 字段仅支持 U16/U32/S32/偶数 RAW。quantity == size / 2，地址偏移为
+ * param.offset / 2；不传输隐式填充。整组 word_order 仅作用于 U32/S32。
+ * 整组仅用于寄存器区；单个整组最大 250 字节，可写整组最大 246 字节。
+ * 允许任意寄存器区间读取；整组部分写入须覆盖一个或多个完整字段。
+ * 默认路径使用同一 SIG 的快照/更新，锁遵循 aBus 配置；跨 SIG 不回滚。
  */
 typedef struct {
+    aModbusArea_t area;
     uint16_t address;
+    uint16_t quantity; /**< 寄存器数或位数，不是字节数。 */
     uint16_t flags;
     aModbusSigTarget_t target;
     aModbusWordOrder_t word_order;
 } aModbusBusMap_t;
 
-/** 按 area、address 排序的只读地址段；同一区域不得重叠。
- * maps 模式与直接 read/write 回调模式二选一，禁止混用。
- * 映射间允许空洞，访问空洞返回非法地址；权限由段与映射共同限制。
- * 直接回调模式必须提供 flags 所允许的读写函数。
+/** 按 area、address 排序的回调地址段；同一区域不得重叠。
+ * 必须提供 flags 所允许的读写函数，回调负责段内数据的解释与校验。
+ * 命中后权限错误或回调失败直接返回，不再尝试离散映射。
  */
 typedef struct {
     aModbusArea_t area;
     uint16_t address;
     uint32_t quantity; /**< 1..65536，address + quantity 不超过 65536。 */
     uint16_t flags;
-    const aModbusBusMap_t *maps;
-    size_t map_count;
     aModbusAddressReadFn_t read;
     aModbusAddressWriteFn_t write;
     void *context;
@@ -185,11 +197,24 @@ typedef struct {
     aModbusTransport_t transport;
     aBusHandle_t *bus; /**< 必填，已初始化；协议模块不销毁。 */
     aTimeout_t byte_timeout; /**< 每次传输的字节等待限制，默认 20 ms。 */
-    const aModbusAddressRange_t *ranges; /**< 从站路由；借用至销毁。 */
+    const aModbusAddressRange_t *ranges; /**< 可选从站回调段；借用至销毁。 */
     size_t range_count;
+    /** 回调段未命中时查找的离散映射；与 ranges 平级，借用至销毁。
+     * 两类配置分别排序，初始化拒绝重叠。批量访问先检查完整覆盖和权限，
+     * 再执行回调或 SIG 读写；跨回调/SIG 不提供整体回滚。
+     */
+    const aModbusBusMap_t *maps;
+    size_t map_count;
     aModbusSigReadFn_t sig_read;
     aModbusSigWriteFn_t sig_write;
     void *sig_context;
+    /** 可选整组快照工作区；NULL 使用实例内 250 字节工作区。
+     * 映射的 SIG 大于 250 字节时必填，容量须覆盖最大 SIG。
+     * 由实例独占，生命周期覆盖实例；不得与总线数据区重叠。
+     * 内部以字节访问，不要求业务数据对齐。
+     */
+    void *snapshot;
+    size_t snapshot_size;
 } aModbusConfig_t;
 
 /** 协议异常独立保存；从站成功发送异常响应时 Process 仍返回 OK。
@@ -230,29 +255,79 @@ typedef struct {
     aModbusResult_t *result;
 } aModbusClientSigRequest_t;
 
-/** 通用服务配置，组合协议、请求及任务调度参数，供应用统一装配。
+/** 从此项开始新帧；位于当前批次首项时无需额外处理。 */
+#define AMODBUS_POLL_FLAG_BREAK_BEFORE (1U << 0)
+
+/** 单个采集目标；站号、事务超时和采集周期由设备统一配置。
+ * flags 为零时自动合并；BREAK_BEFORE 可手动拆开连续地址。
+ * STRUCT 可选择字段或 WHOLE 整组；标量/RAW 使用 AMODBUS_SIG_WHOLE。
+ * 整组布局要求与从站映射相同；单个采集项不会被拆成多帧。
+ * quantity 必须显式填写且非零，不根据 aBus 自动补全。
+ * 寄存器数须等于目标字节数向上除以 2；位区域的 U8 目标须为 1 位。
+ * 库检查远端长度与 aBus 目标匹配，不提供隐式截断或类型扩展。
+ */
+typedef struct {
+    aModbusArea_t area;
+    uint16_t address;
+    uint16_t quantity; /**< 寄存器数或位数，不是字节数。 */
+    uint16_t flags;
+    aModbusSigTarget_t target;
+    aModbusWordOrder_t word_order;
+} aModbusPoll_t;
+
+/** 同一设备从首项起合并同区域、地址连续且未要求断帧的采集项。
+ * unit_id、timeout 和 result 属于整帧，各项不单独配置。
+ * completed 返回本次尝试的项数（通信失败也推进）；BUSY 重入为零。
+ * 到协议帧容量、不连续项或断帧标记时停止合并，每次调用只发送一帧。
+ * 每帧中同一 SIG 一次提交，手动跨帧后不保证各字段来自同次读取。
+ * 一致性遵循 aBus 锁配置；自定义 SIG 回调仍逐项调用。
+ */
+typedef struct {
+    const aModbusPoll_t *items;
+    size_t count;
+    size_t *completed;
+    uint8_t unit_id;
+    aTimeout_t timeout;
+    aModbusResult_t *result;
+} aModbusClientBatchRequest_t;
+
+/** 通用服务配置，组合协议、请求及通信节奏，供应用统一装配。
  * 本结构体仅描述配置，不创建任务、端口或协议实例。
+ * 任务名称、栈容量和优先级由应用的链路配置独立提供。
  * 应用持有模板及其引用的映射、采集项和结果对象，使用期间须持续有效。
  */
 typedef struct {
     /** 协议配置；使用前由应用装配 bus 和 transport。 */
     aModbusConfig_t modbus;
-    /** 主站采集列表；顺序和执行周期由应用管理。 */
-    const aModbusClientSigRequest_t *polls;
+    /** 主站设备的采集列表；站号使用 modbus.unit_id。 */
+    const aModbusPoll_t *polls;
     size_t poll_count;
+    /** 设备统一的每帧事务超时，涵盖通信及发布等待；不是采集周期。 */
+    aTimeout_t request_timeout;
     /** 从站每次处理请求，传给 aModbusServerProcess。 */
     aModbusServerProcessRequest_t server;
-    /** 任务配置；入口和参数由应用提供，库不创建或持有任务。 */
-    aOSTaskConfig_t task;
     /** 每次成功或失败后等待的毫秒数，不属于协议事务超时。 */
     uint32_t interval_ms;
     uint32_t error_delay_ms;
+    /** 主站整轮起点之间的最小间隔；事务超时可使本轮超出周期。 */
+    uint32_t poll_time_ms;
 } aModbusServiceConfig_t;
+
+/** 启动前校验全部采集项，不分配资源、不访问端口、不修改数据。
+ * config 至少填充 role、transport_type、bus；目标定义须已挂载。
+ * 默认路径也检查 snapshot 容量，大 SIG 须提供足够的工作区。
+ */
+aStatus_t aModbusClientSigCheck(const aModbusConfig_t *config,
+    const aModbusClientSigRequest_t *request, aBool_t write);
+/** 检查采集项、长度匹配及站号，不进行 I/O；超时由调用方另外校验。 */
+aStatus_t aModbusClientPollCheck(const aModbusConfig_t *config,
+    const aModbusPoll_t *poll, uint8_t unit_id);
 
 void aModbusTransportStructInit(aModbusTransport_t *transport);
 void aModbusConfigStructInit(aModbusConfig_t *config);
-/** 重置协议、请求及任务默认值；NULL 不操作，不分配资源。
- * 默认成功等待 0 ms，失败等待 5 ms；调用方须设置任务入口及业务配置。
+/** 重置协议、请求及通信节奏默认值；NULL 不操作，不分配资源。
+ * 默认事务超时 1000 ms，成功等待 0 ms，失败等待 5 ms。
+ * 默认 poll_time_ms 为零（不额外限制整轮周期），须补齐业务配置。
  */
 void aModbusServiceConfigStructInit(aModbusServiceConfig_t *config);
 void aModbusSigTargetStructInit(aModbusSigTarget_t *target);
@@ -261,6 +336,7 @@ void aModbusAddressWriteRequestStructInit(
     aModbusAddressWriteRequest_t *request);
 void aModbusSigReadRequestStructInit(aModbusSigReadRequest_t *request);
 void aModbusSigWriteRequestStructInit(aModbusSigWriteRequest_t *request);
+/** quantity 初始化为零，调用方必须按远端协议显式填写。 */
 void aModbusBusMapStructInit(aModbusBusMap_t *map);
 void aModbusAddressRangeStructInit(aModbusAddressRange_t *range);
 void aModbusServerProcessRequestStructInit(
@@ -293,6 +369,8 @@ aStatus_t aModbusServerProcess(aModbusHandle_t *handle,
     const aModbusServerProcessRequest_t *request);
 #endif
 #if AMODBUS_CLIENT_ENABLE
+aStatus_t aModbusClientReadBatch(aModbusHandle_t *handle,
+    const aModbusClientBatchRequest_t *request);
 aStatus_t aModbusClientRead(aModbusHandle_t *handle,
     const aModbusClientReadRequest_t *request);
 aStatus_t aModbusClientWrite(aModbusHandle_t *handle,

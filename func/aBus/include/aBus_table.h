@@ -10,6 +10,8 @@
 
 /** @brief 只控制读写时使用锁；不影响创建，NONE 模式忽略。 */
 #define ABUS_SIG_FLAG_LOCK (1U << 0)
+/** STRUCT 字段互不重叠；定义检查时验证，单字段写入只检查目标范围。 */
+#define ABUS_SIG_FLAG_DISJOINT (1U << 1)
 
 /** @brief 单个 SIG 标志位的静态名称；组合位应逐位查询。 */
 static inline const char *aBusSigFlagName(uint16_t flag)
@@ -17,6 +19,7 @@ static inline const char *aBusSigFlagName(uint16_t flag)
     switch (flag) {
     case 0U: return "NONE";
     case ABUS_SIG_FLAG_LOCK: return "LOCK";
+    case ABUS_SIG_FLAG_DISJOINT: return "DISJOINT";
     default: return "UNKNOWN";
     }
 }
@@ -46,6 +49,38 @@ typedef struct {
     const aBusParam_t *params; /**< 仅 STRUCT 使用；可为 NULL。 */
     size_t param_count;
 } aBusSig_t;
+
+/**
+ * @brief 可选检查：STRUCT 的 size 是否等于全部 param.size 的总和。
+ * 由应用主动调用，初始化和读写不会自动执行；不受定义检查或 NDEBUG 影响。
+ * sig->size 应填写实际结构体的 sizeof，params 须包含 param_count 项有效描述，
+ * 调用期间保持不变。无需 handle，不加锁、不分配、不访问业务数据。
+ * 只检查长度总和，不检查偏移、重叠、类型、范围或寄存器单元要求；
+ * 重复字段和遗漏字段可能互相抵消，通过不代表布局连续或适合协议映射。
+ * @retval A_STATUS_OK 长度总和相等。
+ * @retval A_STATUS_UNSUPPORTED SIG 不是 STRUCT。
+ * @retval A_STATUS_INVALID_PARAM 空指针、空描述、零长度或长度总和不等。
+ */
+static inline aStatus_t aBusSigParamSizeCheck(const aBusSig_t *sig)
+{
+    size_t total = 0U;
+
+    if (sig == NULL) return A_STATUS_INVALID_PARAM;
+    if (sig->type != ALIB_DATA_STRUCT) return A_STATUS_UNSUPPORTED;
+    if (sig->size == 0U || sig->params == NULL || sig->param_count == 0U) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    for (size_t i = 0U; i < sig->param_count; i++) {
+        const size_t size = sig->params[i].size;
+
+        /* total 始终不超过 SIG 长度，先减后比较，避免累计溢出。 */
+        if (size == 0U || size > sig->size - total) {
+            return A_STATUS_INVALID_PARAM;
+        }
+        total += size;
+    }
+    return total == sig->size ? A_STATUS_OK : A_STATUS_INVALID_PARAM;
+}
 
 /** @brief 只读表定义；表及引用的定义在实例使用期保持有效且不变。 */
 typedef struct {

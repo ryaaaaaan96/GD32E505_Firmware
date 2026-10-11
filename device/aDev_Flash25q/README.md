@@ -41,7 +41,7 @@ aSystemInit 在 Shell 初始化之后调用 appSystemFlashInit，启动只探测
 
 应用可以使用 appSystemFlashRead/Write/Erase/GetInfo，业务代码不接触 SPI。
 擦写测试位于系统调试入口，见 [Flash 手动测试](../../app/task/system/flash_test.md)。
-默认不编译；在 app/task/system/CMakeLists.txt 中加入 flash_test.c 后，
+默认不编译；在 app/task/system/CMakeLists.txt 中加入 command_flash.c 后，
 通过 Shell 的 flash test 命令手动触发。
 
 ## 同步与官方源码

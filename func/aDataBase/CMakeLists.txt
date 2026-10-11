@@ -27,14 +27,13 @@ add_library(aDataBase STATIC
 # 仅复用 aBus 只读定义；不要求创建 aBus RAM 实例或启用运行库。
 target_include_directories(aDataBase PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(aDataBase PUBLIC aBusTable
-    PRIVATE aMemory aDataBaseFlashDb aOS aclass_project_options)
+target_link_libraries(aDataBase PUBLIC aBusTable aMemory
+    PRIVATE aDataBaseFlashDb aOS aclass_project_options)
 # 只有静态布局头需要上游类型；动态业务接口不传播 FlashDB 配置。
 if(ADATABASE_STATIC_ENABLE)
     target_include_directories(aDataBase PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/config"
         "${CMAKE_CURRENT_SOURCE_DIR}/FlashDB/inc")
-    target_link_libraries(aDataBase PUBLIC aMemory)
 endif()
 foreach(feature STATIC DYNAMIC)
     target_compile_definitions(aDataBase PUBLIC

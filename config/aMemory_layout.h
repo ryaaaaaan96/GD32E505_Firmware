@@ -10,7 +10,7 @@
 #ifndef AMEMORY_LAYOUT_H
 #define AMEMORY_LAYOUT_H
 
-/* 当前板上的八兆字节 Flash；末尾测试扇区不属于数据库分区。 */
+/* 当前板上的八兆字节 Flash；末尾单独保留一个测试区域，不与数据库重叠。 */
 #define AMEMORY_FLASH_DEVICE_NAME "flash25"
 #define AMEMORY_FLASH_BLOCK_SIZE 4096U
 #define AMEMORY_FLASH_CAPACITY_BYTES (8U * 1024U * 1024U)
@@ -22,5 +22,9 @@
 #define AMEMORY_PART_LOG_NAME "log"
 #define AMEMORY_PART_LOG_OFFSET 0x00120000U
 #define AMEMORY_PART_LOG_SIZE   0x00080000U
+
+#define AMEMORY_PART_TEST_NAME "flash_test"
+#define AMEMORY_PART_TEST_OFFSET 0x007FF000U
+#define AMEMORY_PART_TEST_SIZE   0x00001000U
 
 #endif
