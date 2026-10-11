@@ -67,7 +67,7 @@ includes = ["platform/aLib/include", "platform/aOS/public",
             "device/aDev_Flash25q", "func/aBus/include", "func/aMemory",
             "func/aDataBase", "func/aShell/include", "func/aLog",
             "func/aModbus", "func/aPoll", "app/protocol/inc"]
-headers = ("aLayout.h", "aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
+headers = ("aLayout.h", "aCrc.h", "aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
            "aDrv_dma.h", "aDev_led.h", "aDev_led_instance.h",
            "aBus.h", "aMemory.h", "aDataBase.h", "aShell.h", "aLog.h",
            "aPoll.h", "aPoll_instance.h", "aModbus.h", "aModbus_rtu.h",

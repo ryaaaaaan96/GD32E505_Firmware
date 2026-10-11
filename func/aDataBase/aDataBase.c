@@ -1,4 +1,5 @@
 #include "aDataBase_internal.h"
+#include "aCrc.h"
 #include "fdb_low_lvl.h"
 #include <string.h>
 
@@ -122,6 +123,76 @@ static aStatus_t partition_check(
     return A_STATUS_OK;
 }
 
+/* 仅初始化时计算；散列数值描述，不包含指针、填充、默认值或范围。
+ * 使用本机 uint32_t 字节序，字节序变化也应作废原始 RAM 快照。 */
+static uint32_t sig_mark_calculate(uint16_t device, const aBusSig_t *sig)
+{
+    const uint32_t description[] = {
+        0x53494701U, device, sig->sigKey, (uint32_t)sig->type,
+        (uint32_t)sig->size, (uint32_t)sig->param_count
+    };
+    uint32_t mark = aCrc32(0U, description, sizeof(description));
+
+    for (size_t i = 0U; i < sig->param_count; ++i) {
+        const aBusParam_t *param = &sig->params[i];
+        const uint32_t field[] = {
+            (uint32_t)param->offset, (uint32_t)param->type,
+            (uint32_t)param->size
+        };
+        mark = aCrc32(mark, field, sizeof(field));
+    }
+    return mark;
+}
+
+static aStatus_t sig_mark_sync(aDataBaseKvHandle_t *handle,
+                               uint16_t device, const aBusSig_t *sig)
+{
+    char key[sizeof(handle->active_key) + sizeof(":layout") - 1U];
+    uint32_t saved, mark = sig_mark_calculate(device, sig);
+    struct fdb_kv kv;
+    struct fdb_blob blob;
+    aStatus_t status;
+
+    memcpy(key, handle->active_key, sizeof(handle->active_key) - 1U);
+    memcpy(key + sizeof(handle->active_key) - 1U, ":layout", sizeof(":layout"));
+    if (fdb_kv_get_obj(&handle->db, key, &kv) != NULL &&
+        kv.crc_is_ok && kv.value_len == sizeof(saved)) {
+        fdb_blob_make(&blob, &saved, sizeof(saved));
+        fdb_kv_to_blob(&kv, &blob);
+        if (fdb_blob_read(&handle->db.parent, &blob) != sizeof(saved))
+            return A_STATUS_ERROR;
+        if (saved == mark) return A_STATUS_OK;
+    }
+    if (aDataBaseStorageError() != A_STATUS_OK)
+        return aDataBaseStorageError();
+    /* 必须先删除旧数据，再提交新标记。中途失败/掉电可在下次打开时重试，
+     * 不会出现新标记与不兼容旧数据同时有效的状态。 */
+    if (*handle->active_slot != UINT32_MAX) {
+        status = result_get(fdb_kv_del(&handle->db, handle->active_key));
+        if (status != A_STATUS_OK) return status;
+    }
+    fdb_blob_make(&blob, &mark, sizeof(mark));
+    return result_get(fdb_kv_set_blob(&handle->db, key, &blob));
+}
+
+static aStatus_t sig_marks_init(aDataBaseKvHandle_t *handle)
+{
+    for (size_t t = 0U; t < handle->table_count; ++t) {
+        const aBusTable_t *table = &handle->tables[t];
+        for (size_t i = 0U; i < table->sig_count; ++i) {
+            const aBusSig_t *sig;
+            aStatus_t status = aDataBaseIndexSelect(handle, table->deviceID,
+                                                   i, &sig);
+            if (status == A_STATUS_UNSUPPORTED) continue;
+            if (status == A_STATUS_OK)
+                status = sig_mark_sync(handle, table->deviceID, sig);
+            handle->active_slot = NULL;
+            if (status != A_STATUS_OK) return status;
+        }
+    }
+    return A_STATUS_OK;
+}
+
 static aStatus_t kv_initialize(const aDataBaseKvConfig_t *config,
                                aDataBaseKvHandle_t *handle, aBool_t dynamic)
 {
@@ -147,8 +218,10 @@ static aStatus_t kv_initialize(const aDataBaseKvConfig_t *config,
     result = fdb_kvdb_init(&handle->db, config->name, info.name,
                            NULL, handle);
     status = result_get(result);
-    if (status == A_STATUS_OK && aDataBaseStorageError() == A_STATUS_OK)
+    if (status == A_STATUS_OK && aDataBaseStorageError() == A_STATUS_OK) {
         status = aDataBaseIndexBuild(handle);
+        if (status == A_STATUS_OK) status = sig_marks_init(handle);
+    }
     if (not_format && result == FDB_READ_ERR &&
         aDataBaseStorageError() == A_STATUS_OK) status = A_STATUS_NOT_READY;
     status = aDataBaseOperationEnd(status);

@@ -11,6 +11,7 @@ static uint8_t memory[AMEMORY_FLASH_CAPACITY_BYTES];
 static unsigned reads, writes, erases;
 static int fail_read, fail_write;
 static unsigned fail_write_at;
+static uint32_t fail_read_address = UINT32_MAX;
 static uint32_t io_tick;
 
 static void bounds(uint32_t address, uint32_t size)
@@ -32,7 +33,7 @@ static aStatus_t read_bytes(
     bounds(address, size);
     ++reads;
     database_tick += io_tick;
-    if (fail_read) return A_STATUS_TIMEOUT;
+    if (fail_read || address == fail_read_address) return A_STATUS_TIMEOUT;
     memcpy(buffer, memory + address, size);
     return A_STATUS_OK;
 }
@@ -307,7 +308,7 @@ int main(void)
         assert(get(2U, 0U, &value) == A_STATUS_OK);
         assert(value == 123U || value == 456U);
     }
-    /* 固件改变值长度时，不把旧记录截断或填入不匹配的结构体。 */
+    /* 固件改变值长度时，初始化作废旧记录，不填入不匹配的结构体。 */
     close_db();
     other_sig.size = sizeof(uint64_t);
     assert(open_db(&config) == A_STATUS_OK);
@@ -318,16 +319,17 @@ int main(void)
     wide_get.data = &wider;
     wide_get.size = sizeof(wider);
     before = writes;
-    assert(aDataBaseSigGet(kv, &wide_get) == A_STATUS_DATA_MISMATCH);
+    assert(aDataBaseSigGet(kv, &wide_get) == A_STATUS_NOT_FOUND);
     assert(wider == UINT64_MAX);
-    /* 请求自身长度错误与旧记录不兼容是两种状态，均不能隐式删除。 */
+    /* 请求自身长度错误仍返回 INVALID_PARAM，Get 不修改 Flash。 */
     wide_get.size = sizeof(value);
     assert(aDataBaseSigGet(kv, &wide_get) == A_STATUS_INVALID_PARAM);
     assert(wider == UINT64_MAX && writes == before);
     close_db();
     other_sig.size = sizeof(value);
     assert(open_db(&config) == A_STATUS_OK);
-    assert(get(2U, 0U, &value) == A_STATUS_OK);
+    assert(get(2U, 0U, &value) == A_STATUS_NOT_FOUND);
+    assert(put(2U, 0U, 123U) == A_STATUS_OK);
     /* 总超时使实例失效，重新打开重建 RAM 缓存。 */
     fail_read = 1;
     assert(get(2U, 0U, &value) == A_STATUS_TIMEOUT);

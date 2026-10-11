@@ -12,6 +12,25 @@
 除数必须大于零；宏参数会重复求值，须无副作用且求值期间保持稳定。
 FreeRTOS 栈元素类型和默认栈容量仍由 aOS 后端管理。
 
+## CRC32
+
+`aCrc.h` 提供 `aCrc32(crc, data, size)`，采用 CRC-32/ISO-HDLC（IEEE），
+与常见 CRC32/zlib 结果一致。首次传入 0，分段时传入上次返回值；空段返回
+传入值，只有长度为零时允许空指针。支持未对齐输入，无状态、无内存分配。
+沿用 aLib 的头文件实现方式，4 位查表占用 64 字节常量表。
+
+```c
+#include "aCrc.h"
+
+uint32_t crc = aCrc32(0U, header, header_size);
+crc = aCrc32(crc, payload, payload_size);
+```
+
+接口只处理字节，字段排列与字节序由调用方决定。aDataBase 在初始化时使用它
+计算 SIG 布局标记；FlashDB 内部的记录 CRC 继续使用上游实现。
+验证：`python3 tests/crc/run.py`，覆盖 C11/C++11、标准向量、zlib 对照、
+非零初始 CRC、空段、分段和未对齐输入。
+
 ## 可选布局断言
 
 `aLayout.h` 提供编译期检查，也由 `aLib.h` 包含。由定义结构体的应用层

@@ -57,7 +57,7 @@ int test_shell_print(const char *format, ...);
                            check=True)
             objects.append(obj)
         for test in ("test_storage", "test_database", "test_multidevice",
-                     "test_index"):
+                     "test_index", "test_sig_layout"):
             executable = str(Path(directory) / f"{test}-{static}-{dynamic}")
             test_source = root / "tests/database" / (test + ".c")
             subprocess.run(command + [str(test_source)] + objects +

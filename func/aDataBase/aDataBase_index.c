@@ -116,8 +116,16 @@ static aStatus_t definitions_check(const aDataBaseKvConfig_t *config,
                 found = &table->sigs[i];
             }
         }
-        if (found == NULL || found->size == 0U || found->size > max_size)
+        if (found == NULL || found->size == 0U || found->size > max_size ||
+            found->size > UINT32_MAX || found->param_count > UINT32_MAX ||
+            (found->param_count != 0U && found->params == NULL))
             return A_STATUS_INVALID_PARAM;
+        for (size_t i = 0U; i < found->param_count; ++i) {
+            const aBusParam_t *param = &found->params[i];
+            if (param->size == 0U || param->offset > found->size ||
+                param->size > found->size - param->offset)
+                return A_STATUS_INVALID_PARAM;
+        }
     }
     if (config->sig_slots != NULL) {
         /* 可选直接映射只校验一次；业务读写不再按 sigKey 二分。 */

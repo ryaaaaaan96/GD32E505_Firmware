@@ -24,6 +24,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | 范围 | 命令 |
 | --- | --- |
 | 可选布局断言与 SIG 参数长度求和（需要 C/C++ 编译器） | `python3 tests/layout/run.py` |
+| aLib CRC32（C11/C++11、标准向量及 zlib 对照） | `python3 tests/crc/run.py` |
 | OS 通知、定时器与工作队列 | `python3 tests/aos/run.py` |
 | LED/GPIO 状态、静态/动态生命周期与接口裁剪 | `python3 tests/led/run.py` |
 | SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |
@@ -117,6 +118,8 @@ ELF 的静态 RAM 统计包含预留区，不等同于运行时堆使用量或�
   重开恢复、六种类型和范围错误；未选中项不写入 Flash。覆盖旧记录长度变大/变小
   后的逻辑删除、保留默认值、继续恢复、重开和新格式保存，以及读取/删除失败上报。
   普通 Get 区分参数错误与记录长度不兼容，均不修改 Flash。
+  `test_sig_layout.c` 覆盖仅初始化访问的独立布局标记、无标记旧数据、同长度类型/
+  偏移/顺序变化、快照字节不变、重复初始化无写入，以及标记读失败和逐次写入故障恢复。
 - `python3 tests/protocol_tasks/run.py`：点表展开、配置生命周期与重复查询，
   持久化清单自动计数，以及点表配置不依赖 FlashDB 私有布局的检查。
 - `python3 tests/app_startup/run.py`：参数恢复在协议与测试任务启动前完成。
