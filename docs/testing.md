@@ -29,7 +29,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | OS 任务创建/退出/Join、通知、定时器与工作队列 | `python3 tests/aos/run.py` |
 | LED/GPIO 状态、静态/动态生命周期与接口裁剪 | `python3 tests/led/run.py` |
 | SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |
-| DMA 通道、IRQ/查询交错与真实 USART DMA 适配 | `python3 tests/dma/run.py` |
+| DMA 地址/对齐检查、IRQ/查询交错与 USART DMA 适配 | `python3 tests/dma/run.py` |
 | USART、RX 缓冲丢弃、RS485、FIFO 与 IRQ | `python3 tests/usart/run.py` |
 | aBus 定义、绑定、锁与分配 | `python3 tests/bus/run.py` |
 | SIG 应用与 Shell 类型解析 | `python3 tests/bus/test_app_sig.py`、`python3 tests/bus/test_shell_types.py` |
@@ -47,6 +47,12 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 `tests/aos/run.py` 验证任务创建直传入口与参数、显式退出和删除语义。
 Join 检查仅覆盖 FreeRTOS 预留接口：各类超时参数均返回 UNSUPPORTED，
 句柄保持不变；完整等待行为留待 Linux 后端实现后验证。
+
+`tests/dma/run.py` 使用 MCU 地址模型验证 RAM/Flash 边界、只读目标拒绝、
+宽度对齐、固定/递增跨度、内存到内存及活动配置拒绝；不解引用模拟 MCU 地址。
+`tests/usart/run.py` 通过模拟缓存接口检查 TX 启动前准备、Direct RX 准备及归还，
+覆盖启动失败、超时和部分接收；循环 RX 检查策略拒绝，以及启停和失败清理
+不调用缓存维护但仍关闭 DMA。实际缓存硬件留待移植验证。
 
 `tests/app_devices/run.py` 包含真实控制台适配与 Shell 解析器的接收联测，
 通过模拟满 RX ring、读取期间溢出、旧换行、连续溢出及读空边界再次溢出，

@@ -25,13 +25,13 @@ typedef struct {
     uint32_t periph_width, memory_width, periph_inc, memory_inc;
     uint32_t direction, priority;
 } dma_parameter_struct;
-extern uint32_t test_usart_data;
-#define USART_DATA(instance_) test_usart_data
+#define USART_DATA(instance_) (*(volatile uint32_t *)0x40013804U)
 
 uint32_t __get_PRIMASK(void);
 void __disable_irq(void);
 void __enable_irq(void);
 void __DMB(void);
+void __DSB(void);
 void NVIC_ClearPendingIRQ(IRQn_Type irq);
 void NVIC_SetPendingIRQ(IRQn_Type irq);
 void nvic_irq_disable(IRQn_Type irq);

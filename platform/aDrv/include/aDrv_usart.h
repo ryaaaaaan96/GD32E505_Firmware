@@ -8,7 +8,9 @@
  * Async 命名在此表示启动 DMA 硬件，不表示任务回调或业务请求队列。
  * INTERRUPT_ENABLE/DMA_ENABLE 为 0 时对应声明被裁剪，无 stub；调用方同步裁剪。
  * ADRV_USART_DMA_ENABLE 只控制硬件 DMA 操作，不启用 device 的业务异步 API。
- * DMA 缓冲区需硬件可达并满足 cache 一致性；本 port 不提供跨平台 cache 维护。
+ * DMA 启动前检查地址范围；缓存交接由调用者通过 aDrv_dma_memory.h 完成。
+ * 直接调用本层的单次 RX，须先 Prepare，Stop/Abort 后 Complete 才能读数据。
+ * 循环 RX 仅接受无需缓存维护的区域；进度/ISR 通知不表示整块所有权已交还。
  * 后端须串行派发同一实例的 USART/DMA 回调；除关闭外的操作不得阻塞，
  * 不在操作函数调用栈中直接调用登记回调，也不得持有回调需要再次获取的内部锁。
  * 当前 GD32 用单核、USART/DMA 同优先级实现派发顺序；SMP/线程后端尚未实现，

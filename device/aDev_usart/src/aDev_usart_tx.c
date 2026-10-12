@@ -1,4 +1,5 @@
 #include "aDev_usart_internal.h"
+#include "aDrv_dma_memory.h"
 
 #include <limits.h>
 #include <string.h>
@@ -264,10 +265,10 @@ aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
     switch (config->mode & ADEV_USART_TX_MASK) {
     case ADEV_USART_TX_POLLING:
 #if ADEV_USART_NEEDS_EVENTS
-        if ((config->rs485.mode != ADEV_USART_RS485_NONE) ||
-            (config->mode & ADEV_USART_TX_MASK) == ADEV_USART_TX_DMA_BUFFERED)
+        if (config->rs485.mode != ADEV_USART_RS485_NONE)
             return aDevUsartRegisterDriverCallback(
-                handle, ADRV_USART_EVENT_TX_COMPLETE, tx_complete_callback, A_FALSE);
+                handle, ADRV_USART_EVENT_TX_COMPLETE,
+                tx_complete_callback, A_FALSE);
 #endif
         (void)handle;
         return A_STATUS_OK;
@@ -298,8 +299,7 @@ aStatus_t aDevUsartTxModeInit(aDevUsartHandle_t *handle,
     case ADEV_USART_TX_DMA_BUFFERED: {
         aStatus_t status;
 
-        if (!aDrvUsartEventIsSupported() ||
-            !aDrvUsartDmaTxIsSupported(handle->drv_handle.id)) {
+        if (!aDrvUsartEventIsSupported()) {
             return A_STATUS_UNSUPPORTED;
         }
         if (!((config->tx_buffer == NULL && config->tx_buffer_size == 0U) ||
@@ -358,6 +358,7 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
     if (contiguous > handle->tx.count) {
         contiguous = handle->tx.count;
     }
+    if (contiguous > 65535U) contiguous = 65535U;
     status = A_STATUS_OK;
 #if ADEV_USART_RS485_ENABLE
     status = aDevUsartRS485Begin(handle);
@@ -365,6 +366,8 @@ static aStatus_t dma_tx_start_locked(aDevUsartHandle_t *handle)
     if (status != A_STATUS_OK) {
         return status;
     }
+    /* ring 在初始化已检查；只同步本次实际提交的连续段。 */
+    aDrvDmaTxPrepare(handle->settings.tx_buffer + handle->tx.tail, contiguous);
     status = aDrvUsartAsyncTxStart(
         &handle->drv_handle, &handle->settings.tx_buffer[handle->tx.tail],
         contiguous, &started);
@@ -688,6 +691,8 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
         (handle->tx.count != 0U) || (handle->tx.dma_active != 0U);
     if (busy) return A_STATUS_BUSY;
 
+    status = aDrvDmaBufferCheck(buffer, size, ADRV_DMA_BUFFER_TX);
+    if (status != A_STATUS_OK) return status;
     if (timeout.type != A_TIMEOUT_TYPE_FOREVER) {
         if (handle->tx.deadline_timer == NULL) {
             status = aOSTimerCreate(&handle->tx.deadline_timer,
@@ -716,6 +721,7 @@ aStatus_t aDevUsartWriteAsync(aDevUsartHandle_t *handle,
     handle->tx.callback = callback;
     handle->tx.callback_argument = argument;
     handle->tx.state = ADEV_USART_TX_ASYNC;
+    aDrvDmaTxPrepare(buffer, size);
     status = aDrvUsartAsyncTxStart(&handle->drv_handle, buffer, size,
                                    &started);
     if ((status == A_STATUS_OK) && (started != size)) {
@@ -829,6 +835,8 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
     if (!aDevUsartIsSupported(handle, ADEV_USART_CAP_TX_DIRECT)) {
         return aOSFailWithStatus(A_STATUS_UNSUPPORTED);
     }
+    status = aDrvDmaBufferCheck(data, data_size, ADRV_DMA_BUFFER_TX);
+    if (status != A_STATUS_OK) return aOSFailWithStatus(status);
 
     end = aTimepointCalc(timeout, aOSGetUptimeMs());
 
@@ -850,6 +858,8 @@ static aSSize_t dma_write_direct(aDevUsartHandle_t *handle,
     }
     aOSCriticalExit();
 
+    /* 用户在整个调用期间保持数据不变；一次同步覆盖后续所有 DMA 分块。 */
+    if (status == A_STATUS_OK) aDrvDmaTxPrepare(data, data_size);
     while ((status == A_STATUS_OK) && (count < data_size)) {
         size_t started = 0U;
         size_t remaining = 0U;

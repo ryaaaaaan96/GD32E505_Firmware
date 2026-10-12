@@ -1,4 +1,5 @@
 #include "aDev_usart_internal.h"
+#include "aDrv_dma_memory.h"
 
 #include <string.h>
 
@@ -164,11 +165,24 @@ static aStatus_t handle_init(const aDevUsartConfig_t *config,
     }
 
 #if ADEV_USART_DMA_BACKEND_ENABLE
-    if (((config->mode & ADEV_USART_TX_MASK) == ADEV_USART_TX_DMA_BUFFERED &&
+    if ((tx == ADEV_USART_TX_DMA_BUFFERED &&
          !aDrvUsartDmaTxIsSupported(config->drv_config.id)) ||
-        ((config->mode & ADEV_USART_RX_MASK) == ADEV_USART_RX_DMA_BUFFERED &&
+        (rx == ADEV_USART_RX_DMA_BUFFERED &&
          !aDrvUsartDmaRxIsSupported(config->drv_config.id))) {
         return A_STATUS_UNSUPPORTED;
+    }
+    /* 固定 ring 只在初始化检查；循环 RX 必须无需运行时缓存维护。 */
+    if (tx == ADEV_USART_TX_DMA_BUFFERED &&
+        (config->tx_buffer != NULL || config->tx_buffer_size != 0U)) {
+        status = aDrvDmaBufferCheck(config->tx_buffer, config->tx_buffer_size,
+                                    ADRV_DMA_BUFFER_TX_RING);
+        if (status != A_STATUS_OK) return status;
+    }
+    if (rx == ADEV_USART_RX_DMA_BUFFERED &&
+        (config->rx_buffer != NULL || config->rx_buffer_size != 0U)) {
+        status = aDrvDmaBufferCheck(config->rx_buffer, config->rx_buffer_size,
+                                    ADRV_DMA_BUFFER_RX_CIRCULAR);
+        if (status != A_STATUS_OK) return status;
     }
 #endif
 

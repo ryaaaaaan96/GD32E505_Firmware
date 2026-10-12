@@ -1,5 +1,6 @@
 /* Host test: real device implementation, simulated nonblocking driver and OS. */
 #include "aDev_usart_internal.h"
+#include "aDrv_dma_memory.h"
 #include "aOS.h"
 #include <assert.h>
 #include <stdio.h>
@@ -40,6 +41,42 @@ static void *rx_dma_argument;
 static size_t rx_dma_size;
 static size_t rx_dma_remaining;
 static aBool_t rx_dma_circular;
+static aBool_t rx_dma_enabled;
+static aStatus_t dma_buffer_status = A_STATUS_OK;
+static const void *tx_prepared;
+static size_t tx_prepared_size;
+static void *rx_prepared;
+static size_t rx_prepared_size;
+static unsigned tx_prepares, rx_prepares, rx_completes;
+
+/* 用真实 aDev 调用检查缓存交接顺序，不依赖当前芯片的空实现。 */
+aStatus_t aDrvDmaBufferCheck(const void *buffer, size_t size,
+                            aDrvDmaBufferUsage_t usage)
+{
+    assert((unsigned)usage <= ADRV_DMA_BUFFER_RX_CIRCULAR);
+    if (buffer == NULL || size == 0U) return A_STATUS_INVALID_PARAM;
+    return dma_buffer_status;
+}
+void aDrvDmaTxPrepare(const void *buffer, size_t size)
+{
+    tx_prepared = buffer;
+    tx_prepared_size = size;
+    tx_prepares++;
+}
+void aDrvDmaRxPrepare(void *buffer, size_t size)
+{
+    assert(!rx_dma_enabled && rx_prepared == NULL);
+    rx_prepared = buffer;
+    rx_prepared_size = size;
+    rx_prepares++;
+}
+void aDrvDmaRxComplete(void *buffer, size_t size)
+{
+    assert(!rx_dma_enabled);
+    assert(buffer == rx_prepared && size == rx_prepared_size);
+    rx_prepared = NULL;
+    rx_completes++;
+}
 static size_t rx_dma_produced;
 static size_t rx_dma_position = SIZE_MAX;
 static size_t advance_after_progress;
@@ -232,21 +269,34 @@ aStatus_t aDrvUsartIsTransmitComplete(const aDrvUsartHandle_t *h, aBool_t *v)
 aBool_t aDrvUsartDmaTxIsSupported(aDrvUsartId_t id) { (void)id; return dma_supported; }
 aBool_t aDrvUsartDmaRxIsSupported(aDrvUsartId_t id) { (void)id; return dma_supported; }
 aStatus_t aDrvUsartAsyncTxStart(aDrvUsartHandle_t *h, const void *p, size_t n, size_t *s)
-{ (void)h; dma_source = p; dma_remaining = n; *s = n; tc = A_FALSE; return A_STATUS_OK; }
+{ (void)h;
+  assert((uintptr_t)p >= (uintptr_t)tx_prepared);
+  assert((uintptr_t)p - (uintptr_t)tx_prepared <= tx_prepared_size);
+  assert(n <= tx_prepared_size - ((uintptr_t)p - (uintptr_t)tx_prepared));
+  dma_source = p; dma_remaining = n; *s = n; tc = A_FALSE; return A_STATUS_OK; }
 aStatus_t aDrvUsartAsyncTxGetRemaining(aDrvUsartHandle_t *h, size_t *n)
 { (void)h; *n = dma_stall ? dma_remaining : 0; return dma_error ? A_STATUS_ERROR : A_STATUS_OK; }
 aStatus_t aDrvUsartAsyncTxAbort(aDrvUsartHandle_t *h)
 { (void)h; dma_remaining = 0; return A_STATUS_OK; }
 aStatus_t aDrvUsartAsyncRxStart(aDrvUsartHandle_t *h, void *p, size_t n)
-{ (void)h; direct_rx_target = p; rx_dma_size = n;
+{ (void)h;
+  assert((uintptr_t)p >= (uintptr_t)rx_prepared);
+  assert((uintptr_t)p - (uintptr_t)rx_prepared <= rx_prepared_size);
+  assert(n <= rx_prepared_size - ((uintptr_t)p - (uintptr_t)rx_prepared));
+  rx_dma_enabled = A_TRUE;
+  direct_rx_target = p; rx_dma_size = n;
   size_t count = direct_rx_count < n ? direct_rx_count : n;
   memset(p, 0x5a, count); rx_dma_remaining = n - count; return A_STATUS_OK; }
 aStatus_t aDrvUsartAsyncRxAbort(aDrvUsartHandle_t *h)
-{ (void)h; rx_dma_circular = A_FALSE; rx_dma_callback = NULL; return A_STATUS_OK; }
+{ (void)h; rx_dma_enabled = A_FALSE;
+  rx_dma_circular = A_FALSE; rx_dma_callback = NULL; return A_STATUS_OK; }
 aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *h, void *p, size_t n,
                                          aDrvUsartDmaCallback_t callback,
                                          void *argument)
 { (void)h; rx_ring = p;
+  /* 循环区通过内存策略检查后直接使用，不参加 Direct RX 的缓存交接。 */
+  assert(rx_prepared == NULL && !rx_dma_enabled);
+  rx_dma_enabled = A_TRUE;
   rx_dma_circular = A_TRUE; rx_dma_produced = 0U;
   rx_dma_size = n; rx_dma_callback = callback; rx_dma_argument = argument;
   if (rx_notify_on_start) {
@@ -261,7 +311,8 @@ aStatus_t aDrvUsartAsyncRxCircularStart(aDrvUsartHandle_t *h, void *p, size_t n,
 aStatus_t aDrvUsartRxDmaStart(aDrvUsartHandle_t *h, void *p, size_t n,
                               aDrvUsartDmaCallback_t callback,
                               void *argument)
-{ (void)aDrvUsartAsyncRxStart(h, p, n);
+{ if (rx_start_status != A_STATUS_OK) return rx_start_status;
+  (void)aDrvUsartAsyncRxStart(h, p, n);
   rx_dma_circular = A_FALSE; rx_dma_callback = callback;
   rx_dma_argument = argument; rx_dma_size = n;
   return A_STATUS_OK; }
@@ -299,7 +350,7 @@ aStatus_t aDrvUsartAsyncRxGetProgress(aDrvUsartHandle_t *h,
 aStatus_t aDrvUsartAsyncRxGetRemaining(aDrvUsartHandle_t *h, size_t *n)
 { (void)h; *n = rx_dma_remaining; return A_STATUS_OK; }
 aStatus_t aDrvUsartAsyncRxStop(aDrvUsartHandle_t *h, size_t *n)
-{ (void)h; ++rx_dma_stops; if (n) *n = rx_dma_circular
+{ (void)h; rx_dma_enabled = A_FALSE; ++rx_dma_stops; if (n) *n = rx_dma_circular
                                        ? rx_dma_produced : rx_dma_size - rx_dma_remaining;
   rx_dma_circular = A_FALSE;
   rx_dma_callback = NULL; return A_STATUS_OK; }
@@ -376,6 +427,8 @@ static void rx_startup_tests(void)
     config.mode = ADEV_USART_RX_DMA_BUFFERED;
     rx_notify_on_start = A_TRUE;
     const unsigned notifications = rx_notifications;
+    const unsigned prepares = rx_prepares;
+    const unsigned completes = rx_completes;
     assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_OK);
     assert(!rx_notify_on_start && rx_notifications == notifications + 1U);
     ring[0] = 0x12U;
@@ -386,13 +439,16 @@ static void rx_startup_tests(void)
     assert(!rx_notify_on_progress && handle.rx.dma_consumed == 2U);
     assert(output[0] == 0x12U && output[1] == 0x34U);
     assert(aDevUsartDeInit(&handle) == A_STATUS_OK);
+    assert(!rx_dma_enabled);
+    assert(rx_prepares == prepares && rx_completes == completes);
 
     /* 启动失败仍须先关闭驱动，再重置预先发布的接收状态。 */
     rx_start_status = A_STATUS_ERROR;
     assert(aDevUsartInitStatic(&config, &handle) == A_STATUS_ERROR);
     assert(!handle.drv_handle.initialized && !handle.rx.dma_active);
-    assert(rx_dma_callback == NULL && !rx_dma_circular);
+    assert(rx_dma_callback == NULL && !rx_dma_circular && !rx_dma_enabled);
     assert(handle.rx.wait_object == NULL);
+    assert(rx_prepares == prepares && rx_completes == completes);
     rx_start_status = A_STATUS_OK;
 }
 
@@ -951,6 +1007,31 @@ int main(void)
     assert(aDevUsartReadDirect(h, read_buffer, sizeof(read_buffer),
                                A_TIMEOUT_FOREVER) == sizeof(read_buffer));
     assert(!complete_rx_on_wait && rx_waits == waits_before + 1U);
+    /* 检查失败不能准备缓存或触碰 DMA；启动失败也归还保留区。 */
+    const unsigned prepared_before = rx_prepares;
+    dma_buffer_status = A_STATUS_UNSUPPORTED;
+    assert(aDevUsartReadDirect(h, read_buffer, sizeof(read_buffer),
+                               A_TIMEOUT_NO_WAIT) == -1);
+    assert(last_error == A_STATUS_UNSUPPORTED &&
+           rx_prepares == prepared_before);
+    dma_buffer_status = A_STATUS_OK;
+    rx_start_status = A_STATUS_ERROR;
+    assert(aDevUsartReadDirect(h, read_buffer, sizeof(read_buffer),
+                               A_TIMEOUT_NO_WAIT) == -1);
+    assert(rx_prepares == prepared_before + 1U && rx_prepared == NULL);
+    rx_start_status = A_STATUS_OK;
+    uint8_t *large_rx = malloc(70000U);
+    assert(large_rx != NULL);
+    direct_rx_count = SIZE_MAX;
+    const unsigned large_prepares = rx_prepares;
+    const unsigned large_stops = rx_dma_stops;
+    assert(aDevUsartReadDirect(h, large_rx, 70000U,
+                               A_TIMEOUT_FOREVER) == 70000);
+    assert(rx_prepares == large_prepares + 1U && rx_prepared == NULL);
+    assert(rx_dma_stops == large_stops + 2U);
+    assert(large_rx[0] == 0x5a && large_rx[69999] == 0x5a);
+    free(large_rx);
+    direct_rx_count = 0U;
     rx_dma_stops = 4U; /* Subsequent tests count their own stop operations. */
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
 
@@ -1169,13 +1250,25 @@ int main(void)
     fire(h, ADRV_USART_EVENT_RX_READY);
     assert(aDevUsartRead(h, read_buffer, 1U, A_TIMEOUT_NO_WAIT) == 1);
     assert(aDevUsartDeInit(h) == A_STATUS_OK);
+    aDevUsartConfigStructInit(&c);
+    c.mode = ADEV_USART_RX_DMA_BUFFERED;
+    c.rx_buffer = ring;
+    c.rx_buffer_size = sizeof(ring);
+    const unsigned inits_before = driver_init_count;
+    dma_buffer_status = A_STATUS_UNSUPPORTED;
+    assert(aDevUsartInitStatic(&c, h) == A_STATUS_UNSUPPORTED);
+    assert(driver_init_count == inits_before && rx_prepared == NULL);
+    dma_buffer_status = A_STATUS_OK;
     rx_startup_tests();
     buffered_rx_tests();
     discard_rx_tests();
     read_overflow_tests();
     rx_status_snapshot_tests();
     tx_publish_tests();
-    puts("RS485 USART tests passed");
+    assert(tx_prepares != 0U && rx_prepares != 0U);
+    assert(rx_prepares == rx_completes && rx_prepared == NULL);
+    assert(!rx_dma_enabled);
+    puts("RS485 USART and DMA cache handoff tests passed");
     return 0;
 }
 

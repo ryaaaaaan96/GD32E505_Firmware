@@ -42,6 +42,57 @@ DMA 中断入口、标志消费和循环计数由 `src/dma/aDrv_dma.c` 统一管
 DMA1 仅有五个通道，逻辑通道范围是 7..11。驱动不依赖 aOS，不执行软件等待。
 完整职责和实例设计见 [aDrv 与 aDevice 设计](../../docs/driver_device_design.md)。
 
+## DMA 缓冲区与缓存交接
+
+`aDrv_dma_memory.h` 提供以下接口，不分配内存、不依赖 aOS：
+
+| 接口 | 职责 |
+| --- | --- |
+| `aDrvDmaBufferCheck` | 检查完整字节范围及 TX/TX ring/RX/循环 RX 用途 |
+| `aDrvDmaTxPrepare` | CPU 写入结束后、DMA 发送前同步源数据 |
+| `aDrvDmaRxPrepare` | DMA 接收前处理旧缓存状态 |
+| `aDrvDmaRxComplete` | DMA 停止后、CPU 访问前同步接收保留区 |
+
+aDev 负责交接时机；直接使用 aDrv DMA 的调用者承担相同责任，驱动启动入口
+不重复执行缓存维护。缓存接口须可在 ISR 调用，不阻塞、不分配内存。
+GD32E505 的 SRAM 无需缓存维护，后端明确导出 `ADRV_DMA_CACHE_COHERENT=1`，
+三个接口使用内联空实现；这不是产品可关闭的安全开关。FMC 的 Flash 读缓存
+属于 Flash 控制器，不是 SRAM DMA 缓冲区缓存。未知平台保留函数声明，
+必须提供实现，不能默认使用空函数。DMA 启停所需的 DMB/DSB 仍在驱动中执行。
+循环 RX 仅接受无需缓存维护的区域，检查通过后不调用 RxPrepare/RxComplete，
+包括启动、停止及失败清理；关闭 DMA 后才能释放或复用其内存。
+
+当前可达区域由 `GD32E505_flash.ld` 导出 RAM/主 Flash 的实际起止地址：
+RX 和 TX ring 仅允许 RAM；Direct/Async TX 允许 RAM 或主 Flash。
+TX ring 由 CPU 填充，因此不能像普通发送源一样接受只读 Flash。
+未接入外部内存和地址别名。
+范围检查采用减法，拒绝零长度、越界和长度回绕，不验证 C 对象实际容量。
+通用 DMA 启动还按两侧数据宽度和递增设置计算完整跨度；固定地址仅检查
+一个单元。内存到内存模式的 peripheral 为源、memory 为目标，两侧都检查。
+宽度在初始化时限定为 1/2/4 字节，地址设置时检查对应对齐，数量设置时限定
+为 1..65535；启动不重复校验这些条件。调用者不得直接修改 handle 内部字段。
+硬件分块仅检查可达性，缓存行隔离由调用者对整个保留区检查；不能要求每个
+65535 字节硬件块也独占缓存行。循环 RX 另检查无需缓存维护的区域策略。
+外设侧仅验证总线窗口和对齐，具体寄存器/请求路由仍由外设驱动保证。
+通道启动后须显式 Disable 才可修改地址、数量或循环配置。
+
+可选的静态声明方式如下，当前应用中断收发缓冲区无需改用此宏：
+
+```c
+#include "aDrv_dma_memory.h"
+
+static ADRV_DMA_BUFFER uint8_t rx_buffer[256U];
+```
+
+宏用于文件作用域无初值数组，指定 `.dma_buffer` 和平台对齐值；GD32 GCC
+链接脚本将它纳入 `.bss` 清零范围。此宏不会自动关闭缓存，也不提供动态分配。
+带缓存平台移植时必须实现区域属性配置：循环 RX 只允许非缓存/硬件一致区域；
+Direct RX 还须检查完整缓存行隔离，不能任意扩大维护范围而影响邻接业务变量。
+迁移时应联动修改缓冲区检查、对齐要求、链接布局与缓存实现。
+
+依据：[GD32E50x 用户手册](https://www.gd32mcu.com/data/documents/userManual/GD32E50x_User_Manual_Rev2.2.pdf)、
+[Linux DMA 数据交接与缓存行隔离](https://docs.kernel.org/core-api/dma-api-howto.html)。
+
 ARM/IAR startup 保持官方原文件。GCC 构建根据 MCU profile 的
 `MCU_STARTUP_VARIANT` 选择 `Source/GCC/startup_<variant>.S`；GD32E505 当前选择
 `gd32e50x_cl`。startup 负责 `.data/.bss` 初始化、`SystemInit()`、newlib 构造函数

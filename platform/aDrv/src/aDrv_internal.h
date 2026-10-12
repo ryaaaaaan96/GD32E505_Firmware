@@ -15,4 +15,9 @@ typedef struct {
 
 aStatus_t aDrvResolvePin(aDrvGpioPin_t pin, aDrvPrivateGpio_t *gpio);
 
+/* DMA 单块的地址可达性；缓存约束由上层对完整保留区检查。
+ * 硬件分块可跨越缓存行，不能将每块误当成独立的缓存所有权区域。 */
+aStatus_t aDrvPrivateDmaMemoryCheck(const void *buffer, size_t size,
+                                   aBool_t writable);
+
 #endif

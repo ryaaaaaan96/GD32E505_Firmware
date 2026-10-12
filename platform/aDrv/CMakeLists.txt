@@ -95,6 +95,7 @@ if(ADRV_MODULE_DMA_ENABLE)
     )
     list(APPEND ADRV_SOURCES
         src/dma/aDrv_dma.c
+        src/dma/aDrv_dma_memory.c
     )
     set(GD32_RCU_DRIVER_REQUIRED ON)
 endif()
@@ -175,6 +176,9 @@ add_library(
 target_compile_definitions(
     aDrv
     PUBLIC
+        # 当前芯片 SRAM 无需缓存维护；不是供用户关闭维护的配置开关。
+        ADRV_DMA_CACHE_COHERENT=1
+        ADRV_DMA_BUFFER_ALIGNMENT=4
         ADRV_USART_INTERRUPT_ENABLE=$<BOOL:${ADRV_USART_INTERRUPT_ENABLE}>
         ADRV_USART_DMA_ENABLE=$<BOOL:${ADRV_USART_DMA_ENABLE}>
         ADRV_GPIO_SWD_PROTECT_DISABLE=$<BOOL:${ADRV_GPIO_SWD_PROTECT_DISABLE}>

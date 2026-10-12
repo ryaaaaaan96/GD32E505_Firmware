@@ -9,6 +9,26 @@ app 负责配置、业务任务、排队和协议；不提供设备内 TX Queue�
 DMA 的通道、中断和循环计数由 aDrvDma 维护，USART DMA 实现仅适配路由和通知。
 详见 [aDrv 与 aDevice 设计](../../docs/driver_device_design.md)。
 
+## DMA 缓冲区交接
+
+DMA 能力由初始化入口统一检查，内部收发模式初始化不重复查询。
+DMA 固定 ring 初始化时通过 `aDrvDmaBufferCheck` 校验，Direct/Async 请求则
+检查用户缓冲区。校验失败不启动 DMA，不额外分配缓冲区，不自动改为复制。
+检查函数和缓存接口由各自使用它们的 `.c` 直接包含，不放进内部公共头。
+
+- TX ring：每次提交连续段前调用 `aDrvDmaTxPrepare`，只处理实际提交的数据。
+- Direct TX：整个调用期间数据不变，检查和准备一次，后续硬件分块复用。
+- Async TX：请求接受后、DMA 启动前准备缓存，保持原 ISR 终态回调语义。
+- Direct RX：整个用户区只准备一次，期间独占；全部分块停止后调用
+  `aDrvDmaRxComplete` 归还完整区域，包含启动失败、超时和部分接收。
+- 循环 RX：仅允许无需缓存维护的区域，不调用 `RxPrepare/RxComplete`；
+  停止和失败清理仍须关闭 DMA，保留复制前后的 DMA 覆盖检查。Async 快照区由 CPU
+  复制填充，不是 DMA 目标，无需对快照再做 DMA 缓存维护。
+
+GD32 SRAM 的三个维护接口是内联空实现；有缓存的后端须实现操作与检查策略。
+缓冲区生命周期、对象容量和并发约束仍由应用保证，内存检查不能替代这些约定。
+静态 DMA 区声明方式和移植要求见 [aDrv 说明](../../platform/aDrv/README.md)。
+
 ## 初始化只有一套收发配置
 
 mode 的 TX/RX 字段分别选择 POLLING、INTERRUPT_BUFFERED、DMA_BUFFERED，

@@ -1,4 +1,5 @@
 #include "aDrv_dma.h"
+#include "aDrv_dma_memory.h"
 #include "aDrv_usart.h"
 #include "gd32e50x.h"
 #include <assert.h>
@@ -14,7 +15,6 @@ static unsigned mask, in_isr, calls, events_seen;
 static unsigned pending[12], irq_enabled[12];
 static unsigned irq_priority[12];
 static unsigned reload_reads, complete_on_enable;
-uint32_t test_usart_data;
 
 void DMA0_Channel0_IRQHandler(void);
 void DMA0_Channel4_IRQHandler(void);
@@ -25,6 +25,7 @@ uint32_t __get_PRIMASK(void) { return mask; }
 void __disable_irq(void) { mask = 1; }
 void __enable_irq(void) { mask = 0; }
 void __DMB(void) {}
+void __DSB(void) {}
 void NVIC_ClearPendingIRQ(IRQn_Type irq) { pending[irq] = 0; }
 void NVIC_SetPendingIRQ(IRQn_Type irq) { pending[irq] = 1; }
 void nvic_irq_disable(IRQn_Type irq) { irq_enabled[irq] = 0; }
@@ -119,6 +120,9 @@ static void test_dma(void)
     assert(aDrvDmaInitStatic(&config, &handle) == A_STATUS_BUSY);
     assert(aDrvDmaDstBufferLen(&handle, 65536U) == A_STATUS_INVALID_PARAM);
     assert(aDrvDmaDstBufferLen(&handle, 8) == A_STATUS_OK);
+    assert(aDrvDmaTransEnable(&handle) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaSrcBufferSet(&handle, (void *)0x20000000U) == A_STATUS_OK);
+    assert(aDrvDmaDstBufferSet(&handle, (void *)0x40013804U) == A_STATUS_OK);
     irq.priority = 16;
     assert(aDrvDmaConfigureInterrupt(&handle, &irq) == A_STATUS_INVALID_PARAM);
     irq.priority = 5;
@@ -166,6 +170,8 @@ static void test_dma(void)
     config.circular = A_FALSE;
     assert(aDrvDmaInitStatic(&config, &other) == A_STATUS_OK);
     assert(aDrvDmaDstBufferLen(&other, 3) == A_STATUS_OK);
+    assert(aDrvDmaSrcBufferSet(&other, (void *)0x20000000U) == A_STATUS_OK);
+    assert(aDrvDmaDstBufferSet(&other, (void *)0x40013804U) == A_STATUS_OK);
     assert(aDrvDmaTransEnable(&other) == A_STATUS_OK);
     channels[1][4].remaining = 0;
     channels[1][4].flags = DMA_FLAG_FTF;
@@ -176,6 +182,103 @@ static void test_dma(void)
     assert(aDrvDmaGetProgress(&other, &progress) == A_STATUS_OK);
     assert(progress.transferred == 3);
     assert(aDrvDmaDeInitStatic(&other) == A_STATUS_OK);
+}
+
+/* 使用 MCU 地址模型，不解引用；实际边界来自测试链接器符号。 */
+static void test_memory(void)
+{
+    aDrvDmaConfig_t config;
+    aDrvDmaHandle_t handle;
+
+    assert(aDrvDmaBufferCheck((void *)0x2001ffffU, 1U,
+        ADRV_DMA_BUFFER_RX_CIRCULAR) == A_STATUS_OK);
+    assert(aDrvDmaBufferCheck((void *)0x2001ffffU, 2U,
+        ADRV_DMA_BUFFER_RX) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaBufferCheck((void *)0x20020000U, 1U,
+        ADRV_DMA_BUFFER_RX) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaBufferCheck((void *)0x0807ffffU, 1U,
+        ADRV_DMA_BUFFER_TX) == A_STATUS_OK);
+    assert(aDrvDmaBufferCheck((void *)0x0807ffffU, 2U,
+        ADRV_DMA_BUFFER_TX) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaBufferCheck((void *)0x08000000U, 1U,
+        ADRV_DMA_BUFFER_RX) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaBufferCheck((void *)0x08000000U, 1U,
+        ADRV_DMA_BUFFER_TX_RING) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaBufferCheck((void *)UINTPTR_MAX, 2U,
+        ADRV_DMA_BUFFER_TX) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaBufferCheck((void *)0x20000000U, SIZE_MAX,
+        ADRV_DMA_BUFFER_RX) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaBufferCheck((void *)0x60000000U, 1U,
+        ADRV_DMA_BUFFER_TX) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaBufferCheck(NULL, 1U,
+        ADRV_DMA_BUFFER_RX) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaBufferCheck((void *)0x20000000U, 0U,
+        ADRV_DMA_BUFFER_TX) == A_STATUS_INVALID_PARAM);
+
+    aDrvDmaConfigStructInit(&config);
+    config.channel = 0U;
+    config.memoryWidth = (aDrvDmaWidth_t)3;
+    assert(aDrvDmaInitStatic(&config, &handle) == A_STATUS_INVALID_PARAM);
+    config.memoryWidth = ADRV_DMA_WIDTH_32;
+    config.periphWidth = (aDrvDmaWidth_t)-1;
+    assert(aDrvDmaInitStatic(&config, &handle) == A_STATUS_INVALID_PARAM);
+    config.periphWidth = ADRV_DMA_WIDTH_16;
+    assert(aDrvDmaInitStatic(&config, &handle) == A_STATUS_OK);
+    assert(aDrvDmaSrcBufferSet(&handle, (void *)0x20000001U) ==
+        A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaDstBufferSet(&handle, (void *)0x40013805U) ==
+        A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaSrcBufferSet(&handle, (void *)UINTPTR_MAX) ==
+        A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaSrcBufferSet(&handle, (void *)0x2001fffcU) == A_STATUS_OK);
+    assert(aDrvDmaDstBufferSet(&handle, (void *)0x40013804U) == A_STATUS_OK);
+    assert(aDrvDmaDstBufferLen(&handle, 2U) == A_STATUS_OK);
+    assert(aDrvDmaTransEnable(&handle) == A_STATUS_INVALID_PARAM);
+    assert(!channels[0][0].enabled); /* 全范围无效时不启动硬件。 */
+    assert(aDrvDmaDstBufferLen(&handle, 1U) == A_STATUS_OK);
+    /* 拒绝的新配置不能破坏已经有效的地址及数量。 */
+    assert(aDrvDmaSrcBufferSet(&handle, (void *)0x20000001U) ==
+        A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaDstBufferSet(&handle, (void *)0x40013805U) ==
+        A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaDstBufferLen(&handle, 0U) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaDstBufferLen(&handle, 65536U) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaTransEnable(&handle) == A_STATUS_OK);
+    assert(handle.memory_address == 0x2001fffcU);
+    assert(handle.periph_address == 0x40013804U && handle.length == 1U);
+    assert(aDrvDmaSrcBufferSet(&handle, (void *)0x20000000U) == A_STATUS_BUSY);
+    assert(aDrvDmaDstBufferSet(&handle, (void *)0x40013804U) == A_STATUS_BUSY);
+    assert(aDrvDmaDstBufferLen(&handle, 2U) == A_STATUS_BUSY);
+    assert(aDrvDmaCircularSet(&handle, A_TRUE) == A_STATUS_BUSY);
+    assert(aDrvDmaTransEnable(&handle) == A_STATUS_BUSY);
+    assert(aDrvDmaTransDisable(&handle) == A_STATUS_OK);
+    assert(aDrvDmaDeInitStatic(&handle) == A_STATUS_OK);
+
+    config.direction = ADRV_DMA_DIR_MEMORY_TO_MEMORY;
+    config.memoryIncrement = A_FALSE;
+    config.periphIncrement = A_FALSE;
+    assert(aDrvDmaInitStatic(&config, &handle) == A_STATUS_OK);
+    assert(aDrvDmaCircularSet(&handle, A_TRUE) == A_STATUS_UNSUPPORTED);
+    assert(aDrvDmaSrcBufferSet(&handle, (void *)0x2001fffcU) == A_STATUS_OK);
+    assert(aDrvDmaDstBufferSet(&handle, (void *)0x0807fffeU) == A_STATUS_OK);
+    assert(aDrvDmaDstBufferLen(&handle, 65535U) == A_STATUS_OK);
+    /* 两侧不递增时，各自仅占一个传输单元，不错误乘以次数。 */
+    assert(aDrvDmaTransEnable(&handle) == A_STATUS_OK);
+    assert(aDrvDmaTransDisable(&handle) == A_STATUS_OK);
+    assert(aDrvDmaSrcBufferSet(&handle, (void *)0x08000000U) == A_STATUS_OK);
+    assert(aDrvDmaTransEnable(&handle) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaDeInitStatic(&handle) == A_STATUS_OK);
+
+    config.circular = A_TRUE;
+    assert(aDrvDmaInitStatic(&config, &handle) == A_STATUS_INVALID_PARAM);
+    config.circular = A_FALSE;
+    config.periphIncrement = A_TRUE;
+    assert(aDrvDmaInitStatic(&config, &handle) == A_STATUS_OK);
+    assert(aDrvDmaSrcBufferSet(&handle, (void *)0x20000000U) == A_STATUS_OK);
+    assert(aDrvDmaDstBufferSet(&handle, (void *)0x0807fffeU) == A_STATUS_OK);
+    assert(aDrvDmaDstBufferLen(&handle, 2U) == A_STATUS_OK);
+    assert(aDrvDmaTransEnable(&handle) == A_STATUS_INVALID_PARAM);
+    assert(aDrvDmaDeInitStatic(&handle) == A_STATUS_OK);
 }
 
 static void test_usart(void)
@@ -193,10 +296,16 @@ static void test_usart(void)
         .irq_priority = 11U,
     };
     aDrvUsartRxProgress_t progress;
-    uint8_t buffer[8];
+    uint8_t *buffer = (void *)0x20000000U;
     size_t count;
     calls = 0;
-    assert(aDrvUsartAsyncRxCircularStart(&uart, buffer, sizeof(buffer),
+    assert(aDrvUsartAsyncRxCircularStart(&uart, (void *)0x08000000U, 8U,
+        uart_callback, &calls) == A_STATUS_INVALID_PARAM);
+    assert(!channels[0][4].enabled && uart.owner == ADRV_USART_OWNER_NONE);
+    assert(aDrvUsartAsyncTxStart(&uart, (void *)0x2001ffffU, 2U, &count) ==
+        A_STATUS_INVALID_PARAM);
+    assert(!channels[0][3].enabled && uart.owner == ADRV_USART_OWNER_NONE);
+    assert(aDrvUsartAsyncRxCircularStart(&uart, buffer, 8U,
         uart_callback, &calls) == A_STATUS_OK);
     assert(irq_priority[4] == 6U);
     channels[0][4].remaining = 4;
@@ -248,6 +357,7 @@ static void test_usart(void)
 int main(void)
 {
     test_dma();
+    test_memory();
     test_usart();
     puts("DMA ownership, IRQ/progress races and USART integration passed");
     return 0;

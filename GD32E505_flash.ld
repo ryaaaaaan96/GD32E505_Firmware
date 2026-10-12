@@ -7,6 +7,11 @@ MEMORY
 }
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
+/* DMA 检查使用实际片内容量；未声明的外部存储区默认不可用。 */
+__adrv_dma_ram_start = ORIGIN(RAM);
+__adrv_dma_ram_end = ORIGIN(RAM) + LENGTH(RAM);
+__adrv_dma_flash_start = ORIGIN(FLASH);
+__adrv_dma_flash_end = ORIGIN(FLASH) + LENGTH(FLASH);
 _Min_Heap_Size = 0x400;
 _Min_Stack_Size = 0x800;
 
@@ -72,7 +77,9 @@ SECTIONS
     } > RAM AT > FLASH :data
     .bss (NOLOAD) :
     {
-        . = ALIGN(4); _sbss = .; *(.bss*) *(COMMON) . = ALIGN(4); _ebss = .;
+        . = ALIGN(4); _sbss = .; *(.bss*) *(COMMON)
+        /* 保留在启动清零范围内；GD32 SRAM 无需配置非缓存属性。 */
+        . = ALIGN(4); *(.dma_buffer) . = ALIGN(4); _ebss = .;
     } > RAM :NONE
     .heap_stack (NOLOAD) :
     {

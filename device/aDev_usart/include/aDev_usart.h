@@ -106,7 +106,9 @@ typedef struct {
  * 先调用 aDevUsartConfigStructInit()，再设置硬件、TX/RX 模式及缓冲区。
  * 配置结构仅初始化期间读取；其中的缓冲区必须持续有效到 DeInit 完成。
  * TX/RX 缓冲区必须互不重叠，运行期间不得被其他设备或业务直接改写。
- * DMA 缓冲区必须处于硬件可访问的内存；当前接口不自动执行 cache 一致性维护。
+ * DMA 缓冲区由 aDrv 检查可达性，aDev 在交接处调用平台缓存维护接口。
+ * RX ring 必须无需缓存维护；Direct RX 必须满足平台缓存行隔离要求。
+ * 检查失败不会启动 DMA，不自动分配临时缓冲区或退化为复制。
  * RS485 默认 NONE；GPIO_DE 需要 TC 中断能力，即使 TX 为轮询模式。
  * UART_DE 当前返回 UNSUPPORTED；不提供方向延迟或协议帧间隔配置。
  */
@@ -379,12 +381,14 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
  * 超时/错误前收到部分数据时返回实际长度；无数据时返回 -1 并设置 errno。
  * NO_WAIT 只取当前进度后返回，无数据返回 -1/A_EAGAIN。
  * 中断 RX ring 非空或 RX 被其他请求占用时返回 -1/A_EAGAIN，不丢弃已有数据。
- * DMA buffered RX 持续占用 RX DMA 通道，因此该模式下返回 -1/A_EAGAIN；应在
- * 初始化普通 RX 时选择 RX_POLLING 或 RX_INTERRUPT_BUFFERED 才能使用 ReadDirect。
+ * DMA RX 配有 ring 时持续占用通道，返回 -1/A_EAGAIN；直收应选择
+ * RX_DMA_BUFFERED 且不提供 ring，或选择 RX_POLLING。
  * 直传复用 mode 的 RX 后端；当前中断后端不提供 Direct，返回 UNSUPPORTED。
  * DMA 后端超过 65535 字节会分段，
  * 分段重装存在接收间隙，不承诺连续无丢包。size 为 0 时返回 0。
  * DMA 等待由完成/错误通知唤醒；轮询后端使用 aOS 时基和 yield。
+ * DMA 模式先准备整个用户区，全部分块停止后统一同步；超时和部分接收亦如此。
+ * 缓存行隔离要求由平台检查，调用期间禁止其他上下文访问整个用户区。
  *
  * @param[in,out] handle 已初始化的句柄，调用期间占用 RX 路径。
  * @param[out] buffer 可写用户区域，返回前不得被其他上下文访问；DMA 时须硬件可达，零长度允许 NULL。

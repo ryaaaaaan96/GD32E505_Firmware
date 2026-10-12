@@ -1,4 +1,5 @@
 #include "aDev_usart_internal.h"
+#include "aDrv_dma_memory.h"
 
 #include <limits.h>
 #include <string.h>
@@ -143,10 +144,6 @@ aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
 
 #if ADEV_USART_DMA_BACKEND_ENABLE
     case ADEV_USART_RX_DMA_BUFFERED:
-        if (!ADEV_USART_DMA_BACKEND_ENABLE ||
-            !aDrvUsartDmaRxIsSupported(handle->drv_handle.id)) {
-            return A_STATUS_UNSUPPORTED;
-        }
         /* 不提供环形缓冲区时，DMA 仅供 Direct 请求使用。 */
         if (config->rx_buffer == NULL && config->rx_buffer_size == 0U) {
             if (config->mode & ADEV_USART_OPTION_RX_IDLE)
@@ -164,6 +161,7 @@ aStatus_t aDevUsartRxModeInit(aDevUsartHandle_t *handle,
         }
         handle->settings.rx_buffer = config->rx_buffer;
         handle->settings.rx_buffer_size = config->rx_buffer_size;
+        /* 初始化入口已验证 ring 无需缓存维护，不调用缓存交接接口。 */
         /* 启动后回调即可执行；先备好状态，关闭驱动后才允许重置。 */
         handle->rx.dma_active = A_TRUE;
         status = aDrvUsartAsyncRxCircularStart(
@@ -399,7 +397,8 @@ aStatus_t aDevUsartDmaRxRefresh(aDevUsartHandle_t *handle)
     return A_STATUS_OK;
 }
 
-/* CPU 加锁不会停止 DMA。先复制，再根据原始读取位置检查生产进度，
+/* ring 已验证为无需缓存维护的内存，不能对活动区执行 RxComplete。
+ * CPU 加锁不会停止 DMA。先复制，再根据原始读取位置检查生产进度，
  * 确认未被覆盖后才交付数据；不直接借出正在被 DMA 写入的环形缓冲区。
  * 无异步订阅的同步读取期间，仅当前任务更新消费进度，回调只通知，不消费。
  * 调用者须保证接收操作串行化，操作期间必须保持 DMA 中断使能。 */
@@ -485,6 +484,10 @@ static aSSize_t dma_read_direct(aDevUsartHandle_t *handle, void *buffer,
         return aOSFailWithStatus(A_STATUS_BUSY);
     }
 
+    status = aDrvDmaBufferCheck(buffer, buffer_size, ADRV_DMA_BUFFER_RX);
+    if (status != A_STATUS_OK) return aOSFailWithStatus(status);
+    /* 整个请求期间独占缓冲区；分块不交回 CPU，避免缓存行跨块共享。 */
+    aDrvDmaRxPrepare(buffer, buffer_size);
     while (count < buffer_size) {
         size_t transfer_size = buffer_size - count;
         size_t remaining;
@@ -535,6 +538,8 @@ static aSSize_t dma_read_direct(aDevUsartHandle_t *handle, void *buffer,
         }
     }
 
+    /* 每块均已 Stop/Abort；含启动失败、超时和部分接收，统一归还完整区域。 */
+    aDrvDmaRxComplete(buffer, buffer_size);
     if (count != 0U) return (aSSize_t)count;
     return status == A_STATUS_TIMEOUT
                ? aOSFailWithTimeout(timeout)

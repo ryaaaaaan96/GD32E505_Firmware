@@ -7,7 +7,8 @@
  * 句柄字段是驱动维护状态，初始化后禁止上层修改；本层不依赖 aOS。
  * 地址和长度必须在通道关闭时配置；Enable 只启动硬件，不等待传输完成。
  * 缓冲区必须可被 DMA 访问并满足数据宽度对齐；活动期间不得释放或改写源数据。
- * 事件回调仅在 DMA ISR 执行；本接口不执行 cache 维护或软件等待。
+ * 地址设置时检查宽度对齐，启动前检查完整范围；缓存交接由调用者通过
+ * aDrv_dma_memory.h 完成。本接口不自动维护缓存或软件等待。
  */
 
 #ifndef ADRV_DMA_H
@@ -85,6 +86,14 @@ typedef struct {
     aBool_t initialized; /**< 是否已取得并配置通道。 */
     aBool_t circular;
     aBool_t error;
+    aBool_t enabled; /**< 启动后须显式 Disable 才可修改地址/数量。 */
+    aBool_t memory_increment;
+    aBool_t periph_increment;
+    aDrvDmaDirection_t direction;
+    uint8_t memory_width; /**< 字节数：1、2、4。 */
+    uint8_t periph_width;
+    uintptr_t memory_address;
+    uintptr_t periph_address;
     uint32_t length;
     size_t cycles;
     uint32_t pending_events;
@@ -140,10 +149,11 @@ aStatus_t aDrvDmaDeInitStatic(aDrvDmaHandle_t *handle);
 /**
  * @brief 设置 DMA 的 memory 侧地址。
  * @param[in,out] handle 已初始化且通道已关闭的句柄。
- * @param[in] source memory 侧地址，不得为 NULL。
+ * @param[in] source memory 侧地址，不得为 NULL，须按 memoryWidth 对齐。
  * @retval A_STATUS_OK 地址已配置。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
+ * @retval A_STATUS_BUSY 通道尚未显式关闭。
  * @warning 当前名称不表示实际传输方向；外设到内存时，此地址是接收目标。
  */
 aStatus_t aDrvDmaSrcBufferSet(aDrvDmaHandle_t *handle, const void *source);
@@ -151,10 +161,11 @@ aStatus_t aDrvDmaSrcBufferSet(aDrvDmaHandle_t *handle, const void *source);
 /**
  * @brief 设置 DMA 的 peripheral 侧地址。
  * @param[in,out] handle 已初始化且通道已关闭的句柄。
- * @param[in] destination peripheral 侧地址，不得为 NULL。
+ * @param[in] destination peripheral 侧地址，不得为 NULL，须按 periphWidth 对齐。
  * @retval A_STATUS_OK 地址已配置。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
+ * @retval A_STATUS_BUSY 通道尚未显式关闭。
  * @warning 外设到内存时，此地址实际为源；不能按函数名推断方向。
  */
 aStatus_t aDrvDmaDstBufferSet(aDrvDmaHandle_t *handle, void *destination);
@@ -166,7 +177,8 @@ aStatus_t aDrvDmaDstBufferSet(aDrvDmaHandle_t *handle, void *destination);
  * @retval A_STATUS_OK 数量已配置。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
- * @note 单位是传输单元，只有 8 位宽度时等于字节；上限由调用方保证。
+ * @retval A_STATUS_BUSY 通道尚未显式关闭。
+ * @note 单位是传输单元，只有 8 位宽度时等于字节。
  */
 aStatus_t aDrvDmaDstBufferLen(aDrvDmaHandle_t *handle, uint32_t length);
 
@@ -185,6 +197,10 @@ aStatus_t aDrvDmaTransDisable(aDrvDmaHandle_t *handle);
  * @retval A_STATUS_OK 已使能，不代表传输完成。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
+ * @retval A_STATUS_BUSY 已启动，须先显式关闭。
+ * @note 地址设置时检查宽度对齐；启动前检查完整范围及 RAM/Flash 读写用途。
+ * 外设侧只检查总线窗口，具体寄存器与请求路由由外设驱动保证。
+ * 内存到内存模式中 peripheral 为源、memory 为目标；不支持循环模式。
  */
 aStatus_t aDrvDmaTransEnable(aDrvDmaHandle_t *handle);
 
@@ -195,6 +211,8 @@ aStatus_t aDrvDmaTransEnable(aDrvDmaHandle_t *handle);
  * @retval A_STATUS_OK 模式已配置。
  * @retval A_STATUS_INVALID_PARAM 空指针或参数无效。
  * @retval A_STATUS_NOT_READY 句柄尚未初始化。
+ * @retval A_STATUS_BUSY 通道尚未显式关闭。
+ * @retval A_STATUS_UNSUPPORTED 内存到内存模式不支持循环。
  */
 aStatus_t aDrvDmaCircularSet(aDrvDmaHandle_t *handle, aBool_t enabled);
 

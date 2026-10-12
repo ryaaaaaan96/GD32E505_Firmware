@@ -131,6 +131,12 @@ Shell 调用 stream.write 前释放队列锁，写入完成后再获取队列锁
   DMA 后端不可用时初始化失败，不得静默切换后端；同步 Direct 的编译开关不控制普通 DMA ring。
 - 区分提交成功、内部缓冲区接收、DMA 搬运完成和外设真正完成。
 - USART DMA 完成不等于线路发送完成；标为线路完成的事件必须以 USART TC 等等效状态为依据。
+- DMA 缓冲区可达性、用途和缓存策略由 aDrv 检查；aDev 在数据交接处调用
+  `aDrvDmaTxPrepare/RxPrepare/RxComplete`，直接使用 aDrv 的调用者自行交接。
+  RX ring 必须无需缓存维护，检查通过后不调用 RxPrepare/RxComplete。
+  Direct RX 在整个请求期间独占缓冲区，停止 DMA 后
+  才同步并交回 CPU，包含超时/错误/部分接收。缓存操作不能代替内存屏障。
+  不支持的缓存策略返回 UNSUPPORTED，不可达范围返回 INVALID_PARAM，不静默复制。
 - 异步请求描述符与数据缓冲区的生命周期分别说明。接收回调的数据是借用视图还是稳定快照，也必须明确。USART IRQ RX 保留 ring 区间至回调返回；DMA RX 复制校验后交付调用者快照区，两者均只保证当前回调期间稳定。
 
 ## 超时和执行上下文

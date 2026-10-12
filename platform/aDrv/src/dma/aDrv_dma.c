@@ -1,4 +1,5 @@
 #include "aDrv_dma.h"
+#include "aDrv_dma_memory.h"
 
 #include "aDrv_internal.h"
 #include <string.h>
@@ -130,6 +131,8 @@ aStatus_t aDrvDmaInitStatic(const aDrvDmaConfig_t *config,
         ((unsigned)config->direction > ADRV_DMA_DIR_MEMORY_TO_MEMORY) ||
         ((unsigned)config->periphWidth > ADRV_DMA_WIDTH_32) ||
         ((unsigned)config->memoryWidth > ADRV_DMA_WIDTH_32) ||
+        (config->direction == ADRV_DMA_DIR_MEMORY_TO_MEMORY &&
+         config->circular) ||
         (resolve_dma(config->channel, &mapping) != A_STATUS_OK)) {
         return A_STATUS_INVALID_PARAM;
     }
@@ -186,6 +189,11 @@ aStatus_t aDrvDmaInitStatic(const aDrvDmaConfig_t *config,
     handle->controller = mapping.controller;
     handle->channel = mapping.channel;
     handle->circular = config->circular;
+    handle->direction = config->direction;
+    handle->memory_width = (uint8_t)(1U << config->memoryWidth);
+    handle->periph_width = (uint8_t)(1U << config->periphWidth);
+    handle->memory_increment = config->memoryIncrement;
+    handle->periph_increment = config->periphIncrement;
     handle->initialized = A_TRUE;
     return A_STATUS_OK;
 }
@@ -216,6 +224,7 @@ aStatus_t aDrvDmaDeInitStatic(aDrvDmaHandle_t *handle)
     NVIC_ClearPendingIRQ(dma_irq(handle));
     dma_channel_disable((uint32_t)handle->controller,
                         (dma_channel_enum)handle->channel);
+    __DSB();
     dma_deinit((uint32_t)handle->controller,
                (dma_channel_enum)handle->channel);
     s_dma_owners[channel_index] = NULL;
@@ -233,6 +242,11 @@ aStatus_t aDrvDmaSrcBufferSet(aDrvDmaHandle_t *handle, const void *source)
         return A_STATUS_NOT_READY;
     }
 
+    if (handle->enabled) return A_STATUS_BUSY;
+    if ((uintptr_t)source > UINT32_MAX ||
+        (uintptr_t)source % handle->memory_width != 0U)
+        return A_STATUS_INVALID_PARAM;
+    handle->memory_address = (uintptr_t)source;
     dma_memory_address_config((uint32_t)handle->controller,
                               (dma_channel_enum)handle->channel,
                               (uint32_t)(uintptr_t)source);
@@ -248,6 +262,11 @@ aStatus_t aDrvDmaDstBufferSet(aDrvDmaHandle_t *handle, void *destination)
         return A_STATUS_NOT_READY;
     }
 
+    if (handle->enabled) return A_STATUS_BUSY;
+    if ((uintptr_t)destination > UINT32_MAX ||
+        (uintptr_t)destination % handle->periph_width != 0U)
+        return A_STATUS_INVALID_PARAM;
+    handle->periph_address = (uintptr_t)destination;
     dma_periph_address_config((uint32_t)handle->controller,
                               (dma_channel_enum)handle->channel,
                               (uint32_t)(uintptr_t)destination);
@@ -263,6 +282,7 @@ aStatus_t aDrvDmaDstBufferLen(aDrvDmaHandle_t *handle, uint32_t length)
         return A_STATUS_NOT_READY;
     }
 
+    if (handle->enabled) return A_STATUS_BUSY;
     dma_transfer_number_config((uint32_t)handle->controller,
                                (dma_channel_enum)handle->channel, length);
     handle->length = length;
@@ -280,6 +300,41 @@ aStatus_t aDrvDmaTransDisable(aDrvDmaHandle_t *handle)
 
     dma_channel_disable((uint32_t)handle->controller,
                         (dma_channel_enum)handle->channel);
+    /* 关闭完成后再允许 CPU 取回缓冲区；缓存空实现不省略硬件屏障。 */
+    __DSB();
+    handle->enabled = A_FALSE;
+    return A_STATUS_OK;
+}
+
+/* 地址设置时已检查对齐；这里只验证每侧完整访问跨度。
+ * 初始化限定宽度为 1/2/4 字节，数量设置限定为 1..65535，
+ * 当前 GD32 的 size_t 可容纳乘积；固定地址仅访问一个单元。 */
+static aStatus_t dma_buffer_check(const aDrvDmaHandle_t *handle)
+{
+    const size_t memory_units = handle->memory_increment ? handle->length : 1U;
+    const size_t periph_units = handle->periph_increment ? handle->length : 1U;
+    const aBool_t tx = handle->direction == ADRV_DMA_DIR_MEMORY_TO_PERIPH;
+    const size_t memory_size = memory_units * handle->memory_width;
+    const size_t periph_size = periph_units * handle->periph_width;
+    aStatus_t status;
+
+    /* 普通分块只检查可达性；缓存交接已由调用者对完整保留区处理。
+     * 循环 RX 额外要求无需维护，运行期间 CPU 可以复制已收到的片段。 */
+    if (!tx && handle->circular)
+        status = aDrvDmaBufferCheck((const void *)handle->memory_address,
+            memory_size, ADRV_DMA_BUFFER_RX_CIRCULAR);
+    else
+        status = aDrvPrivateDmaMemoryCheck(
+            (const void *)handle->memory_address, memory_size, !tx);
+    if (status != A_STATUS_OK) return status;
+    if (handle->direction == ADRV_DMA_DIR_MEMORY_TO_MEMORY)
+        return aDrvPrivateDmaMemoryCheck((const void *)handle->periph_address,
+                                         periph_size, A_FALSE);
+    /* 这里只确认外设总线窗口；请求与寄存器的对应由外设驱动保证。 */
+    if (handle->periph_address < 0x40000000U ||
+        handle->periph_address >= 0x60000000U ||
+        periph_size > 0x60000000U - handle->periph_address)
+        return A_STATUS_INVALID_PARAM;
     return A_STATUS_OK;
 }
 
@@ -292,6 +347,9 @@ aStatus_t aDrvDmaTransEnable(aDrvDmaHandle_t *handle)
         return A_STATUS_NOT_READY;
     }
     if (handle->length == 0U) return A_STATUS_INVALID_PARAM;
+    if (handle->enabled) return A_STATUS_BUSY;
+    const aStatus_t status = dma_buffer_check(handle);
+    if (status != A_STATUS_OK) return status;
     /* 新事务先清除旧事件；中断配置保留，缓冲区已由调用者设置。 */
     const uint32_t key = dma_critical_enter();
     dma_flag_clear((uint32_t)handle->controller,
@@ -300,6 +358,8 @@ aStatus_t aDrvDmaTransEnable(aDrvDmaHandle_t *handle)
     handle->cycles = 0U;
     handle->pending_events = 0U;
     handle->error = A_FALSE;
+    handle->enabled = A_TRUE;
+    __DMB(); /* 缓冲区交接及寄存器配置先于 DMA 启动。 */
     dma_channel_enable((uint32_t)handle->controller,
                        (dma_channel_enum)handle->channel);
     dma_critical_exit(key);
@@ -315,6 +375,9 @@ aStatus_t aDrvDmaCircularSet(aDrvDmaHandle_t *handle, aBool_t enabled)
         return A_STATUS_NOT_READY;
     }
 
+    if (handle->enabled) return A_STATUS_BUSY;
+    if (enabled && handle->direction == ADRV_DMA_DIR_MEMORY_TO_MEMORY)
+        return A_STATUS_UNSUPPORTED;
     if (enabled) {
         dma_circulation_enable((uint32_t)handle->controller,
                                (dma_channel_enum)handle->channel);
