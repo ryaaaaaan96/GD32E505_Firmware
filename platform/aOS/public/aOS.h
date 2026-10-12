@@ -161,6 +161,16 @@ aStatus_t aOSValidateIsrPriority(uint32_t priority);
 aStatus_t aOSCreateTask(const aOSTaskConfig_t *config, aOSTaskHandle_t *handle);
 
 /**
+ * @brief 预留任务退出等待接口，完整实现留给 Linux 后端。
+ * @param[in,out] handle 待等待任务的句柄地址。
+ * @param[in] timeout 等待预算。
+ * @retval A_STATUS_UNSUPPORTED 当前 FreeRTOS 后端不支持任务退出等待。
+ * @note FreeRTOS 立即返回，不访问 handle，不等待或删除任务。
+ *       返回不表示任务已经退出，调用方不能据此释放任务仍使用的资源。
+ */
+aStatus_t aOSTaskJoin(aOSTaskHandle_t *handle, aTimeout_t timeout);
+
+/**
  * @brief 强制删除指定任务（后端受限能力）；普通关闭优先使用协作退出。
  * @param[in] handle 有效任务句柄；NULL 不操作，不表示删除当前任务。
  * @warning 不自动释放业务资源；先停止任务访问共享资源，禁止持锁强制删除。

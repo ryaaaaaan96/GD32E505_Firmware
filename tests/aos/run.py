@@ -7,7 +7,8 @@ import tempfile
 
 root = Path(__file__).resolve().parents[2]
 with tempfile.TemporaryDirectory(prefix="aclass-aos-") as directory:
-  for test in ("test_init_work", "test_timer_notify", "test_task_exit", "test_task_create", "test_time"):
+  for test in ("test_init_work", "test_timer_notify", "test_task_exit",
+               "test_task_create", "test_task_join", "test_time"):
     executable = str(Path(directory) / test)
     subprocess.run([
         "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",

@@ -200,6 +200,9 @@ aOSCreateTask 接受 aOSTaskConfig_t 配置指针和可选输出句柄。
 优先级使用 LOWEST..REALTIME 逻辑等级，
 FreeRTOS 当前直接映射 1..7，不承诺其他后端拥有相同调度效果。
 强制删除仅用于调用方已停止全部资源访问的任务；正常关闭使用业务协作退出协议。
+aOSTaskJoin(&handle, timeout) 仅预留接口，完整实现留给 Linux 后端。
+FreeRTOS 立即返回 UNSUPPORTED，不等待、不修改句柄，不改变创建和退出流程；
+不能将此返回值视为退出确认，业务资源回收仍需应用完成同步。
 FreeRTOS 默认配置一个 TLS 槽，槽 0 用于 errno，业务不可占用。
 
 OS 堆分配失败记录故障后返回，由调用方处理 NO_MEMORY；应用启动仍可选择 fatal。

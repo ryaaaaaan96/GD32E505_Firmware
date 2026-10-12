@@ -120,3 +120,12 @@ aStatus_t status = aOSCreateTask(&config, &service_handle);
 配置结构体仅在创建期间读取；后端复制名称（可能截断），不保存配置指针。
 argument 指向的对象须在任务使用期间有效。输出句柄可为 NULL，创建失败时清空输出。
 任务可能在创建调用返回前开始运行；默认栈仅提供后端基础容量，业务按实际使用配置。
+
+## 任务退出等待
+
+预留 `aOSTaskJoin(&handle, timeout)` 接口，完整实现留给 Linux 后端。
+当前 FreeRTOS 立即返回 `A_STATUS_UNSUPPORTED`，不等待、不修改句柄。
+此返回值不表示任务已经退出，业务仍需自行确认使用者已停止后再回收资源。
+
+任务创建直接传递入口与参数，退出通过 `aOSTaskExit()` 调用 `vTaskDelete(NULL)`。
+FreeRTOS 不增加 joinable 配置、退出记录、链表或退出通知。

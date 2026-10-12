@@ -26,7 +26,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | 可选布局断言与 SIG 参数长度求和（需要 C/C++ 编译器） | `python3 tests/layout/run.py` |
 | aLib CRC32（C11/C++11、标准向量及 zlib 对照） | `python3 tests/crc/run.py` |
 | aLib GCC 原子封装（并发、内存序及生成代码对照） | `python3 tests/atomic/run.py` |
-| OS 通知、定时器与工作队列 | `python3 tests/aos/run.py` |
+| OS 任务创建/退出/Join、通知、定时器与工作队列 | `python3 tests/aos/run.py` |
 | LED/GPIO 状态、静态/动态生命周期与接口裁剪 | `python3 tests/led/run.py` |
 | SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |
 | DMA 通道、IRQ/查询交错与真实 USART DMA 适配 | `python3 tests/dma/run.py` |
@@ -43,6 +43,10 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | Shell EOF/半行清理、日志、共享控制台发送互斥及部分写入 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
 | 应用设备清理、控制台 RX 溢出恢复、TX 锁超时、启动编排与 Shell 就绪门控 | `python3 tests/app_devices/run.py`、`python3 tests/app_startup/run.py` |
 | 调试脚本 | `python3 tests/scripts/test_debug.py` |
+
+`tests/aos/run.py` 验证任务创建直传入口与参数、显式退出和删除语义。
+Join 检查仅覆盖 FreeRTOS 预留接口：各类超时参数均返回 UNSUPPORTED，
+句柄保持不变；完整等待行为留待 Linux 后端实现后验证。
 
 `tests/app_devices/run.py` 包含真实控制台适配与 Shell 解析器的接收联测，
 通过模拟满 RX ring、读取期间溢出、旧换行、连续溢出及读空边界再次溢出，

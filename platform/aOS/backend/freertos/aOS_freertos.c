@@ -210,6 +210,14 @@ void aOSTaskExit(void)
     }
 }
 
+aStatus_t aOSTaskJoin(aOSTaskHandle_t *handle, aTimeout_t timeout)
+{
+    /* 仅保留跨平台入口，FreeRTOS 不维护任务退出记录。 */
+    (void)handle;
+    (void)timeout;
+    return A_STATUS_UNSUPPORTED;
+}
+
 void *aOSAlloc(size_t size)
 {
     return size == 0U ? NULL : pvPortMalloc(size);

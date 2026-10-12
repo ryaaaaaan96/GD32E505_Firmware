@@ -184,8 +184,10 @@ PLATFORM Embedded / OS FreeRTOS 是当前唯一实现的后端组合，不表示
 根 DESIGN_REVIEW.md 保留历史讨论及用户决定。修改接口时同步公共头注释及
 相应现行文档，历史记录不作为当前 API 的依据。
 
-任务栈以字节配置（aOSTaskConfig_t.stack_bytes / AOS_WORKER_STACK_BYTES），任务入口允许
-自然返回。Shell 每轮最多读取 64 字节，成功后继续处理，仅空读或错误时退避。
+任务栈以字节配置（aOSTaskConfig_t.stack_bytes / AOS_WORKER_STACK_BYTES）；任务入口
+不得直接返回，完成清理后调用 aOSTaskExit。aOSTaskJoin 仅预留接口，当前
+FreeRTOS 返回 UNSUPPORTED，完整实现留给 Linux 后端。
+Shell 每轮最多读取 64 字节，无输入或错误时退避。
 OS 分配失败记录诊断后返回，应用决定 fatal 策略。当前 FreeRTOS 时基固定为
 32 位 tick / 1000 Hz。统一构建入口为 cmake/Aclass.cmake，产品 app 单独创建。
 
