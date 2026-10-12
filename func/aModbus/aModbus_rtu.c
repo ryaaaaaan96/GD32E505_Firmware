@@ -144,25 +144,22 @@ static void finish_frame(aModbusRtuHandle_t *handle)
     handle->invalid_frame = A_FALSE;
 }
 
-void aModbusRtuReceive(void *context, uint8_t byte, aStatus_t status)
+void aModbusRtuReceiveAt(aModbusRtuHandle_t *handle, uint8_t byte,
+                       aStatus_t status, uint32_t rx_ticks, uint32_t rx_ms)
 {
-    aModbusRtuHandle_t *handle = context;
-    uint32_t now_ticks, now_ms, delta;
+    uint32_t delta;
     if (handle == NULL || !handle->ready) return;
-    /* 一次采样用于本字节的全部判断，减少 ISR 中的回调及读时钟次数。 */
-    now_ticks = handle->config.io.ticks(handle->config.io.context);
-    now_ms = aOSGetUptimeMs();
-    delta = now_ticks - handle->last_rx_ticks;
+    delta = rx_ticks - handle->last_rx_ticks;
     /* 时间戳在字符完成时采集，比较间隔时须补上一个字符时间。 */
-    if ((uint32_t)(now_ms - handle->last_rx_ms) > handle->idle_ms ||
+    if ((uint32_t)(rx_ms - handle->last_rx_ms) > handle->idle_ms ||
         delta >= handle->frame_gap + handle->character_ticks) {
         finish_frame(handle);
     } else if (handle->building != 0U &&
                delta >= handle->byte_gap + handle->character_ticks) {
         handle->invalid_frame = A_TRUE;
     }
-    handle->last_rx_ticks = now_ticks;
-    handle->last_rx_ms = now_ms;
+    handle->last_rx_ticks = rx_ticks;
+    handle->last_rx_ms = rx_ms;
     if (status != A_STATUS_OK || handle->count == AMODBUS_RTU_FRAME_COUNT ||
         handle->building == AMODBUS_RTU_FRAME_SIZE) {
         handle->invalid_frame = A_TRUE;
@@ -170,6 +167,16 @@ void aModbusRtuReceive(void *context, uint8_t byte, aStatus_t status)
     if (!handle->invalid_frame) {
         handle->frames[handle->head].data[handle->building++] = byte;
     }
+}
+
+void aModbusRtuReceive(void *context, uint8_t byte, aStatus_t status)
+{
+    aModbusRtuHandle_t *handle = context;
+    uint32_t rx_ticks, rx_ms;
+    if (handle == NULL || !handle->ready) return;
+    rx_ticks = handle->config.io.ticks(handle->config.io.context);
+    rx_ms = aOSGetUptimeMs();
+    aModbusRtuReceiveAt(handle, byte, status, rx_ticks, rx_ms);
 }
 
 /* 完整 ADU 长度先于业务写入检查；CRC 和协议异常由核心处理。 */

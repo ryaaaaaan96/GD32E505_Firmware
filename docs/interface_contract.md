@@ -217,6 +217,11 @@ errno。每次调用共享一个超时预算，返回后不得保留缓冲区。
 POSIX errno。使用者按所需能力检查操作指针，不能强转不兼容的函数指针。
 
 流接口不传 context；同一套回调不区分设备实例，多实例需各自提供适配函数。
+RTU 的延迟字节输入使用实际采集时间，补齐采集记录后才允许判断静默；
+底层已有完整帧边界时通过 aModbusTransport_t 适配，read 不跨帧，finish
+只释放当前帧。普通串口 read 的一次返回不代表完整帧，具体约束见
+[RTU 传输实例](../func/aModbus/README.md#rtu-传输实例)。
+
 USART 到 Stream 的转换由 app/devices 承担：appSystemConsoleInit 初始化设备，
 将绑定私有设备句柄的 read/write 回调写入 Shell 配置并调用 aShellInit，
 flush 设为 NULL。配置由 Shell 复制，任务层负责创建任务。aDev 不依赖 Stream。

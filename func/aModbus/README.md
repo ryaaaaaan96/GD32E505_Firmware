@@ -346,6 +346,7 @@ TCP 半帧、传输或协议错误后锁定为故障状态，后续调用返回 
 | `aModbusRtuConfigStructInit` | 填充通用 RTU 默认配置 |
 | `aModbusRtuInitStatic` / `aModbusRtuCreate` | 初始化独立 RTU 状态 |
 | `aModbusRtuReceive` | ISR 或受同步保护的单生产者输入字节与错误 |
+| `aModbusRtuReceiveAt` | 输入字节、错误及实际采集的计数器/毫秒时间 |
 | `aModbusRtuRead` / `aModbusRtuWrite` | 供应用薄适配函数转成 Stream 回调 |
 | `aModbusRtuBindTransport` | 给应用 Stream 补充帧间隔、发送完成及收尾操作 |
 | `aModbusRtuDeInitStatic` / `aModbusRtuDestroy` | 接收和协议调用停止后释放 |
@@ -355,8 +356,33 @@ TCP 半帧、传输或协议错误后锁定为故障状态，后续调用返回 
 通过 `aModbusRtuConfig_t.output` 提供物理输出 Stream；其 read 不使用。
 消费任务通过 enter/exit 排除生产者；线程生产者必须使用同一同步机制。
 计数器须以固定频率运行，支持 32 位回绕；aOS 毫秒时基用于判断长空闲。
-Linux 适配可以使用通用 RTU 或自定义 transport，但普通串口批量读取的
-返回时间不能还原逐字节到达时间，不能直接补送字节来声称严格的 RTU 定时。
+
+接收适配按底层能提供的信息选择：
+
+| 底层输入 | 适配方式 |
+| --- | --- |
+| 每字节完成后立即回调 | 保持 `aModbusRtuReceive`，内部采样时钟 |
+| 每字节带真实采集时间，可延迟交付 | 使用 `aModbusRtuReceiveAt`，复用原分帧逻辑 |
+| 已有可靠的完整 RTU 帧边界 | 直接实现 `aModbusTransport_t`，不经过逐字节分帧 |
+
+`ReceiveAt` 的 rx_ticks 和 rx_ms 是字符完成时采集的 io.ticks 与
+aOSGetUptimeMs 值，必须与实例当前时钟同源；只提交初始化后采集的数据，
+并保持采集顺序。不能使用补送时刻或按波特率推算时间，不能给整批数据
+统一填写同一个时间戳。采集错误通过 status 传入，仍丢弃当前整帧。
+
+延迟交付必须在同一次同步保护内补齐全部待交付字节；消费者及发送辅助
+操作取得 io 保护时，不能还有尚未补送的采集记录。适配器可在 io.enter
+取得保护后先排空已有采集记录，再返回给 RTU；排空不等待新数据。
+这是因为静默检查仍使用当前时钟，未交付字节可能导致提前截帧或误判线路空闲。
+仅给每个字节单独加锁不能满足这一要求；不能保证时应由底层分帧后适配。
+
+完整帧适配由底层保证帧内时序、边界及完整 ADU 长度（含地址和 CRC）。
+stream.read 可分次返回当前帧，但不得跨到下一帧；finish 只释放当前帧。
+同时提供 discard_input、prepare_frame 和 wait_transmit_complete，分别
+负责恢复边界、发送前静默和线路发送完成；CRC 校验仍由协议核心处理。
+这一路径无需创建 aModbusRtu 实例，也不调用 aModbusRtuBindTransport。
+Linux 普通串口的一次 read 可能是半帧或多帧，没有上述采集信息或边界保证
+就不能直接套用这两种延迟适配方式；Linux 后端仍留到实际迁移时实现。
 
 ## 应用端口与协议装配
 

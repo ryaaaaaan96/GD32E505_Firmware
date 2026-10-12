@@ -221,6 +221,94 @@ static void failures(void)
     assert(pthread_mutex_destroy(&link.mutex) == 0);
 }
 
+/* 调用者持有生产者保护；时间代表采集记录，不推进交付时钟。 */
+static void feed_at(aModbusRtuHandle_t *handle, const uint8_t *data,
+                    size_t size, uint64_t first_us)
+{
+    for (size_t i = 0U; i < size; i++) {
+        uint64_t captured = first_us + i * 100U;
+        aModbusRtuReceiveAt(handle, data[i], A_STATUS_OK,
+                           (uint32_t)captured,
+                           (uint32_t)(captured / 1000U));
+    }
+}
+
+static void captured_timing(uint64_t start_us)
+{
+    link_t link = {.mutex = PTHREAD_MUTEX_INITIALIZER};
+    aModbusRtuConfig_t config = configuration(&link, 0U);
+    aModbusRtuHandle_t handle;
+    aModbusTransport_t transport;
+    const uint8_t request[] = {1, 3, 0, 0, 0, 1, 0, 0};
+    const uint8_t next[] = {1, 3, 0, 1, 0, 1, 0, 0};
+    uint8_t data[8];
+    uint64_t first;
+    uint32_t quiet;
+
+    now_us = start_us;
+    advance(0U);
+    assert(aModbusRtuInitStatic(&config, &handle) == A_STATUS_OK);
+    assert(bind_transport(&handle, &transport, 0U) == A_STATUS_OK);
+    quiet = handle.frame_gap + handle.character_ticks;
+
+    /* 同帧分块补送时交付间隔很大；同批内两帧靠采集时间区分。 */
+    first = now_us + 3000U;
+    advance(20000U);
+    enter(&link);
+    feed_at(&handle, request, 4U, first);
+    advance(3000U);
+    feed_at(&handle, request + 4U, 4U, first + 400U);
+    feed_at(&handle, next, sizeof(next), first + 700U + quiet);
+    leave(&link);
+    assert(transport.stream.read(data, sizeof(data), A_TIMEOUT_NO_WAIT) == 8);
+    assert(memcmp(data, request, sizeof(data)) == 0);
+    transport.finish(&handle);
+    assert(transport.stream.read(data, sizeof(data), A_TIMEOUT_NO_WAIT) == 8);
+    assert(memcmp(data, next, sizeof(data)) == 0);
+    transport.finish(&handle);
+    assert(transport.stream.read(data, sizeof(data), A_TIMEOUT_NO_WAIT) == -1);
+    assert(handle.dropped_frames == 0U);
+
+    /* 补送时无间隔，真实帧内超时或采集错误仍须丢弃整帧。 */
+    for (unsigned error = 0U; error < 2U; error++) {
+        uint64_t middle;
+        first = now_us + 3000U;
+        advance(20000U);
+        enter(&link);
+        feed_at(&handle, request, 4U, first);
+        middle = first + 300U + handle.byte_gap + handle.character_ticks;
+        if (error != 0U) {
+            middle = first + 400U;
+            aModbusRtuReceiveAt(&handle, 0U, A_STATUS_ERROR,
+                               (uint32_t)middle,
+                               (uint32_t)(middle / 1000U));
+        }
+        feed_at(&handle, request + 4U, 4U, middle);
+        feed_at(&handle, next, sizeof(next), first + 5000U);
+        leave(&link);
+        assert(transport.stream.read(data, sizeof(data),
+                                     A_TIMEOUT_NO_WAIT) == 8);
+        assert(memcmp(data, next, sizeof(data)) == 0);
+        transport.finish(&handle);
+        assert(handle.dropped_frames == error + 1U);
+    }
+
+    /* 最后一字节尚未达到静默阈值，不因一次批量交付就宣布完整帧。 */
+    first = now_us + 3000U;
+    advance(3700U);
+    enter(&link);
+    feed_at(&handle, request, sizeof(request), first);
+    leave(&link);
+    assert(transport.stream.read(data, sizeof(data), A_TIMEOUT_NO_WAIT) == -1);
+    advance(quiet - 1U);
+    assert(transport.stream.read(data, sizeof(data), A_TIMEOUT_NO_WAIT) == -1);
+    advance(1U);
+    assert(transport.stream.read(data, sizeof(data), A_TIMEOUT_NO_WAIT) == 8);
+    assert(memcmp(data, request, sizeof(data)) == 0);
+    assert(aModbusRtuDeInitStatic(&handle) == A_STATUS_OK);
+    assert(pthread_mutex_destroy(&link.mutex) == 0);
+}
+
 int main(void)
 {
     failures();
@@ -230,7 +318,10 @@ int main(void)
     now_us = UINT32_MAX - 5000U;
     advance(0U);
     timing(115200U, 10U, 800U, 3000U);
+    captured_timing(100000U);
+    captured_timing((uint64_t)UINT32_MAX - 3400U);
+    captured_timing((uint64_t)UINT32_MAX * 1000U - 3400U);
     assert(testAllocations() == 0U);
-    puts("Generic RTU multi-instance/timing/wrap/lifecycle passed");
+    puts("Generic RTU multi-instance/captured timing/wrap/lifecycle passed");
     return 0;
 }
