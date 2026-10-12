@@ -93,6 +93,8 @@ Direct RX 还须检查完整缓存行隔离，不能任意扩大维护范围而�
 依据：[GD32E50x 用户手册](https://www.gd32mcu.com/data/documents/userManual/GD32E50x_User_Manual_Rev2.2.pdf)、
 [Linux DMA 数据交接与缓存行隔离](https://docs.kernel.org/core-api/dma-api-howto.html)。
 
+## 启动文件
+
 ARM/IAR startup 保持官方原文件。GCC 构建根据 MCU profile 的
 `MCU_STARTUP_VARIANT` 选择 `Source/GCC/startup_<variant>.S`；GD32E505 当前选择
 `gd32e50x_cl`。startup 负责 `.data/.bss` 初始化、`SystemInit()`、newlib 构造函数

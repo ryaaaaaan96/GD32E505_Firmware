@@ -1,0 +1,368 @@
+# 通用平台库评审与处理记录
+
+[返回文档索引](../README.md) · [后续事项](../../todo.md)
+
+评审开始于 2026-10-11，处理结果整理至 2026-10-12。已确认的当前
+GD32E505 / FreeRTOS 设计与代码修改已完成；Linux、SMP、带缓存 MCU 的
+后端实现和板上验证另行跟踪。
+
+本文件保留原问题、取舍和逐项验证记录。当前使用方式以
+[公共接口规范](../interface_contract.md)及各模块 README 为准，
+不把历史测试数量或当时环境限制当作当前构建结论。原编号 1～13 保留。
+
+## 处理决定
+
+| 编号 | 问题 | 决定 |
+| --- | --- | --- |
+| 1 | aBus 关键长度检查依赖断言 | 保持设计，速度敏感路径以性能优先 |
+| 2 | 控制台未处理软件 RX 溢出 | 已修复：aDev 提供丢弃 RX 缓冲接口，控制台报错后等待新行边界恢复 |
+| 3 | SIG 持久化布局兼容性 | 已修复：原始快照配合独立布局标记；不新增固定编码 |
+| 4 | 构建入口固定为嵌入式后端 | 暂缓，后续迁移 Linux 时处理 |
+| 5 | USART 配置中的中断优先级归属 | 已完成：由 `drv_config` 配置，aDrv 校验并保存 |
+| 6 | 共享状态依赖单核中断同步 | aDev 沿用 aOS/aDrv 平台接口；SMP/Linux 后端适配留到实际迁移时处理 |
+| 7 | RTU 分帧依赖逐字节即时调用 | 已修复：增加采集时间入口，完整帧通过现有 transport 适配 |
+| 8 | aStream 缺少实例上下文，EOF 语义不清 | 已修复：统一 context 与 EOF 契约，同步 Shell/Modbus 及应用适配 |
+| 9 | 缺少等待任务退出的接口 | 接口已预留；FreeRTOS 返回不支持，Linux 完整实现待做 |
+| 10 | DMA 缓存一致性及内存可达性由调用者保证 | 已接入 GD32 范围检查与缓存交接接口；有缓存芯片的实现随移植补齐 |
+| 11 | 数据库多实例操作全局串行化 | 保持当前设计 |
+| 12 | 静态实例仍可能使用 OS 堆 | 保持当前设计，作为限制记录在 TODO |
+| 13 | 模块注册依赖链接脚本 | 保持当前设计 |
+| 文档 | README 的任务返回说明与实现不一致 | 已同步：显式退出、Join 预留和现行接口契约 |
+
+## 1. aBus 的断言检查与性能取舍（高）
+
+`aBusSetByIndex()`、Get 等路径使用断言检查请求长度，随后进行数据复制。
+关闭断言后，错误长度可能越过 SIG 的存储边界。原评审记录曾在 `NDEBUG`
+下复现：向 4 字节 SIG 提交 8 字节写入，接口返回成功且覆盖相邻保护字节。
+
+决定：保持现有设计。该路径面向有速度要求的代码，调用者承担参数正确性；
+不在本计划中为热路径追加运行时检查。文档应明确这一使用前提，避免把断言
+当作发布版本的输入保护。
+
+位置：[aBus.c](../../func/aBus/src/aBus.c)。
+
+## 2. 控制台软件接收溢出（高，已修复）
+
+修复前：RX ring 满时丢弃新字节并设置 `rx.overflow`，但 `console_read()`
+只处理 `rx.error`。大量输入或消费不及时后，Shell 可能继续解析已经丢字节的命令。
+
+- [x] 在 aDev Read 中报告软件 RX 溢出，覆盖读取前及读取期间发生的溢出。
+- [x] 向 Shell 报告输入损坏，丢弃受影响的命令及缓冲残留，重新确认行边界后恢复。
+- [x] 验证满缓冲、读取期间溢出、残留换行及连续溢出，保证损坏命令不会执行。
+
+实现：按后续确认增加 `aDevUsartDiscardRx()`，由 aDev 丢弃当前未读缓冲并清除
+软件溢出、接收错误锁存；中断模式在临界区内完成，DMA 模式推进至当前接收
+进度快照。失败不丢弃数据或清除锁存，原有 Clear 接口语义保持不变。
+普通 Read 在读前和返回前检查软件溢出，统一通过 `-1/A_EIO` 报告；软件溢出
+优先于本次已复制的部分结果，调用方必须忽略本次数据，内部消费位置不回滚。
+ISR 只锁存设备状态，由任务中的 Read 设置 errno。控制台仅根据 `A_EIO`
+调用 DiscardRx 并向 Shell 报告输入错误，不再查询溢出标志或维护排空状态。
+Shell 沿用现有输入错误恢复流程，继续丢弃到新的 CR/LF，避免使用旧缓冲中的
+换行提前恢复。出现提示时停止连续发送，按 Enter 后重试。
+全部读取参数原样交给 aDev 校验；零长度和参数错误优先返回，保留错误锁存。
+没有溢出时仍沿用普通部分读取及 BUSY/TIMEOUT 约定；等待期间发现溢出时返回 EIO。
+当前 Shell 使用 20 毫秒等待预算。
+
+验证：`tests/usart/run.py` 覆盖 IRQ/DMA 缓冲丢弃、并发边界、接收占用、
+DMA 查询失败及累计计数回绕，以及读取期间溢出优先于部分结果和等待超时；
+`tests/app_devices/run.py` 使用真实控制台适配与
+Shell 解析器，覆盖读取期间溢出、旧换行、重复溢出、丢弃失败重试、
+硬件错误叠加、跨读取 CRLF、正常 BUSY/TIMEOUT 及重新初始化。
+USART、控制台联测、日志和架构检查通过，轮询/中断/DMA 裁剪组合的主机编译通过。
+当前环境未找到 ARM 编译器，未进行完整固件构建及硬件验证。
+
+位置：[aDev_usart_rx.c](../../device/aDev_usart/src/aDev_usart_rx.c)、
+[system_device.c](../../app/devices/system/system_device.c)。
+
+## 3. SIG 持久化格式（高，已修复）
+
+原来直接保存 RAM 字节快照，恢复主要检查 Key 和长度。同一个 Key 下，
+字段顺序、类型或含义改变而总长度不变时，旧数据可能被错误接受；平台变化
+还可能引入字节序和结构体布局差异。
+
+按用户确认的简化方案：保留完整 RAM 快照，只在 FlashDB 中增加独立的布局标记。
+不增加字段编解码，不改变 SIG/持久化清单结构，不在 RAM 中缓存标记。
+
+- [x] 每项增加 `@sig:DDDD:KKKK:layout`，值为初始化计算的 uint32_t CRC32。
+- [x] 标记包含 deviceID、sigKey、类型、完整大小、字段数量和 offset/type/size。
+- [x] 仅数据库初始化比较标记；缺失或不匹配先删除旧数据，再保存新标记。
+- [x] 删除或标记更新失败则初始化失败，重开可重试，默认业务值不写回 Flash。
+- [x] CRC32 抽为 aLib 通用 `aCrc32()`，不依赖数据库或具体平台。
+- [x] 验证重开、同长度布局变化、原始数据不变、标记缺失、读取/逐次写入故障。
+- [x] 更新数据库、应用及测试文档，说明首次升级会作废无标记的选定项。
+
+保留限制：原始字节含填充，平台布局或字节序变化只作废旧值，不自动迁移。
+同类型字段含义变化、RAW 或未登记字段的同长度变化不能自动识别，需产品
+显式作废旧数据或更换 sigKey。32 位标记有碰撞可能；每条标记还占用 KV 元数据空间。
+定义在实例使用期间必须不变，正常 Set/Get 不访问标记。
+
+验证：数据库静态、动态及混合配置、真实 Flash 调用链、架构检查通过；
+CRC32 的 C11/C++11 标准向量、zlib 对照和分段测试通过。完整固件构建因
+配置的 ARM GCC 不存在而未完成，尚未进行板上验证。
+
+数据库不代替业务 RAM 的同步或范围校验；普通 KV、TSDB 的既有行为不因
+SIG 格式修改而隐式改变。
+
+位置：[aDataBase.c](../../func/aDataBase/aDataBase.c)、[aCrc.h](../../platform/aLib/include/aCrc.h)、
+[system_init.c](../../app/task/system/system_init.c)。
+
+## 4. 平台后端构建选择（高，暂缓）
+
+`aclass_select()` 要求 MCU、链接脚本，并只接受 Embedded / FreeRTOS；
+aDrv 构建直接选择 GD32 厂商库、启动文件和源码。新增 STM32 profile
+不足以完成驱动迁移，Linux 也不能直接通过当前入口独立构建通用模块。
+
+决定：当前不调整构建体系。后续 Linux 迁移时再处理产品、MCU、OS 和工具链
+选择，以及嵌入式启动文件、链接脚本与运行库的归属。
+
+位置：[Aclass.cmake](../../cmake/Aclass.cmake)、
+[aDrv/CMakeLists.txt](../../platform/aDrv/CMakeLists.txt)。
+
+## 5. USART 中断优先级归属（高，已修复）
+
+原评审提出 USART 配置和 ISR 回调契约仍带有 MCU 特征。用户明确保留现有
+`aDevUsartConfig_t` 嵌入 `drv_config` 的方式，本项调整中断优先级归属和
+aDev/aDrv 之间的事件、回调命名。
+
+- [x] 将 `interrupt_priority` 从 aDev 配置下沉到 `aDrvUsartConfig_t`，由
+  应用通过 `drv_config.interrupt_priority` 配置。
+- [x] aDrv 初始化时绑定优先级，USART 回调注册及 DMA 接收直接使用驱动保存的值。
+- [x] 删除 aDev 对优先级的保存、读取、传递和校验；aDev 不通过
+  `config->drv_config.interrupt_priority` 或新增查询包装继续管理它。
+- [x] 将合法范围与 OS ISR 调用约束的检查安排在驱动或平台配置边界，保持
+  现有中断安全要求，不把检查职责留在 aDev。
+- [x] 同步板级配置、驱动接口、测试和文档，验证 USART、DMA、IDLE 使用同一绑定值。
+- [x] aDev 使用事件、回调和派发接口，硬件 IRQ 命名与实现留在 aDrv 内部；
+  同步类型、事件枚举、调用点和测试，保持现有运行行为。
+
+范围限于优先级归属和接口命名；不将 `mode`、RS485 配置或 DE 控制
+一并搬到 aDrv，不改造回调执行上下文，不借此重写设备状态或同步实现。
+
+实现：aOS 构建导出 ISR 优先级范围，平台组合层通过私有编译定义传给 aDrv。
+驱动初始化在硬件操作前校验 GD32 0..15 及 OS 范围；回调注册配置和 DMA
+启动接口移除优先级参数。默认值保持 5，控制台和 RS485 板级配置保持 6。
+驱动接口使用 Event、Callback、RequestDispatch 和 Pause/ResumeDispatch
+命名。Pause/Resume 仅暂停、恢复 USART 事件派发，不包含 DMA 回调或任务互斥。
+`FromISR`、现有模式和编译开关保持原设计，Linux 回调上下文和同步适配后续处理。
+
+验证：USART、DMA、Modbus 板级端口、控制台及架构主机回归通过；完整固件
+构建受本机 ARM GCC 和 Ninja 缺失阻塞，尚未进行板上验证。
+
+位置：[aDev_usart.h](../../device/aDev_usart/include/aDev_usart.h)、
+[aDrv_usart.h](../../platform/aDrv/include/aDrv_usart.h)、
+[USART 驱动](../../platform/aDrv/src/usart)。
+
+## 6. 单核同步假设（状态保护已调整，SMP/Linux 后端暂缓）
+
+aDev 管理自身状态，关联字段使用 aOS 保护，独立快照依赖平台单次访问保证。
+aOS 负责同步机制，aDrv 负责硬件、DMA、驱动回调派发及关闭后的资源安全。
+当前 GD32/FreeRTOS 后端只实现单核，不因本轮调整就具备 SMP 支持。
+
+独立状态可以接受更新前或更新后的快照：RX 错误、软件溢出锁存和 IDLE
+计数使用 volatile 直接读写，不使用原子或临界区；IDLE 的递增只发生在 aDrv
+串行回调中，任务只读。当前依赖 GD32 自然对齐标量的单次访问保证，不能视为
+标准 C 多线程同步；Linux/SMP 移植须重新适配这些访问。
+原子本身不能发布 ring 数据，也不能让多个关联字段共同一致。例如只把
+`rx.count` 改为原子，仍不足以保证它与游标和请求状态一起正确切换。
+
+| 内容 | 归属与处理 |
+| --- | --- |
+| 独立 RX 错误、溢出、IDLE 计数 | 当前使用 volatile 标量快照；依赖平台单次访问保证，IDLE 单写方 |
+| ring 游标/计数、异步请求及完成状态 | aDev 在任务/定时服务和回调两侧使用 aOS 短临界区 |
+| IRQ、DMA 状态、回调登记与派发 | aDrv；当前单核，同实例 USART/RX DMA 同优先级串行派发 |
+| 停止设备、确认 DMA/驱动回调不再访问资源 | aDrv DeInit 契约；当前单核实现，未来后端内部补等待 |
+| 定时器回调退出 | aOS TimerDestroy；等待时不持有回调需要的状态保护 |
+| 同方向多任务调用、RS485 完整事务 | 应用串行化；BUSY 检查不替代互斥 |
+| 初始化、销毁及借用资源生命周期 | 应用独占管理；自身回调不得重入设备 API 或关闭设备 |
+
+本轮实现：
+
+- [x] 独立 RX 标志/计数改为 volatile 快照，删除对应原子读写、初始化及无锁检查。
+- [x] 原子类型、初始化、读写、读改写、内存序和屏障统一封装在 aLib；
+  替换自有代码及相关测试的直接 C11 原子调用，当前只实现 GCC 后端。
+- [x] ring 共享计数及请求交接字段在任务/ISR 两侧参与 aOS 保护；
+  不引入实例锁对象或新的生命周期状态。TX 完成、超时、取消在同一保护域
+  检查并切换状态，删除重复的完成原子标志。
+- [x] 移除模式初始化外层、固定接收标志读取、同步 DMA 消费进度和纯轮询
+  ReadDirect 的多余临界区，合并重复检查及发送收尾保护。初始化先准备回调
+  状态再启动接收；同步 DMA 消费进度由接收任务独占，保留覆盖检查。
+- [x] 删除同步收发的 STREAM 状态及 RX Direct 的忙状态；同方向同步调用
+  依赖应用串行化，省去收尾状态复位及其临界区。合并轮询发送准备和发送完成
+  等待的重复保护；DMA Direct RX 直接检查初始化后不变的 ring 启动标志。
+- [x] Read、WriteAsync、DeInit 的只读忙快照及 RX/TX ring 空闲量快照直接读取；
+  count 提交仍保留保护。RX 异步消费取得 dispatching 后不重复加锁，仅保护订阅交接。
+- [x] Write 和 WaitTransmitComplete 的只读忙检查移出临界区；普通串口轮询
+  发送及完成等待不加临界区，轮询 WriteDirect 复用 Write 并删除独立忙状态。
+  TX_CALLBACK 期间直接读取稳定的完成事件和回调参数；保留回调后的清理保护、
+  缓冲计数提交及 RS485 方向切换保护。
+- [x] 批量复制、应用回调、等待放在保护区外；ring 通过保留占用区或延后
+  发布计数保证复制安全，DMA RX 保留复制前后进度及覆盖检查。
+- [x] DeInit 在临界区外销毁定时器、关闭驱动，成功后才释放等待对象并
+  重置实例。GD32 aDrv 先停止 USART 派发，再停止 DMA、清除回调登记。
+- [x] 明确 aOS 任务/ISR 同一保护域和 aDrv 串行回调、关闭完成契约。
+
+实际迁移 SMP/Linux 时再处理：
+
+- [ ] 适配 volatile RX 标志/IDLE 计数、忙快照及 ring 发布访问，提供线程内存模型
+  下合法的原子或同步访问；不能仅替换 aOS 临界区实现。IDLE 增加其他写方时重审递增。
+- [ ] aOS 后端提供任务与回调之间的跨核互斥及获取/释放内存可见性；不能
+  把当前仅屏蔽本核中断的实现视为多核锁。核对所有访问者及回调执行上下文。
+- [ ] aDrv 后端自行保护硬件/DMA/回调登记状态，串行派发同实例回调；
+  DeInit 停止新派发并等待在途回调退出，保证成功返回后不再访问借用资源。
+- [ ] 适配 Linux 线程回调与当前 FromISR 契约，核对 OS 接口和锁顺序；
+  Pause/ResumeDispatch 仍只控制 USART 派发，不包含 DMA、嵌套恢复或关闭等待。
+- [ ] 在实际后端验证 ring 并发收发、完成/超时/取消竞争和关闭；主机模拟
+  的交错测试不能代替 SMP 并发检查及板上时序验证。
+
+CPU 临界区不会停止 DMA；缓存交接接口和当前 GD32 地址检查见第 10 项，
+有缓存平台的实际维护与区域属性配置仍需在移植时补齐。
+
+验证：USART 主机回归覆盖 RX 复制期间新增数据/溢出、TX DMA 完成与提交
+交错、异步终态及保护区外回调/等待、接收启动时回调和启动失败清理；
+轮询/中断/DMA 收发及 Direct 裁剪编译通过。
+RX/TX 复制中途注入 ISR 的回归在 GCC -O0/-O2 与 ASan/UBSan 下通过。
+USART ASan/UBSan、DMA、控制台联测、Modbus 和架构检查通过，驱动关闭顺序
+已通过主机桩验证。尚未进行板上或 SMP 验证。
+
+位置：[aOS 临界区](../../platform/aOS/public/aOS.h)、
+[驱动事件接口](../../platform/aDrv/include/aDrv_usart.h)、
+[RX 路径](../../device/aDev_usart/src/aDev_usart_rx.c)、
+[TX 路径](../../device/aDev_usart/src/aDev_usart_tx.c)、
+[USART 设计](../../docs/usart_design.md)。
+
+## 7. RTU 接收与分帧适配（高，已修复）
+
+原 `aModbusRtuReceive()` 按调用时刻计算字节间隔，要求每字节接收完成后
+立即调用。当前 ISR 路径继续保留，延迟交付增加显式采集时间入口。
+
+- [x] 增加 `aModbusRtuReceiveAt()`，传入字符完成时的计数器及毫秒时间；
+  原入口采样时钟后复用它，不改变板级调用、实例布局或原分帧算法。
+- [x] 完整帧使用现有自定义 `aModbusTransport_t`，明确 read 不跨帧、finish
+  仅释放当前帧，以及长度、时序和三个辅助操作的职责。
+- [x] 普通串口一次批量读取不视为完整帧，不伪造逐字节间隔。
+- [x] 验证延迟交付、同帧分块、多帧批量输入、帧内超时、接收错误、
+  帧间静默、多实例，以及计数器和毫秒时基回绕。
+
+限制：时间戳必须与实例时钟同源、按采集顺序输入；延迟字节须在同一次
+同步保护内补齐，消费和发送辅助操作取得保护时不能还有待交付记录。
+静默仍按当前时钟判断，不能只补时间戳却让消费者越过尚未交付的字节。
+无法保证时由底层分帧后适配；普通 Linux read 本身不提供严格 RTU 边界。
+
+本项完善通用适配契约，不提前实现第 4 项暂缓的 Linux 构建与后端。
+
+验证：Modbus 及板级 Demo 主机回归在 ASan/UBSan 下通过，架构与公共头
+检查通过。尚未进行完整固件构建或板上时序验证。
+
+位置：[aModbus_rtu.h](../../func/aModbus/aModbus_rtu.h)、
+[aModbus_rtu.c](../../func/aModbus/aModbus_rtu.c)。
+
+## 8. aStream 实例上下文与 EOF（中高，已修复）
+
+原回调缺少实例上下文，多实例需提供专用函数；0 同时表示无进展或输入结束。
+
+- [x] 增加借用的 context，贯穿 read、write、可选 flush 和全部适配调用。
+- [x] 正长度 read 的 0 仅表示 EOF；暂不可用用 -1/A_EAGAIN，超时用
+  -1/A_ETIMEDOUT；合法零长度读写返回 0，不表示 EOF。
+- [x] 正长度 write 无进展用错误码，返回 0 按 ERROR 处理；保留部分进度
+  和总超时预算，不增加锁或动态分配。
+- [x] Shell 返回 A_STATUS_EOF，清除未提交命令及历史，后续只处理输出；
+  新输入会话须 DeInit/Init，底层资源仍由应用管理。
+- [x] Modbus 收到 EOF 后本次返回 EOF，后续 NOT_READY，复用已有故障状态。
+  RTU 当前帧耗尽后继续索取用 -1/A_EIO 报告帧不完整，不跨帧、不误报 EOF。
+- [x] aModbusRtuBindTransport 统一绑定流及辅助操作，删除 protocol 的专用
+  帧收发包装；flush 正确转交物理流上下文，控制台与日志沿用原 TX 锁。
+
+验证：Shell、日志/控制台、Modbus 主从及 Demo、启动编排和架构主机回归通过。
+覆盖共用回调的多实例、物理 flush、零长度、半条命令及半帧 EOF、暂不可用后
+恢复和 EOF 后拒绝继续事务。Shell/Modbus 的 ASan/UBSan 回归通过；
+Debug 及 7 组 Release 裁剪构建通过，尚未进行板上验证。
+
+接口变更：自定义流回调及直接调用须补充 context；旧的“无数据返回 0”适配
+须改为错误码。Linux 具体设备及连接管理仍留给后端和应用，不在本项新增。
+
+位置：[aStream.h](../../platform/aLib/include/aStream.h)、
+[aShell.c](../../func/aShell/src/aShell.c)、[aModbus_rtu.c](../../func/aModbus/aModbus_rtu.c)。
+
+## 9. 任务退出等待（中，接口已预留）
+
+- [x] 增加 aOSTaskJoin(&handle, timeout) 公共接口。
+- [x] FreeRTOS 立即返回 A_STATUS_UNSUPPORTED，不等待、不访问或修改句柄。
+- [x] 保持任务创建/删除/显式退出的简单实现，不增加 joinable 配置、退出记录、
+  链表、通知或额外分配。返回不支持不能作为任务已退出的确认。
+- [ ] Linux 后端完整实现 Join，明确句柄所有权、等待者限制、重复等待和自等待行为。
+- [ ] Linux 后端支持不等待、有限超时和永久等待，覆盖提前退出、超时重试、
+  失败清理和资源回收时机。
+
+用户决定 FreeRTOS 仅保留接口，等待能力在 Linux 后端实现；当前尚无 Linux 后端。
+业务仍负责停止请求、退出同步和资源清理，任务入口结束时显式调用 aOSTaskExit。
+
+位置：[aOS.h](../../platform/aOS/public/aOS.h)、
+[aOS_freertos.c](../../platform/aOS/backend/freertos/aOS_freertos.c)、
+[使用说明](../../platform/aOS/README.md#任务退出等待)。
+
+## 10. DMA 缓存一致性与内存可达性（中，当前平台已处理）
+
+- [x] aDrv 提供缓冲区检查及 TxPrepare/RxPrepare/RxComplete 接口。
+- [x] GD32 SRAM 缓存维护为空实现；未知平台不能默认跳过缓存操作。
+- [x] 使用链接脚本的实际 RAM/主 Flash 边界，检查完整范围、用途和地址回绕。
+- [x] DMA 地址设置检查宽度对齐，启动检查完整递增跨度，拒绝活动期间修改配置。
+- [x] aDev 接入 ring、Direct、Async 路径；Direct RX 停止后统一同步，覆盖
+  分块、部分接收、超时和启动失败。循环 RX 只允许无需缓存维护的内存，
+  不调用 RxPrepare/RxComplete，启停仍保留 DMA 屏障及失败清理。
+- [x] 增加可选静态 DMA 区声明宏，GCC 链接到启动清零范围；不增加专用堆。
+- [ ] 移植带缓存芯片时实现实际维护、缓存行隔离校验及非缓存区属性配置。
+- [ ] 板上验证 DMA 收发、取消和最坏中断延迟；主机测试不能验证硬件缓存。
+
+直接使用 aDrv DMA 的调用者负责调用缓存交接接口，aDev 已统一处理。
+对象容量、生命周期和 DMA 活动期间的独占仍是调用方契约；外部存储区默认拒绝。
+
+验证：DMA 范围/对齐、缓存后端选择及链接布局检查通过；USART 主机回归及
+ASan/UBSan、公共头/架构检查、Debug 固件及 14 组裁剪构建通过。尚未板上验证。
+
+位置：[DMA 内存接口](../../platform/aDrv/include/aDrv_dma_memory.h)、
+[GD32 内存检查](../../platform/aDrv/src/dma/aDrv_dma_memory.c)、
+[aDevUsart](../../device/aDev_usart/README.md#dma-缓冲区交接)。
+
+## 11. 数据库全局串行化（中，保持设计）
+
+多实例共用模块锁和 `deadline`、`storage_error`、`operating` 状态，TSDB
+遍历回调也在锁内执行。因此慢擦除、GC 或回调会阻塞其他数据库实例。
+
+决定：保持当前全局串行化设计，不拆分实例锁或迁移全局事务状态。
+
+位置：[memory_port.c](../../func/aDataBase/port/memory_port.c)、
+[aDataBase.c](../../func/aDataBase/aDataBase.c)。
+
+## 12. 静态实例不等于无堆运行（中，保留限制）
+
+USART 静态初始化仍可能动态创建等待对象；aPoll 静态初始化会创建等待对象
+和互斥锁；当前 aOS 构建依赖 FreeRTOS 动态分配能力。
+
+决定：保持当前设计，本项作为 TODO 中的已知限制，不改造静态 OS 资源。
+静态句柄仅表示实例存储由调用者提供，不能宣称完整无堆运行。未来若 STM32
+产品要求确定性内存或零堆，再单独规划等待对象、锁、任务等资源的静态存储。
+
+位置：[aDev_usart.c](../../device/aDev_usart/src/aDev_usart.c)、
+[aPoll.c](../../func/aPoll/aPoll.c)、[aOS 构建](../../platform/aOS/CMakeLists.txt)。
+
+## 13. 链接段注册机制（中，保持设计）
+
+aBus RAM 绑定与 Shell 命令通过 GCC section 和起止符号收集，外部工程复用
+时需要配套链接配置。仓库已有主机链接脚本，但接入成本仍然存在。
+
+决定：保持当前链接段注册方式，不增加显式数组注册入口或新的注册机制。
+
+位置：[aBus.h](../../func/aBus/include/aBus.h)、
+[aBus.c](../../func/aBus/src/aBus.c)。
+
+## 文档与验证归档
+
+- 已同步公共头契约、模块说明和公共接口规范：任务显式退出、FreeRTOS Join
+  仅预留接口、aStream 上下文与 EOF、DMA 缓冲区交接。
+- 各项上方的验证记录对应其实施时点；早期缺少工具链的记录保留历史含义，
+  不表示当前仍不能构建。
+- 最近一轮 DMA/USART 简化已通过 DMA 回归、USART ASan/UBSan、架构检查、
+  Debug 固件无告警构建及 14 组裁剪构建。没有据此宣称全部模块完成板上验证。
+- 本次归档只修改文档，检查本地链接、章节锚点和差异格式，不重跑固件测试。
+
+后续工作回到 [TODO](../../todo.md) 跟踪；检查入口见 [验证指南](../../docs/testing.md)。

@@ -119,7 +119,7 @@ ALIB_ASSERT_MEMBER_OFFSET(Example_t, speed, 4U);
 
 普通 C 的 `const` 描述数组元素不能用于编译期断言。如果长度来自 aBus 的
 `params[]`，应用可调用 `aBusSigParamSizeCheck()`，见
-[aBus 可选长度检查](../../../func/aBus/README.md#可选参数长度检查)。
+[aBus 可选长度检查](../../func/aBus/README.md#可选参数长度检查)。
 aLib 不依赖 aBus，也不强制两字节寄存器规则。
 
 验证：`python3 tests/layout/run.py` 检查 C11/C++11、Debug/Release 下的通过

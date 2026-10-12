@@ -60,7 +60,7 @@ TX_CALLBACK 期间完成事件和回调参数保持稳定，aDrv 串行派发，
 这些是平台后端的实现条件。aOS 任务/ISR 临界区属于同一保护域；未来 SMP
 后端须提供跨核互斥和内存可见性，当前只实现本核保护。aDrv 的硬件/DMA
 状态及回调登记也须由未来后端同步，不能依赖 aDev 临界区代替驱动保护。
-本轮明确契约，未实现 SMP/Linux 后端，见 [TODO 第 6 项](../todo.md)。
+当前未实现 SMP/Linux 后端，见 [TODO 第 6 项](../todo.md#6-linux--smp-同步)。
 
 生命周期仍由应用独占。aDev 先检查忙状态，再在临界区外销毁 aOS 定时器、
 调用 `aDrvUsartDeInitStatic`，最后销毁等待对象、重置实例。aDrv 关闭成功
@@ -70,6 +70,11 @@ TX_CALLBACK 期间完成事件和回调参数保持稳定，aDrv 串行派发，
 
 DMA 中断入口、标志消费和循环计数集中在通用 aDrvDma；USART DMA 文件只负责
 路由、请求开关和通知适配。查询先消费事件时仍由 DMA ISR 派发通知。
+DMA 能力在设备初始化入口统一预检；固定 ring 在初始化时检查内存策略，
+Direct/Async 检查各自的请求缓冲区。Direct RX 对整个保留区准备一次，
+全部分块停止后统一归还；循环 RX 只允许无需缓存维护的内存，不执行缓存维护。
+这不省略 DMA 启停屏障或复制前后的覆盖检查。各收发路径的交接时机见
+[DMA 缓冲区交接](../device/aDev_usart/README.md#dma-缓冲区交接)。
 设备配置和 TX/RX 运行状态的组织见 [aDrv 与 aDevice 设计](driver_device_design.md)。
 
 应用通过 `drv_config.interrupt_priority` 配置 USART/DMA 的共同优先级。

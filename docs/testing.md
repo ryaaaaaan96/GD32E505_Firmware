@@ -38,6 +38,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | Flash 测试命令 | `python3 tests/flash25q/test_command.py` |
 | 数据库与完整 Flash 适配链 | `python3 tests/database/run.py`、`python3 tests/database/test_flash_chain.py` |
 | Modbus 协议、aBus 映射与通用 RTU 多实例/时序 | `python3 tests/modbus/run.py` |
+| aPoll 周期作业、事件与临时请求 | `python3 tests/poll/run.py` |
 | 协议统一入口、启动顺序与功能关闭 | `python3 tests/protocol_tasks/run.py` |
 | Modbus 板级端口、主从、任务调度与生命周期 | `python3 tests/modbus_demo/run.py` |
 | Shell EOF/半行清理、日志、共享控制台发送互斥及部分写入 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
@@ -50,6 +51,8 @@ Join 检查仅覆盖 FreeRTOS 预留接口：各类超时参数均返回 UNSUPPO
 
 `tests/dma/run.py` 使用 MCU 地址模型验证 RAM/Flash 边界、只读目标拒绝、
 宽度对齐、固定/递增跨度、内存到内存及活动配置拒绝；不解引用模拟 MCU 地址。
+也检查被拒绝的设置不破坏原配置、缓存后端不可隐式缺失，以及 `.dma_buffer`
+位于启动清零范围并满足对齐要求。
 `tests/usart/run.py` 通过模拟缓存接口检查 TX 启动前准备、Direct RX 准备及归还，
 覆盖启动失败、超时和部分接收；循环 RX 检查策略拒绝，以及启停和失败清理
 不调用缓存维护但仍关闭 DMA。实际缓存硬件留待移植验证。
@@ -115,6 +118,10 @@ ELF 的静态 RAM 统计包含预留区，不等同于运行时堆使用量或�
 再重新编译和烧录。Flash 测试会改变指定区域，数据库首次格式化也由应用
 命令显式触发；按各演示文档选择测试区域。
 当前 Modbus Demo 使用 ISR 周期时间戳分帧，硬件边界精度与使用限制见其应用说明。
+
+各轮实际运行结果保存在[评审记录](README.md#评审与历史)，不把本指南的命令
+列表当作已执行清单。当前 DMA/USART 改动已完成主机回归和固件构建，
+尚未进行对应的板上验证。
 
 ## TEST 点表与协议挂载回归
 

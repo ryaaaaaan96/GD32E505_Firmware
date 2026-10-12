@@ -275,7 +275,8 @@ aMemory 的 DeInit 按逆序调用设备释放回调；须先关闭数据库及�
 擦除粒度 4 KiB；在 `0x7FF000` 执行一次 4 KiB 擦写回读，输出
 `Flash test PASS`。这证明该板该区域的基础 SPI 链路可用，不等于所有器件、
 SFDP 路径、写保护、故障恢复及掉电场景均已验证。
-操作步骤见[手动 Flash 测试](../app/task/system/flash_test.md)。
+当前命令改用 aMemory 区域内偏移，该介质地址对应 `flash test 0`。
+操作步骤见[手动 Flash 测试](../app/task/system/README.md#flash-手动测试)。
 
 后续先测量 SPI 吞吐、CPU 占用和 CS 时序，再决定块传输或 DMA 优化；
 QSPI 需完成前述命令映射与硬件可行性验证后才能接入。

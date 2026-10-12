@@ -109,7 +109,7 @@ system_init.c 的私有 memoryInit 调用 aMemoryInit，初始化设备并发布
 存储探测信息直接通过 ASHELL_PRINT 入队，不依赖日志模块初始化。
 业务只访问 aMemory 区域；system_device.c 将区域句柄关联到 KV/TSDB，
 system_init.c 的 databaseInit 负责数据库初始化和打开实例。启动失败不开放命令输入。
-数据库配置和 `db` 命令用法见 [数据库演示](task/system/database.md)。
+数据库配置和 `db` 命令用法见 [数据库调试](task/system/README.md#数据库调试)。
 `log test`、`log level verbose` 和 `log info` 的用法见
 [系统任务与日志调试](task/system/README.md)。
 func 提供 Init/Process/DeInit 或事件处理入口；app 决定调用线程、周期和停止顺序。

@@ -1,7 +1,7 @@
 # 系统服务与调试
 
 `system_init.c` 负责系统服务启动、状态灯和 Shell 任务，以及私有总线和数据库实例的通用访问。
-本目录也管理通用数据总线和数据库实例及其调试命令，详见 [数据库演示](database.md)。
+本目录也管理通用数据总线和数据库实例及其调试命令，见下文[数据库调试](#数据库调试)。
 `command_flash.c` 保留手动擦写测试，默认不编译；需要复测时取消本目录 CMakeLists.txt 中该源码的注释。
 产品输出适配和存储配置统一由 `app/devices/system` 提供。
 日志相关内容按职责分布：
@@ -20,6 +20,58 @@ main 的 appInitTask 在 aSystemInit 成功返回后调用 appTestTaskInit，统
 存储、数据总线和数据库不新增独立任务。
 存储设备初始化直接使用 ASHELL_PRINT，不依赖 aLog；启动信息先入队，
 全部服务就绪后由 Shell 任务输出。需要数据库的日志输出须在数据库就绪后挂接。
+
+## 数据库调试
+
+`command_database.c` 注册 `db` 命令，通过 system 的私有 KV/TSDB 实例访问
+aDataBase；介质通过 aMemory 区域接入。布局来自
+[aMemory_layout.h](../../../config/aMemory_layout.h)。
+
+| 区域 | 介质偏移 | 长度 | 用途 |
+| --- | --- | --- | --- |
+| `param` | `0x00100000` | 128 KiB | KV 与选定 SIG 的持久化 |
+| `log` | `0x00120000` | 512 KiB | TSDB 时间序列记录 |
+| `flash_test` | `0x007FF000` | 4 KiB | 独立擦写测试 |
+
+启动自动尝试打开已有数据库；空白介质不自动格式化，会提示执行 `db init`。
+该命令允许初始化无效分区头，可能格式化对应区域；已打开时返回 BUSY，
+无须重复执行。`db close` 关闭实例，不删除记录；重开不会自动执行 `sig load`。
+
+```text
+db info
+db init
+db kv set demo hello
+db kv get demo
+db kv del demo
+db ts append 1 first
+db ts append 2 second
+db ts list
+db ts list 1 2
+```
+
+其中 `db init` 仅在实例尚未打开时使用。文本值不能含空格，Shell 不解析引号。
+TSDB 时间戳必须为正数且大于已保存的最新时间，先用 `db info` 查看
+`last_time`；上述 1、2 只适用于没有旧记录的数据库。
+列表每次至多输出 8 条，并受输出量限制；按返回的 Continue 提示继续读取。
+通用二进制 API 和存储错误契约见 [aDataBase](../../../func/aDataBase/README.md)。
+SIG 保存、恢复及选定项见[产品持久化说明](../../protocol/README.md#持久化与启动)。
+
+## Flash 手动测试
+
+`command_flash.c` 默认不编译。需要复测时，取消本目录
+[CMakeLists.txt](CMakeLists.txt) 中对应 `target_sources` 行的注释，再编译烧录。
+命令使用 aMemory 的 `flash_test` 区域，不直接访问 SPI 或 Flash 驱动。
+
+```text
+flash info
+flash test 0
+```
+
+地址是区域内偏移。当前测试区从介质 `0x007FF000` 开始，只有一个 4 KiB
+擦除块，因此测试该块应填写 `0`，不能沿用旧命令的绝对地址 `0x7FF000`。
+测试会擦除该块，检查全 `0xFF`，再以 320 字节分块写入并校验数据；不会恢复旧内容。
+此区域与 KV/TSDB 分开，调整布局后须重新确认测试范围。
+输出 `Flash test PASS` 表示本次擦写回读成功，不覆盖真实掉电或长期可靠性验证。
 
 ## 日志初始化
 

@@ -2,7 +2,7 @@
 
 [返回文档索引](README.md)
 
-本文记录当前重构后的实现。代码目录仍使用 `device/`，公共接口使用 `aDev`
+本文描述当前已实现的设计。代码目录使用 `device/`，公共接口使用 `aDev`
 前缀。参考 Zephyr 的按外设分类、配置与运行状态分离、DMA 服务复用方式，
 保留本工程的显式初始化和 aOS 移植边界。
 
@@ -10,9 +10,9 @@
 
 | 层 | 拥有的内容 | 对外行为 |
 | --- | --- | --- |
-| aDrv | 寄存器适配、固定路由、IRQ、DMA 通道 | 非阻塞硬件操作和 ISR 通知 |
-| aDevice | 缓冲、事务、等待、互斥、器件协议 | 按设备类别提供强类型接口 |
-| app/devices | 引脚、设备实例、缓冲区、产品配置 | 显式编排初始化，业务借用实例 |
+| aDrv | 寄存器适配、固定路由、IRQ、DMA 通道及内存策略 | 非阻塞硬件操作和 ISR 通知 |
+| aDevice | 缓冲、事务、等待、状态保护和器件协议 | 按设备类别提供强类型接口 |
+| app/devices | 引脚、实例、缓冲区、配置及共享访问入口 | 显式初始化，按需串行化设备访问 |
 
 依赖保持 `device -> aDrv + aOS`。aDrv 不使用 aOS、堆、任务、软件超时，
 短临界区只保护驱动与 ISR 共用的状态。aDevice 不包含芯片厂商头文件。
@@ -91,14 +91,32 @@ DeInit 之后引脚为浮空输入，实际电平由板级电路决定，不承�
 模块没有内部锁、任务或定时器。应用负责同一实例的访问与生命周期串行化；
 Toggle 为非原子读改写，不能与其他写入并发。闪烁周期继续由状态任务设置。
 
-## 驱动文件组织
+## GPIO 配置
+
+### 调试引脚保护
 
 `ADRV_GPIO_SWD_PROTECT_DISABLE` 未配置或为 `OFF` 时，默认保留 SWD 保护。
 此时 GPIO 初始化 PA13/PA14 的所有模式均返回 `A_STATUS_UNSUPPORTED`，
 检查在硬件写入之前执行，驱动句柄保持不变。在顶层 CMake 设为 `ON`
-才关闭这项检查，
-不会自动释放 SWJ 调试复用；如需复用引脚，由板级启动代码显式处理。
+才关闭这项检查，不会自动释放 SWJ 调试复用；如需复用引脚，
+由板级启动代码显式处理。
 PA15/PB3/PB4 原有的关闭 JTAG、保留 SWD 行为不变。
+
+### 输出速度
+
+应用通过 `aDrvGpioConfig_t.speed` 选择 LOW、MEDIUM、HIGH 或 MAX，
+GD32 分别映射为 2MHz、10MHz、50MHz 和极高速；这些是输出速度等级，
+不是信号频率。`ConfigStructInit` 默认 HIGH，保持原有行为。
+LED 的 `aDevLedConfig_t.speed` 同样向下传递；输入/模拟模式忽略速度，
+但仍检查枚举有效性。已有外设专用引脚配置不受此字段影响。
+
+MAX 在配置输出前开启 AF 时钟和共享 I/O 补偿，检查就绪后配置引脚。
+使用最多 100000 次有限轮询，预算不是毫秒；失败返回 TIMEOUT，
+引脚和句柄不变，已开启的时钟与补偿保持开启。反初始化不关闭共享补偿。
+速度降档会清除该引脚遗留的 SPD 位。板级供电及负载须满足芯片要求，
+最高速率仍由芯片规格与电路决定。
+
+## 驱动文件组织
 
 ```text
 platform/aDrv/
@@ -106,7 +124,9 @@ platform/aDrv/
 ├── src/
 │   ├── aDrv.c / aDrv_basic.c / aDrv_internal.h
 │   ├── gpio/aDrv_gpio.c
-│   ├── dma/aDrv_dma.c
+│   ├── dma/
+│   │   ├── aDrv_dma.c         通道、传输、中断与进度
+│   │   └── aDrv_dma_memory.c  缓冲区范围及用途检查
 │   ├── spi/aDrv_spi.c
 │   ├── qspi/aDrv_qspi.c
 │   └── usart/
@@ -126,7 +146,7 @@ platform/aDrv/
 通用 DMA 驱动负责通道占用、硬件中断入口、事件采集、循环计数和进度快照。
 当前 GD32E505 支持 DMA0 七个通道、DMA1 五个通道，非法逻辑通道初始化失败。
 
-新增接口：
+主要接口：
 
 - `aDrvDmaConfigureInterrupt(handle, config)`：复制事件位、优先级、回调及参数；
   `config == NULL` 注销。回调只在 DMA ISR 执行，事件是 HALF、COMPLETE、ERROR。
@@ -149,13 +169,38 @@ DMA COMPLETE 表示数据搬运结束，串口线路完成仍以 USART TC 为准
 RS485 的 DE 释放和业务 Async 回调契约沿用原设计；RX 快照检查仍由 aDev 负责。
 停止 DMA 后注销通知；销毁实例前调用方必须停止访问，并确保在途回调退出。
 
+### DMA 内存检查与数据交接
+
+`aDrv_dma_memory.h` 提供平台内存策略，`aDrv_dma_memory.c` 实现 GD32 的
+可达范围检查；aDev 决定何时把数据交给 DMA、何时归还 CPU。
+直接使用 aDrv DMA 的调用者负责相同的数据交接。接口不分配内存、不依赖 aOS。
+
+| 阶段 | 检查或操作 |
+| --- | --- |
+| aDev 初始化 | 统一检查所选 DMA 能力及固定 ring 的范围、用途和缓存策略 |
+| Direct / Async 请求 | 检查完整用户缓冲区，按 TX/RX 路径执行缓存准备与归还 |
+| DMA 初始化、地址和数量设置 | 分别检查数据宽度、地址对齐、硬件搬运数量 |
+| DMA 启动 | 检查两侧完整访问跨度、写入权限及循环 RX 策略，保留启停屏障 |
+| 应用使用期间 | 保证对象容量、生命周期和访问独占，不直接修改句柄内部状态 |
+
+已由初始化和设置接口保证的宽度、对齐及数量范围不在启动时重复检查。
+完整缓冲区的缓存行隔离与单次硬件分块的可达性是不同检查，不能相互替代。
+Direct RX 对完整保留区准备一次，全部分块停止后统一归还；循环 RX 仅接受
+无需缓存维护的区域，不调用 RxPrepare/RxComplete，仍保留覆盖检测和停止清理。
+
+GD32 SRAM 无需缓存维护，三个维护接口由平台声明为内联空实现。
+未知后端必须实现对应接口，不能默认跳过维护。链接脚本提供实际 RAM/主 Flash
+边界；可选 `ADRV_DMA_BUFFER` 只指定段和对齐，不自动改变缓存属性。
+静态声明与移植细节见 [aDrv](../platform/aDrv/README.md#dma-缓冲区与缓存交接)，
+各收发路径见 [aDevUsart](../device/aDev_usart/README.md#dma-缓冲区交接)。
+
 ## 移植与扩展
 
 新增 MCU 时替换 aDrv 芯片实现和固定映射；板级引脚由应用重新配置。
 未来 Linux 可在设备 API 边界提供 POSIX 实现，或为实际使用的驱动接口实现
 适配；不需要模拟 MCU 的每个寄存器和 DMA 通道。Linux 实现仍未接入。
 
-后续新增 SPI DMA 时复用本次的 DMA 中断与进度接口。事务片选、同时收发、
+后续新增 SPI DMA 时复用通用 DMA 中断与进度接口。事务片选、同时收发、
 最终外设空闲判定仍由 SPI 链路处理，不把它们塞进通用 DMA。
 多个 Flash 继续借用共享总线对象，锁和片选的作用范围按 Flash25Q 文档执行。
 
@@ -164,7 +209,8 @@ RS485 的 DE 释放和业务 Async 回调契约沿用原设计；RX 快照检查
 `tests/led/run.py` 使用真实 LED/GPIO 实现和模拟硬件，验证有效电平、
 输入与输出锁存值不一致、静态/动态生命周期、失败回收与编译接口裁剪。
 `tests/dma/run.py` 使用真实 DMA 和 USART DMA 实现、模拟硬件寄存器，覆盖通道
-争用、ISR 与查询交错、重装、错误保持、即时完成和停止后通知清理。
+争用、ISR 与查询交错、重装、错误保持、即时完成、停止后通知清理、
+内存范围和对齐，以及缓存后端选择与链接布局。
 原 USART/RS485、SPI、Flash、Modbus 和启动回归继续验证上层契约。
 功能裁剪通过 `tests/config/build_matrix.py` 检查；具体命令见[验证指南](testing.md)。
 主机测试和交叉编译不代替实际 DMA、TC、DE 波形与最坏中断延迟测试。
@@ -174,18 +220,3 @@ RS485 的 DE 释放和业务 Async 回调契约沿用原设计；RX 快照检查
 - [Zephyr Device Driver Model](https://docs.zephyrproject.org/latest/kernel/drivers/index.html)
 - [Zephyr DMA 接口](https://docs.zephyrproject.org/latest/hardware/peripherals/dma.html)
 - [Zephyr GD32 SPI 对通用 DMA 的使用](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/spi/spi_gd32.c)
-
-
-### GPIO 输出速度
-
-应用通过 `aDrvGpioConfig_t.speed` 选择 LOW、MEDIUM、HIGH 或 MAX，
-GD32 分别映射为 2MHz、10MHz、50MHz 和极高速；这些是输出速度等级，
-不是信号频率。`ConfigStructInit` 默认 HIGH，保持原有行为。
-LED 的 `aDevLedConfig_t.speed` 同样向下传递；输入/模拟模式忽略速度，
-但仍检查枚举有效性。已有外设专用引脚配置不受此字段影响。
-
-MAX 在配置输出前开启 AF 时钟和共享 I/O 补偿，检查就绪后配置引脚。
-使用最多 100000 次有限轮询，预算不是毫秒；失败返回 TIMEOUT，
-引脚和句柄不变，已开启的时钟与补偿保持开启。反初始化不关闭共享补偿。
-速度降档会清除该引脚遗留的 SPD 位。板级供电及负载须满足芯片要求，
-最高速率仍由芯片规格与电路决定。

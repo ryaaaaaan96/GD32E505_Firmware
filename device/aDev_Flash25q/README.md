@@ -39,8 +39,9 @@ aSystemInit 在 Shell 初始化之后调用 appSystemFlashInit，启动只探测
 - 状态轮询超时可能意味着芯片仍忙；总线传输故障会使 bus 失效，必须
   先关闭借用实例，再重新初始化 bus。
 
-应用可以使用 appSystemFlashRead/Write/Erase/GetInfo，业务代码不接触 SPI。
-擦写测试位于系统调试入口，见 [Flash 手动测试](../../app/task/system/flash_test.md)。
+应用通过 aMemoryFind/GetInfo/Read/Write/Erase 访问注册区域，业务代码不接触 SPI。
+擦写测试位于系统调试入口，见
+[Flash 手动测试](../../app/task/system/README.md#flash-手动测试)。
 默认不编译；在 app/task/system/CMakeLists.txt 中加入 command_flash.c 后，
 通过 Shell 的 flash test 命令手动触发。
 

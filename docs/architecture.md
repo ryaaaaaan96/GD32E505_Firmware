@@ -62,7 +62,9 @@ platform/aDrv/
 │   │   ├── aDrv_usart_irq.c (按配置选择)
 │   │   ├── aDrv_usart_dma.c (按配置选择)
 │   │   └── aDrv_usart_internal.h
-│   ├── dma/aDrv_dma.c
+│   ├── dma/
+│   │   ├── aDrv_dma.c                    通道、传输和中断
+│   │   └── aDrv_dma_memory.c             内存范围与用途检查
 │   ├── spi/aDrv_spi.c
 │   ├── qspi/aDrv_qspi.c
 │   └── aDrv_internal.h                   仅模块间必要的私有声明
@@ -77,7 +79,9 @@ platform/aDrv/
 避免基础 USART 对 DMA 形成硬依赖；私有共享状态只通过
 `usart/aDrv_usart_internal.h` 连接。公共头文件不出现 GD32 寄存器类型或 DMA 通道映射。
 通用 DMA 驱动持有 DMA 中断入口，提供事件通知和一致的搬运进度；USART 通过
-该接口复用 DMA 服务。配置与状态布局见 [aDrv 与 aDevice 设计](driver_device_design.md)。
+该接口复用 DMA 服务。DMA 内存策略由 aDrv 提供，aDev 在缓冲区交接处调用；
+应用负责缓冲区容量、生命周期和访问串行化。配置与状态布局见
+[aDrv 与 aDevice 设计](driver_device_design.md)。
 
 `cmake/aclass_resolve.cmake` 集中校验产品、aDev 与 aDrv 之间的依赖。各层
 CMakeLists 只消费有效配置：aDev 选择是否加入设备 target，aDrv 选择生成的
@@ -255,8 +259,8 @@ aDrv 保持 MCU 驱动定位。Linux 设备可使用独立实现，不要求模�
 快照区保证回调期间稳定，IRQ RX 保留零拷贝。未来 Linux API 必须明确自己的回调
 执行上下文，不能声称用户态回调运行在硬件 ISR。
 USART2 已检查并配置支持的 TX/RX 路由；跨外设的完整引脚资源校验和
-Python/XML 生成校验尚未实现。
-
+Python/XML 生成校验尚未实现。平台迁移及尚未完成的硬件验收见
+[后续事项](../todo.md)。
 
 ## 通信调度边界
 

@@ -1,8 +1,10 @@
 # aDevUsart
 
-当前实现按管理、TX、RX、单 DE RS485 分文件；业务接口与实例定义分别由 aDev_usart.h 和 aDev_usart_instance.h 提供。
-aDrv 负责非阻塞硬件操作与 IRQ/DMA，aDev 负责消费互斥、超时、缓冲和回调，
-app 负责配置、业务任务、排队和协议；不提供设备内 TX Queue。
+当前实现按管理、TX、RX、单 DE RS485 分文件；业务接口与实例定义分别由
+`aDev_usart.h` 和 `aDev_usart_instance.h` 提供。
+aDrv 负责非阻塞硬件操作、IRQ/DMA 和内存策略；aDev 负责缓冲、状态保护、
+等待、超时和回调；app 负责配置、任务、同方向访问串行化、排队和协议。
+USART 不创建任务互斥锁，也不提供设备内 TX Queue。
 
 实例内嵌 `settings` 配置快照、`tx` 发送状态和 `rx` 接收状态；初始化输入
 配置不被长期借用。仅实例创建层包含 instance 头，业务通过公共接口访问。
@@ -34,7 +36,7 @@ GD32 SRAM 的三个维护接口是内联空实现；有缓存的后端须实现�
 mode 的 TX/RX 字段分别选择 POLLING、INTERRUPT_BUFFERED、DMA_BUFFERED，
 RX 还可选择独占的 INTERRUPT_CALLBACK，
 OPTION_RX_IDLE 是接收附加功能。普通、Direct、Async 都使用对应方向的同一配置，
-不再有 direct_tx_backend/direct_rx_backend 或第二份后端选择。
+不提供第二份 Direct/Async 后端选择。
 DMA_BUFFERED 名称表示具备缓冲流能力；不提供 ring 时可用于显式用户 buffer 操作。
 
 应用在 `drv_config.interrupt_priority` 设置 USART/DMA 中断优先级；默认值、
@@ -45,6 +47,8 @@ aDev 通过 `aDrvUsartEvent_t` 和事件回调与驱动交互：`SetEventEnabled
 事件使能，`RequestDispatch` 请求派发，`PauseDispatch/ResumeDispatch` 短暂
 暂停和恢复 USART 事件派发。它们不包含 DMA 回调，也不提供任务互斥。
 具体 IRQ 操作留在 aDrv；当前 `FromISR` 上下文约束及中断/DMA 模式开关仍保留。
+
+### 运行状态同步
 
 aDev 的独立 RX 错误、溢出锁存和 IDLE 计数使用 `volatile` 标量快照，直接读写，
 不使用原子或临界区。IDLE 只由 aDrv 串行派发的回调递增，任务只读，计数按
@@ -71,6 +75,8 @@ TX_CALLBACK 期间完成事件和回调参数保持稳定，派发读取不加�
 同步机制由 aOS 后端实现，硬件及同实例回调串行派发由 aDrv 实现；aDev 不按
 CPU 核数选择同步方式。当前 FreeRTOS/GD32 后端仍只支持单核，后续迁移安排见
 [USART 设计](../../docs/usart_design.md)。
+
+### 模式支持
 
 - 轮询：普通与 Direct 可用；不支持 Async。
 - 中断缓冲：普通收发、持续 ReadAsync 可用；当前不实现中断 Direct/TX Async，返回 UNSUPPORTED。
@@ -203,7 +209,7 @@ UART_DE 表示 USART 芯片自动控制，当前未实现，初始化前返回 U
 
 ## 未来升级：RX session（未实现）
 
-仅在需要严格缓冲区所有权和持续零拷贝时再实现，不作为本轮重构前置条件。
+仅在需要严格缓冲区所有权和持续零拷贝时再设计，不属于当前已实现能力。
 拟采用应用缓冲池 + current/next，不建立设备内无限队列：
 
 1. 启动提交首块 buffer，设备取得写入使用权。
@@ -229,7 +235,10 @@ tests/aos/run.py 验证通知、定时器与 workqueue。
 USART 保留类型明确的 Read/Write/WaitTransmitComplete 接口，不依赖 aStream_t。
 应用设备层的 appSystemConsoleInit 初始化串口并绑定 aShell 单例：read/write 转发普通
 收发，write 已启动输出，flush 为 NULL。WaitTransmitComplete 单独用于等待线路
-完成。适配不复制数据、不转移设备所有权。
+完成。流通过 context 借用控制台对象；适配函数不额外复制数据、不转移设备所有权，
+普通中断缓冲收发仍按 Read/Write 契约复制数据。
+正长度 read 的 0 专用于 EOF，暂时无数据用 -1/A_EAGAIN 或超时报错；
+完整约定见 [aStream 接口规范](../../docs/interface_contract.md#同步字节流与-shell)。
 所有流使用者停止后才能关闭底层设备。
 
 ## 静态实例与业务接口
@@ -263,7 +272,6 @@ head 由发送任务独占，空闲量快照允许少写，提交计数仍受保
 未提交的数据保持占用，ISR 满缓冲时丢弃新字节，
 不会覆盖正在复制的数据。RX/TX 的 ISR 单步游标通过边界比较回绕，支持
 任意合法容量，不要求缓冲大小为 2 的幂。DMA 与 Async 的契约不变。
-
 
 ## API 并发与锁的归属
 
