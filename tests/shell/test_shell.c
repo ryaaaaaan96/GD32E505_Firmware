@@ -20,7 +20,7 @@ static const char *input;
 static aSSize_t forced_read = -99;
 static char output[65536];
 static size_t output_size, write_limit = 65536U;
-static unsigned write_calls, write_mode;
+static unsigned write_calls, write_mode, read_calls;
 static uint32_t budgets[65536];
 static char last_arg[ASHELL_LINE_SIZE];
 static int last_argc;
@@ -74,19 +74,25 @@ aStatus_t aOSMutexUnlock(aOSMutex_t p)
     return A_STATUS_OK;
 }
 
-static aSSize_t read_input(void *p, size_t n, aTimeout_t timeout)
+static aSSize_t read_input(void *context, void *p, size_t n,
+                           aTimeout_t timeout)
 {
     size_t count;
+    assert(context == &input);
+    read_calls++;
     assert(n == 64 && lock_depth == 0U);
     assert(timeout.milliseconds == 20U);
     if (forced_read != -99) return forced_read;
     count = input ? strlen(input) : 0U;
+    if (count == 0U) return aOSFailWithStatus(A_STATUS_BUSY);
     if (count > n) count = n;
     if (count) { memcpy(p, input, count); input += count; }
     return (aSSize_t)count;
 }
-static aSSize_t write_output(const void *p, size_t n, aTimeout_t timeout)
+static aSSize_t write_output(void *context, const void *p, size_t n,
+                             aTimeout_t timeout)
 {
+    assert(context == &input);
     assert(write_calls < 65536 && lock_depth == 0U);
     budgets[write_calls++] = timeout.milliseconds;
     if (write_mode == 1) return 0;
@@ -292,6 +298,45 @@ static void test_producers(void)
     }
 }
 
+/* EOF 终止输入会话，临时无数据和超时保留正在编辑的命令。 */
+static void test_input_end(const aShellConfig_t *config)
+{
+    unsigned before = calls;
+    unsigned reads;
+    size_t written;
+
+    feed("capture re");
+    forced_read = -1;
+    last_error = A_EAGAIN;
+    assert(aShellProcess() == A_STATUS_BUSY);
+    last_error = A_ETIMEDOUT;
+    assert(aShellProcess() == A_STATUS_TIMEOUT);
+    forced_read = -99;
+    feed("sumed\r");
+    assert(calls == before + 1U && !strcmp(last_arg, "resumed"));
+
+    feed("capture unfinished");
+    written = output_size;
+    forced_read = 0;
+    last_error = A_EIO; /* 成功的 0 不读取历史 errno。 */
+    assert(aShellProcess() == A_STATUS_EOF);
+    assert(calls == before + 1U && output_size == written);
+    reads = read_calls;
+    forced_read = -99;
+    input = "\r";
+    assert(aShellProcess() == A_STATUS_EOF);
+    assert(read_calls == reads && calls == before + 1U);
+    assert(ASHELL_PRINT("after eof") == A_STATUS_OK);
+    assert(aShellProcess() == A_STATUS_EOF);
+    assert(strstr(output + written, "after eof") != NULL);
+    assert(aShellDeInit() == A_STATUS_OK);
+    assert(aShellInit(config) == A_STATUS_OK);
+    feed("\r");
+    assert(calls == before + 1U); /* 新会话不能执行旧半行。 */
+    feed("capture new\r");
+    assert(calls == before + 2U && !strcmp(last_arg, "new"));
+}
+
 int main(void)
 {
     aShellConfig_t config;
@@ -304,6 +349,7 @@ int main(void)
     assert(aShellIsEnabled());
     assert(aShellProcess() == A_STATUS_NOT_READY);
     assert(aShellInit(&config) == A_STATUS_INVALID_PARAM);
+    config.stream.context = &input;
     config.stream.read = read_input;
     config.stream.write = write_output;
     config.read_timeout = A_TIMEOUT_MS(20U);
@@ -420,6 +466,7 @@ int main(void)
     test_queue();
     test_producers();
     test_reply_failure();
+    test_input_end(&config);
     assert(aShellDeInit() == A_STATUS_OK);
     assert(!allocations && !mutexes && !lock_depth);
     assert(ASHELL_PRINT("not ready") == A_STATUS_NOT_READY);

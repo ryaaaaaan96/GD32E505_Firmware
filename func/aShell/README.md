@@ -41,6 +41,7 @@ aShellConfig_t config;
 aStatus_t status;
 
 aShellConfigStructInit(&config);
+config.stream.context = &console; /* 静态生命周期的端口上下文。 */
 config.stream.read = console_read;
 config.stream.write = console_write;
 status = aShellInit(&config);
@@ -89,6 +90,9 @@ DeInit 丢弃未发送数据，不隐式排空；必须先停止所有生产者�
 - 参数按空格分隔；本阶段不提供引号分组、反斜杠转义、管道或重定向。
 - 接受 CR、LF，CRLF 只提交一次，跨 Process 调用同样有效。
 - 参数超限拒绝执行；行溢出后丢弃整行至换行，防止执行截断命令或尾部。
+- 正长度 read 返回 0 表示 EOF：清除半条命令和历史，不再读取或输出新提示符。
+  Process 仍可发送排队输出，输出成功后返回 A_STATUS_EOF；新会话须 DeInit/Init。
+  暂无输入返回 -1/A_EAGAIN，超时返回 -1/A_ETIMEDOUT，两者保留编辑内容。
 - 输入 I/O 故障会丢弃当前半行至下一次 CR/LF，并提示重试；BUSY/TIMEOUT
   不触发此恢复。使用 nr 官方初始化入口恢复编辑状态，同时清除历史，避免
   把接收缺字节后的残缺文本作为命令执行。
@@ -103,7 +107,8 @@ DeInit 丢弃未发送数据，不隐式排空；必须先停止所有生产者�
   错误都保留未发送尾部，下一轮继续，不重放已经提交的前缀。
 - 前一次排空失败时跳过末尾排空，仍处理输入；命令 Reply 可能尝试推进输出。
   Process 优先返回输出错误，其次是回复错误和输入结果。没有输入仍为 BUSY，
-  即使本轮发送过数据。
+  即使本轮发送过数据；输入结束则返回 EOF。正长度 write 返回 0 属于接口违约，
+  按 ERROR 处理，保留未发送尾部。
 - read_timeout 必须有限或 NO_WAIT，禁止 FOREVER，防止输入等待阻塞唯一消费者。
   命令执行不受整轮超时预算限制；每次 Reply 自带一个 write_timeout。
   队列短临界区的消费提交仍使用互斥锁，不能把 write_timeout 当成硬实时上限。
@@ -133,7 +138,8 @@ aStatus_t status = ASHELL_PRINT("value: %u\r\n", value);
 ```
 
 Linux 接入沿用相同接口，由应用绑定终端/串口 read/write，处理终端原始模式、
-超时、EOF 和恢复设置；RTOS 由应用任务驱动。此次提供主机解析器测试，未增加
+超时及恢复设置，并将底层结果转换为 aStream 的 EOF/暂不可用约定；
+RTOS 由应用任务驱动。此次提供主机解析器测试，未增加
 完整 Linux aOS 后端或交互终端程序。
 
 ## GCC 链接段注册

@@ -103,6 +103,8 @@ void aShellNrResetInput(void)
 
 void aShellPortWrite(const char *data, size_t size)
 {
+    /* EOF 重置编辑器时不再输出提示符；后台输出队列仍可使用。 */
+    if (aShellContext.input_ended) return;
     if (aShellContext.ready) (void)aShellReplyWrite(data, size);
     else (void)aShellOutputWrite(data, size);
 }

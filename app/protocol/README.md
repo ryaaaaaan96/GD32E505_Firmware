@@ -273,8 +273,9 @@ access.result 不使用，状态和协议异常统一通过 complete 返回。
 若通信耗时已超周期，不额外等待一整秒。
 
 protocol.c 按链路保存独立实例和轮询状态。后续多端口可注册多个链路，
-当前仅装配一条 USART2，不同时启动主从。aStream 无 context，新增端口仍需
-自己的收发适配函数。重复 protocolInit 返回 BUSY，不提供运行期重启。
+当前仅装配一条 USART2，不同时启动主从。aStream.context 区分端口实例，
+RTU 的帧流由 aModbusRtuBindTransport 统一绑定，新增链路复用同一组回调。
+重复 protocolInit 返回 BUSY，不提供运行期重启。
 
 ## 持久化与启动
 

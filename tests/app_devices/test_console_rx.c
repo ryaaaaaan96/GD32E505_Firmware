@@ -154,8 +154,10 @@ static void check_read_parameters(void)
     size_t saved_used = used, saved_head = head, saved_tail = tail;
     aBool_t saved_overflow = overflow, saved_error = hardware_error;
     for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-        assert(app_system_console_stream.read(cases[i].buffer, cases[i].size,
-                                              cases[i].timeout) == cases[i].result);
+        assert(app_system_console_stream.read(
+                app_system_console_stream.context, cases[i].buffer,
+                cases[i].size,
+                cases[i].timeout) == cases[i].result);
         if (cases[i].result < 0) assert(aOSGetErrno() == A_EINVAL);
         assert(reads == before + i + 1U); /* 每次都由 aDev 处理参数。 */
         assert(last_read_timeout.type == cases[i].timeout.type);
@@ -265,9 +267,13 @@ int main(void)
     fill(); receive("lost"); process(A_STATUS_ERROR);
     end(); /* Shell 等待新行边界时重新初始化，不能继续丢弃新实例输入。 */
     char byte;
-    assert(app_system_console_stream.read(&byte, 1U, A_TIMEOUT_NO_WAIT) == -1);
+    assert(app_system_console_stream.read(
+            app_system_console_stream.context, &byte, 1U,
+            A_TIMEOUT_NO_WAIT) == -1);
     assert(aOSGetErrno() == A_EINVAL); /* 空句柄沿用 aDev 的错误约定。 */
-    assert(app_system_console_stream.read(NULL, 0U, A_TIMEOUT_NO_WAIT) == -1);
+    assert(app_system_console_stream.read(
+            app_system_console_stream.context, NULL, 0U,
+            A_TIMEOUT_NO_WAIT) == -1);
     assert(aOSGetErrno() == A_EINVAL);
     begin(); receive("go\r"); process(A_STATUS_OK);
     assert(commands == 1U); end();

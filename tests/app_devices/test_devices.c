@@ -167,31 +167,37 @@ static void check_write_budget(void)
 {
     unsigned before = write_calls;
 
-    assert(stream.write(NULL, 0U, A_TIMEOUT_MS(9U)) == 0);
-    assert(stream.write(NULL, 4U, A_TIMEOUT_MS(9U)) == -1);
+    assert(stream.write(stream.context, NULL, 0U, A_TIMEOUT_MS(9U)) == 0);
+    assert(stream.write(stream.context, NULL, 4U, A_TIMEOUT_MS(9U)) == -1);
     assert(last_errno == A_EINVAL);
     assert(write_calls == before && !tx_locked);
     lock_status = A_STATUS_BUSY;
-    assert(stream.write(data, sizeof(data), A_TIMEOUT_NO_WAIT) == -1);
+    assert(stream.write(
+            stream.context, data, sizeof(data), A_TIMEOUT_NO_WAIT) == -1);
     assert(last_errno == A_EAGAIN && write_calls == before);
     lock_status = A_STATUS_TIMEOUT;
-    assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == -1);
+    assert(stream.write(
+            stream.context, data, sizeof(data), A_TIMEOUT_MS(9U)) == -1);
     assert(last_errno == A_ETIMEDOUT && write_calls == before);
     lock_status = A_STATUS_OK;
 
     lock_elapsed = 4U;
     expected_write_timeout = A_TIMEOUT_MS(5U);
-    assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == 2);
+    assert(stream.write(
+            stream.context, data, sizeof(data), A_TIMEOUT_MS(9U)) == 2);
     assert(write_calls == ++before && !tx_locked);
     lock_elapsed = 9U;
-    assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == -1);
+    assert(stream.write(
+            stream.context, data, sizeof(data), A_TIMEOUT_MS(9U)) == -1);
     assert(last_errno == A_ETIMEDOUT && write_calls == before && !tx_locked);
 
     lock_elapsed = 0U;
     expected_write_timeout = A_TIMEOUT_NO_WAIT;
-    assert(stream.write(data, sizeof(data), A_TIMEOUT_NO_WAIT) == 2);
+    assert(stream.write(
+            stream.context, data, sizeof(data), A_TIMEOUT_NO_WAIT) == 2);
     expected_write_timeout = A_TIMEOUT_FOREVER;
-    assert(stream.write(data, sizeof(data), A_TIMEOUT_FOREVER) == 2);
+    assert(stream.write(
+            stream.context, data, sizeof(data), A_TIMEOUT_FOREVER) == 2);
     expected_write_timeout = A_TIMEOUT_MS(9U);
 }
 #endif
@@ -204,7 +210,8 @@ int main(void)
 #if ASHELL_ENABLE
     aStreamStructInit(&stream);
     expected_write_timeout = A_TIMEOUT_MS(9U);
-    assert(app_system_console_stream.write(data, sizeof(data),
+    assert(app_system_console_stream.write(
+            app_system_console_stream.context, data, sizeof(data),
                                           A_TIMEOUT_NO_WAIT) == -1);
     assert(last_errno == A_ENODEV && write_calls == 0U);
     assert(appSystemConsoleDeInit() == A_STATUS_NOT_READY);
@@ -240,16 +247,21 @@ int main(void)
     assert(appSystemConsoleInit() == A_STATUS_BUSY);
     assert(shell_calls == 1 && deinit_calls == 0);
     assert(stream.read && stream.write && !stream.flush);
-    assert(stream.read(data, sizeof(data), A_TIMEOUT_MS(7U)) == 2);
-    assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == 2);
+    assert(stream.read(
+            stream.context, data, sizeof(data), A_TIMEOUT_MS(7U)) == 2);
+    assert(stream.write(
+            stream.context, data, sizeof(data), A_TIMEOUT_MS(9U)) == 2);
     check_write_budget();
     io_result = -1;
-    assert(stream.read(data, sizeof(data), A_TIMEOUT_MS(7U)) == -1);
+    assert(stream.read(
+            stream.context, data, sizeof(data), A_TIMEOUT_MS(7U)) == -1);
     assert(rx_discards == 1U);
     rx_error = A_STATUS_ERROR;
-    assert(stream.read(data, sizeof(data), A_TIMEOUT_MS(7U)) == -1);
+    assert(stream.read(
+            stream.context, data, sizeof(data), A_TIMEOUT_MS(7U)) == -1);
     assert(rx_discards == 2U && rx_error == A_STATUS_OK);
-    assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == -1);
+    assert(stream.write(
+            stream.context, data, sizeof(data), A_TIMEOUT_MS(9U)) == -1);
     assert(last_errno == A_EIO && !tx_locked);
     assert(usart_calls == 1);
 #ifdef CLEANUP_FAILURE
@@ -259,12 +271,14 @@ int main(void)
     assert(appSystemConsoleInit() == A_STATUS_BUSY);
     /* 释放失败后原有流仍指向有效句柄。 */
     io_result = 2;
-    assert(stream.write(data, sizeof(data), A_TIMEOUT_MS(9U)) == 2);
+    assert(stream.write(
+            stream.context, data, sizeof(data), A_TIMEOUT_MS(9U)) == 2);
 #endif
     assert(appSystemConsoleDeInit() == A_STATUS_OK);
     assert(!shell_ready && shell_deinit_calls == 1U);
     assert(mutex_creates == 1U && mutex_destroys == 1U);
-    assert(app_system_console_stream.write(data, sizeof(data),
+    assert(app_system_console_stream.write(
+            app_system_console_stream.context, data, sizeof(data),
                                           A_TIMEOUT_NO_WAIT) == -1);
     assert(last_errno == A_ENODEV);
     assert(appSystemConsoleDeInit() == A_STATUS_NOT_READY);

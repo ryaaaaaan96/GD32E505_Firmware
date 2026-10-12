@@ -22,7 +22,7 @@ MCU 运行模型；STM32 迁移主要涉及硬件适配，Linux 迁移还涉及�
 | 5 | USART 配置中的中断优先级归属 | 仅将 `interrupt_priority` 下沉到 `drv_config`，由 aDrv 管理 |
 | 6 | 共享状态依赖单核中断同步 | aDev 沿用 aOS/aDrv 平台接口；SMP/Linux 后端适配留到实际迁移时处理 |
 | 7 | RTU 分帧依赖逐字节即时调用 | 已修复：增加采集时间入口，完整帧通过现有 transport 适配 |
-| 8 | aStream 缺少实例上下文，EOF 语义不清 | 待修复，补充 context 并区分 EOF、暂不可用和超时 |
+| 8 | aStream 缺少实例上下文，EOF 语义不清 | 已修复：统一 context 与 EOF 契约，同步 Shell/Modbus 及应用适配 |
 | 9 | 缺少等待任务退出的接口 | 增加退出等待接口 |
 | 10 | DMA 缓存一致性及内存可达性由调用者保证 | 暂不修复 |
 | 11 | 数据库多实例操作全局串行化 | 保持当前设计 |
@@ -256,18 +256,32 @@ USART ASan/UBSan、DMA、控制台联测、Modbus 和架构检查通过，驱动
 位置：[aModbus_rtu.h](func/aModbus/aModbus_rtu.h)、
 [aModbus_rtu.c](func/aModbus/aModbus_rtu.c)。
 
-### 8. aStream 实例上下文与 EOF（中高）
+### 8. aStream 实例上下文与 EOF（中高，已修复）
 
-当前回调缺少 `void *context`，多实例只能依赖专用函数或全局变量；返回 0
-同时表示无进展或输入结束，上层不能统一识别连接关闭。
+原回调缺少实例上下文，多实例需提供专用函数；0 同时表示无进展或输入结束。
 
-- [ ] 增加实例上下文，并贯穿 read、write、可选 flush 和全部适配调用。
-- [ ] 明确正长度读取时的 EOF、暂不可用、超时及错误；单独说明零长度请求。
-- [ ] 明确写入无进展的语义，保留部分成功和超时预算约定。
-- [ ] 同步 Shell、Modbus、控制台及 RS485 适配，验证同一组回调服务多个实例、
-  EOF 时未完成命令的处理，以及暂时无数据后的正常恢复。
+- [x] 增加借用的 context，贯穿 read、write、可选 flush 和全部适配调用。
+- [x] 正长度 read 的 0 仅表示 EOF；暂不可用用 -1/A_EAGAIN，超时用
+  -1/A_ETIMEDOUT；合法零长度读写返回 0，不表示 EOF。
+- [x] 正长度 write 无进展用错误码，返回 0 按 ERROR 处理；保留部分进度
+  和总超时预算，不增加锁或动态分配。
+- [x] Shell 返回 A_STATUS_EOF，清除未提交命令及历史，后续只处理输出；
+  新输入会话须 DeInit/Init，底层资源仍由应用管理。
+- [x] Modbus 收到 EOF 后本次返回 EOF，后续 NOT_READY，复用已有故障状态。
+  RTU 当前帧耗尽后继续索取用 -1/A_EIO 报告帧不完整，不跨帧、不误报 EOF。
+- [x] aModbusRtuBindTransport 统一绑定流及辅助操作，删除 protocol 的专用
+  帧收发包装；flush 正确转交物理流上下文，控制台与日志沿用原 TX 锁。
 
-位置：[aStream.h](platform/aLib/include/aStream.h)。
+验证：Shell、日志/控制台、Modbus 主从及 Demo、启动编排和架构主机回归通过。
+覆盖共用回调的多实例、物理 flush、零长度、半条命令及半帧 EOF、暂不可用后
+恢复和 EOF 后拒绝继续事务。Shell/Modbus 的 ASan/UBSan 回归通过；
+Debug 及 7 组 Release 裁剪构建通过，尚未进行板上验证。
+
+接口变更：自定义流回调及直接调用须补充 context；旧的“无数据返回 0”适配
+须改为错误码。Linux 具体设备及连接管理仍留给后端和应用，不在本项新增。
+
+位置：[aStream.h](platform/aLib/include/aStream.h)、
+[aShell.c](func/aShell/src/aShell.c)、[aModbus_rtu.c](func/aModbus/aModbus_rtu.c)。
 
 ### 9. 任务退出等待（中）
 

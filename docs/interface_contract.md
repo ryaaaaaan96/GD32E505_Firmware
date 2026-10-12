@@ -210,13 +210,24 @@ OS 堆分配失败记录故障后返回，由调用方处理 NO_MEMORY；应用�
 
 ## 同步字节流与 Shell
 
-aLib/aStream.h 定义 aStream_t，包含 read、write、可选 flush；不拥有底层资源。
-通过 aStreamStructInit(&stream) 初始化，显式将三个回调设为 NULL；传 NULL 不操作。
-读写返回实际长度，允许部分进度；0 表示无进展或输入结束；-1 表示失败并设置项目
-errno。每次调用共享一个超时预算，返回后不得保留缓冲区。Linux 适配需要转换
-POSIX errno。使用者按所需能力检查操作指针，不能强转不兼容的函数指针。
+aLib/aStream.h 定义 aStream_t，包含 context、read、write、可选 flush；
+不拥有底层资源。aStreamStructInit 将上述成员设为 NULL；传 NULL 不操作。
+三个回调均以 context 为第一个参数，原样传递，可为 NULL；同一组回调通过
+context 区分实例。资源及上下文在所有使用者退出前必须有效。
 
-流接口不传 context；同一套回调不区分设备实例，多实例需各自提供适配函数。
+正长度 read 返回正数为实际进度，0 仅表示输入结束（EOF）；合法零长度请求
+返回 0，不访问缓冲且不表示 EOF。EOF 不意味着输出方向也关闭。
+正长度 write 成功返回正数，无进展必须返回 -1；0 按接口违约处理。
+读写失败返回 -1 并设置项目 errno：A_EAGAIN 表示暂不可用，A_ETIMEDOUT
+表示预算耗尽。已有有效进度返回实际长度，后续调用再报告结束或错误。
+每次调用共享一个超时预算，返回后不得保留缓冲区；非负结果不读取历史 errno。
+Linux 适配需要转换 POSIX errno 和具体设备的无数据语义，不能把底层所有 0
+都直接当作 EOF。使用者检查操作指针，不能强转不兼容的函数指针。
+
+aShellProcess 和 Modbus 操作用 A_STATUS_EOF 报告输入结束，资源仍由应用管理。
+Shell 丢弃半行并停止读取，保持输出可用；新会话须 DeInit/Init。
+Modbus 操作收到 EOF 后不再继续事务，后续返回 NOT_READY，须重建实例。
+RTU 当前帧耗尽后继续读返回 -1/A_EIO，不跨帧，也不误报 EOF。
 RTU 的延迟字节输入使用实际采集时间，补齐采集记录后才允许判断静默；
 底层已有完整帧边界时通过 aModbusTransport_t 适配，read 不跨帧，finish
 只释放当前帧。普通串口 read 的一次返回不代表完整帧，具体约束见
@@ -227,7 +238,7 @@ USART 到 Stream 的转换由 app/devices 承担：appSystemConsoleInit 初始�
 flush 设为 NULL。配置由 Shell 复制，任务层负责创建任务。aDev 不依赖 Stream。
 应用先停止 Shell 等所有流使用者，再关闭底层设备。流复用 USART 的互斥和超时规则。
 
-flush(timeout) 返回 aStatus_t，用于将待发送缓冲数据提交到实际输出接口。
+flush(context, timeout) 返回 aStatus_t，用于将待发送缓冲数据提交到实际输出接口。
 flush 非 NULL 时 write 可以先缓存，调用者按适配器约定显式提交；为 NULL 时
 write 已直接提交输出，无需额外刷新，调用者跳过 flush 即可。
 OK 表示提交成功，不表示线路已经发送完成、数据持久化或对端收到；不清空 RX。

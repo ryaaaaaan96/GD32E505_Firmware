@@ -318,10 +318,13 @@ RTU 三个辅助回调必须提供：
 仅 USART IDLE 或毫秒超时不足以保证严格 RTU 接收时序。
 不要将 Shell 与 Modbus 绑定到同一条接收流。
 TCP 可将三个辅助回调设为 NULL，不应在每次请求前清理 socket 中的合法数据。
-aStream 不携带 context，每个端口提供自己的适配函数并绑定私有实例。
-transport.context 只供 RTU 辅助操作使用，不能用它区分 Stream 读写实例。
-当前接口适合固定端口；运行时任意数量的动态 socket 连接需要额外设计端口管理，
-本次不宣称支持动态连接池。
+aStream.context 绑定字节流实例，同一组 read/write/flush 可服务多个端口。
+transport.context 独立供辅助操作及 finish 使用；RTU 默认绑定时两者均为 RTU handle。
+流与上下文均由调用方持有，须在协议使用期间有效，创建/关闭连接由应用负责。
+正长度 read 的 0 表示 EOF，本次操作返回 A_STATUS_EOF，后续返回 NOT_READY，
+须重新绑定有效输入并重建协议实例。暂不可用使用 -1/A_EAGAIN，超时使用
+-1/A_ETIMEDOUT；不能把 EOF 转成一般 I/O 错误或暂时无数据。
+正长度 write 无进展也须使用错误码，返回 0 按 ERROR 处理。
 
 可选 `finish` 回调在每笔操作结束、释放实例使用权之前调用，成功和失败
 路径均执行。它只释放当前接收帧，禁止清空后续排队帧；TCP 一般设为 NULL。
@@ -378,6 +381,7 @@ aOSGetUptimeMs 值，必须与实例当前时钟同源；只提交初始化后�
 
 完整帧适配由底层保证帧内时序、边界及完整 ADU 长度（含地址和 CRC）。
 stream.read 可分次返回当前帧，但不得跨到下一帧；finish 只释放当前帧。
+当前帧耗尽后继续索取返回 -1/A_EIO，表示帧不完整，不返回流 EOF。
 同时提供 discard_input、prepare_frame 和 wait_transmit_complete，分别
 负责恢复边界、发送前静默和线路发送完成；CRC 校验仍由协议核心处理。
 这一路径无需创建 aModbusRtu 实例，也不调用 aModbusRtuBindTransport。
@@ -389,9 +393,9 @@ Linux 普通串口的一次 read 可能是半帧或多帧，没有上述采集�
 `aModbus` 不包含 aDevUsart、GPIO 或 DWT，不创建/关闭具体设备或 TCP 连接。
 CMake 只有 `aModbus` 目标，依赖 aBus/aOS/aLib，不再提供 `aModbusUsart`。
 此前直接拥有 USART 的组合接口已移除，应用通过公开接口编排生命周期。
-接口迁移：原 transport.read/write 改为 transport.stream.read/write，
-移除读写回调的 context 参数；原 aModbusRtuGetTransport 改为
-aModbusRtuBindTransport，并由应用先提供帧读写的 Stream 适配。
+流接口的 read/write/flush 均接收 stream.context 作为第一个参数。
+aModbusRtuBindTransport 自动填写完整流及 RTU 辅助操作，覆盖原有配置，
+应用无需按端口编写帧读写包装函数。
 
 当前应用由 [protocol.c](../../app/protocol/protocol.c)
 装配协议，物理端口在 [rs485_device.c](../../app/devices/rs485/rs485_device.c)：
@@ -415,17 +419,16 @@ aModbusServiceConfigStructInit 获取整组默认值：协议按 aModbusConfigSt
 应用须补齐端口、总线和采集或映射配置，再自行决定任务资源与执行入口。
 初始化函数仅填写结构体，不申请资源；只配置协议实例时仍用 aModbusConfig_t。
 
-应用 Stream 的 read/write 分别转调 `aModbusRtuRead/Write`。RTU Read 消费
-已经确定边界的帧，Write 经 output.write 提交物理字节并记录发送时序。
-`aModbusRtuBindTransport` 保留应用填写的 Stream，只补充 RTU 辅助操作。
-当前串口 write 直接提交，因此 output.flush 和协议 stream.flush 均为 NULL。
-如果端口使用缓冲输出，这两个 flush 须使用同一回调。
+aModbusRtuBindTransport 将流绑定到指定 RTU 实例，Read 消费已确定边界的帧，
+Write 经物理 output.write/output.context 提交字节并记录发送时序。
+物理 output.flush 为空时流 flush 也为空；非空时由统一适配转交物理上下文，
+无需应用复制 flush 指针。当前串口 write 直接提交，flush 为 NULL。
 
 协议和 RTU 分帧实例遵循 AMODBUS 分配开关；串口遵循 ADEV_USART 分配开关。
 静态方式使用各自 `_instance.h` 中的显式存储。运行期不申请协议内存。
 当前板端依赖固定内核频率，休眠、调试暂停和 ISR 延迟仍需实测。
 
-TCP 使用已经建立连接的 Stream：只设置 transport.stream 的 read/write，
+TCP 使用已经建立连接的 Stream：设置 transport.stream.context 和 read/write，
 可选 flush，RTU 辅助操作全部留空。连接建立、断线后的重连及资源释放
 由应用负责。库保留 RTU/TCP 主从能力，ASCII 暂未实现。
 

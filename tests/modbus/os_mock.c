@@ -22,6 +22,12 @@ aSSize_t aOSFailWithStatus(aStatus_t status)
     return -1;
 }
 
+aSSize_t aOSFailWithTimeout(aTimeout_t timeout)
+{
+    return aOSFailWithStatus(timeout.type == A_TIMEOUT_TYPE_RELATIVE &&
+        timeout.milliseconds == 0U ? A_STATUS_BUSY : A_STATUS_TIMEOUT);
+}
+
 void *aOSAlloc(size_t size)
 {
     void *memory;

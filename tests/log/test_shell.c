@@ -52,6 +52,8 @@ aSSize_t aDevUsartRead(aDevUsartHandle_t *handle, void *data, size_t size,
 
     (void)timeout;
     assert(handle == (aDevUsartHandle_t *)(void *)&device_storage);
+    if (size == 0U) return 0;
+    if (count == 0U) return aOSFailWithStatus(A_STATUS_BUSY);
     if (count > size) count = size;
     if (count != 0U) {
         memcpy(data, input, count);

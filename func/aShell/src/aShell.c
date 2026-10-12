@@ -35,6 +35,7 @@ aStatus_t aShellInit(const aShellConfig_t *config)
     aShellContext.reply_status = A_STATUS_OK;
     aShellContext.reply_interrupted = A_FALSE;
     aShellContext.discard_input = A_FALSE;
+    aShellContext.input_ended = A_FALSE;
     status = aShellNrInit(); /* Initial prompt is queued, never sent here. */
     if (status != A_STATUS_OK) {
         aShellOutputDeInit();
@@ -64,14 +65,23 @@ aStatus_t aShellProcess(void)
         if (output_status == A_STATUS_OK)
             aShellContext.reply_interrupted = A_FALSE;
     }
-    count = aShellContext.config.stream.read(
-        data, sizeof(data), aShellContext.config.read_timeout);
+    /* EOF 后继续允许输出，但不再读取；新输入会话须重新初始化。 */
+    count = aShellContext.input_ended ? 0 :
+        aShellContext.config.stream.read(
+            aShellContext.config.stream.context, data, sizeof(data),
+            aShellContext.config.read_timeout);
     if (count < -1 || count > (aSSize_t)sizeof(data)) {
         input_status = A_STATUS_ERROR;
     } else if (count < 0) {
         input_status = aShellIoError();
     } else if (count == 0) {
-        input_status = A_STATUS_BUSY;
+        if (!aShellContext.input_ended) {
+            aShellContext.input_ended = A_TRUE;
+            aShellNrResetInput(); /* 未提交的命令不能带入下一次会话。 */
+            aShellContext.previous_cr = A_FALSE;
+            aShellContext.discard_input = A_FALSE;
+        }
+        input_status = A_STATUS_EOF;
     } else {
         input_status = A_STATUS_OK;
         for (i = 0; i < count; ++i) {

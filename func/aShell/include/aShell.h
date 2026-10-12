@@ -66,6 +66,8 @@ aStatus_t aShellInit(const aShellConfig_t *config);
  * 命令执行及队列短临界区的互斥等待不受整轮时间上限约束。
  * 无输入返回 BUSY；输出错误优先返回，未发送字节留待下次处理。
  * 输入 I/O 故障丢弃至下一个换行并重置编辑/历史；超时与 BUSY 不重置。
+ * EOF 清除未提交命令，后续不再读取；仍可发送队列，输出成功后返回 EOF。
+ * 新输入会话须 DeInit/Init；底层资源由调用方管理，不自动关闭。
  * OK 不表示业务成功或输出队列为空；入队丢弃通过 Print/Stats 报告。
  */
 aStatus_t aShellProcess(void);

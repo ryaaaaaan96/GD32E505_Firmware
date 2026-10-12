@@ -124,7 +124,7 @@ system 设备公开 appSystemStatusLedInit 与 appSystemConsoleInit，保留按�
 控制台通过 `appSystemConsoleInit(void)` 初始化 USART、绑定 Stream 并初始化 aShell 单例，
 USART 类型、私有控制台句柄指针和适配回调只在 app/devices 内部使用；
 公开只读 `app_system_console_stream`，Shell 和日志统一通过它访问串口；
-流接口不携带 context，回调直接访问已绑定的控制台句柄。aStream_t 定义在
+流接口通过 context 借用控制台端口，端口保存串口句柄与 TX 锁。aStream_t 定义在
 platform/aLib/include/aStream.h；Shell 配置在设备初始化函数内构造，任务层创建并运行 Shell 任务。
 flush 非空时表示显式提交缓冲输出；NULL 表示 write 已直接提交，无需刷新。
 flush 不等待线路完成、不丢弃输入；Shell 不自动调用。

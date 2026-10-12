@@ -76,25 +76,31 @@ static const aDevUsartConfig_t usart_config = {
 };
 
 /* RX 由 Shell 独占；TX 由 Shell 和日志共享，只在统一发送入口加锁。 */
-static aDevUsartHandle_t *console_handle;
-static aOSMutex_t console_tx_mutex;
+typedef struct {
+    aDevUsartHandle_t *handle;
+    aOSMutex_t tx_mutex;
+} consolePort_t;
+
+static consolePort_t console;
 
 /* 应用适配：通用流不暴露 USART 类型；接收故障先报告给 Shell 再恢复。 */
-static aSSize_t console_read(void *buffer, size_t size,
+static aSSize_t console_read(void *context, void *buffer, size_t size,
                             aTimeout_t timeout)
 {
-    aSSize_t count = aDevUsartRead(console_handle, buffer, size, timeout);
+    consolePort_t *port = context;
+    aSSize_t count = aDevUsartRead(port->handle, buffer, size, timeout);
     if (count < 0 && aOSGetErrno() == A_EIO) {
         /* 丢弃失败仍保留异常锁存；Shell 等待新的 CR/LF，后续读取可重试。 */
-        (void)aDevUsartDiscardRx(console_handle);
+        (void)aDevUsartDiscardRx(port->handle);
         return aOSFailWithStatus(A_STATUS_ERROR);
     }
     return count;
 }
 
-static aSSize_t console_write(const void *buffer, size_t size,
+static aSSize_t console_write(void *context, const void *buffer, size_t size,
                              aTimeout_t timeout)
 {
+    consolePort_t *port = context;
     aTimepoint_t deadline;
     aTimeout_t remaining;
     aStatus_t status;
@@ -104,13 +110,13 @@ static aSSize_t console_write(const void *buffer, size_t size,
         (buffer == NULL && size != 0U)) {
         return aOSFailWithStatus(A_STATUS_INVALID_PARAM);
     }
-    if (console_handle == NULL) {
+    if (port->handle == NULL) {
         return aOSFailWithStatus(A_STATUS_NOT_READY);
     }
     if (size == 0U) return 0;
 
     deadline = aTimepointCalc(timeout, aOSGetUptimeMs());
-    status = aOSMutexLock(console_tx_mutex, timeout);
+    status = aOSMutexLock(port->tx_mutex, timeout);
     if (status != A_STATUS_OK) return aOSFailWithStatus(status);
 
     /* 锁等待与串口写入共用预算；NO_WAIT 仍允许尝试立即提交。 */
@@ -120,9 +126,9 @@ static aSSize_t console_write(const void *buffer, size_t size,
         count = aOSFailWithStatus(A_STATUS_TIMEOUT);
     } else {
         count = aDevUsartWrite(
-            console_handle, buffer, size, remaining);
+            port->handle, buffer, size, remaining);
     }
-    status = aOSMutexUnlock(console_tx_mutex);
+    status = aOSMutexUnlock(port->tx_mutex);
     /* 已提交的字节必须返回实际进度，不能因解锁错误诱发整段重发。 */
     if (count == 0 && status != A_STATUS_OK) {
         return aOSFailWithStatus(status);
@@ -131,6 +137,7 @@ static aSSize_t console_write(const void *buffer, size_t size,
 }
 
 const aStream_t app_system_console_stream = {
+    .context = &console,
     .read = console_read,
     .write = console_write,
     .flush = NULL, /* write 已提交发送；不等同于线路发送完成。 */
@@ -143,15 +150,15 @@ aStatus_t appSystemConsoleInit(void)
     aStatus_t cleanup_status;
 
     /* 保留仍在使用或尚未清理成功的句柄，避免 Create 覆盖所有权。 */
-    if (console_handle != NULL) return A_STATUS_BUSY;
+    if (console.handle != NULL) return A_STATUS_BUSY;
     aShellConfigStructInit(&config);
-    status = aOSMutexCreate(&console_tx_mutex);
+    status = aOSMutexCreate(&console.tx_mutex);
     if (status != A_STATUS_OK) return status;
     status = aDevUsartCreate(
         &usart_config,
-        &console_handle);
+        &console.handle);
     if (status != A_STATUS_OK) {
-        aOSMutexDestroy(&console_tx_mutex);
+        aOSMutexDestroy(&console.tx_mutex);
         return status;
     }
     config.stream = app_system_console_stream;
@@ -160,10 +167,10 @@ aStatus_t appSystemConsoleInit(void)
 
     status = aShellInit(&config);
     if (status != A_STATUS_OK) {
-        cleanup_status = aDevUsartDestroy(console_handle);
+        cleanup_status = aDevUsartDestroy(console.handle);
         if (cleanup_status != A_STATUS_OK) return cleanup_status;
-        console_handle = NULL;
-        aOSMutexDestroy(&console_tx_mutex);
+        console.handle = NULL;
+        aOSMutexDestroy(&console.tx_mutex);
         return status;
     }
     return A_STATUS_OK;
@@ -173,12 +180,12 @@ aStatus_t appSystemConsoleDeInit(void)
 {
     aStatus_t status;
 
-    if (console_handle == NULL) return A_STATUS_NOT_READY;
+    if (console.handle == NULL) return A_STATUS_NOT_READY;
     /* 调用者已停止读写；串口仍忙时保留句柄与 Shell，允许稍后重试清理。 */
-    status = aDevUsartDestroy(console_handle);
+    status = aDevUsartDestroy(console.handle);
     if (status != A_STATUS_OK) return status;
-    console_handle = NULL;
-    aOSMutexDestroy(&console_tx_mutex);
+    console.handle = NULL;
+    aOSMutexDestroy(&console.tx_mutex);
     status = aShellDeInit();
     /* Shell 初始化失败后，也允许通过此入口清理遗留串口。 */
     return status == A_STATUS_NOT_READY ? A_STATUS_OK : status;
@@ -374,7 +381,8 @@ static aStatus_t console_output(void *context, const char *data, size_t size)
     aSSize_t count;
 
     (void)context;
-    count = app_system_console_stream.write(data, size, A_TIMEOUT_MS(20U));
+    count = app_system_console_stream.write(
+        app_system_console_stream.context, data, size, A_TIMEOUT_MS(20U));
     if (count >= 0) {
         /* 部分提交可能已输出前缀，不读取旧 errno，也不重发整条日志。 */
         return (size_t)count == size ? A_STATUS_OK : A_STATUS_ERROR;

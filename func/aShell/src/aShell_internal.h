@@ -11,6 +11,7 @@ typedef struct {
     aStatus_t reply_status;
     aBool_t reply_interrupted;
     aBool_t discard_input;
+    aBool_t input_ended;
 } aShellContext_t;
 
 extern aShellContext_t aShellContext;

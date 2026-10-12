@@ -239,7 +239,7 @@ static int32_t transport_read(uint8_t *data, uint16_t size,
     }
     while (done < size) {
         aSSize_t count = handle->config.transport.stream.read(
-            data + done, size - done,
+            handle->config.transport.stream.context, data + done, size - done,
             io_timeout(handle, &limit));
         if (count < 0) {
             aErrno_t error = aOSGetErrno();
@@ -251,7 +251,10 @@ static int32_t transport_read(uint8_t *data, uint16_t size,
             io_fail(handle, A_STATUS_ERROR);
             return -1;
         }
-        if (count == 0) break;
+        if (count == 0) {
+            io_fail(handle, A_STATUS_EOF);
+            return -1;
+        }
         done += (size_t)count;
         limit = aTimepointCalc(byte, aOSGetUptimeMs());
     }
@@ -299,7 +302,8 @@ static int32_t transport_write(const uint8_t *data, uint16_t size,
     if (transport->stream.flush != NULL) handle->fault = A_TRUE;
     while (done < size) {
         aSSize_t count = transport->stream.write(
-            data + done, size - done, io_timeout(handle, &limit));
+            transport->stream.context, data + done, size - done,
+            io_timeout(handle, &limit));
         if (count < 0) {
             aErrno_t error = aOSGetErrno();
             if (error == A_EAGAIN || error == A_ETIMEDOUT) break;
@@ -310,12 +314,16 @@ static int32_t transport_write(const uint8_t *data, uint16_t size,
             io_fail(handle, A_STATUS_ERROR);
             return -1;
         }
-        if (count == 0) break;
+        if (count == 0) {
+            io_fail(handle, A_STATUS_ERROR);
+            return -1;
+        }
         done += (size_t)count;
         limit = aTimepointCalc(byte, aOSGetUptimeMs());
     }
     if (done == size && transport->stream.flush != NULL) {
-        status = transport->stream.flush(aModbusRemaining(handle));
+        status = transport->stream.flush(transport->stream.context,
+                                         aModbusRemaining(handle));
         if (status != A_STATUS_OK) {
             io_fail(handle, status);
             return -1;
@@ -629,7 +637,8 @@ static aStatus_t operation_end(aModbusHandle_t *handle, nmbs_error error,
     }
     if (handle->io_status != A_STATUS_OK) status = handle->io_status;
     if (error < 0 || handle->io_status != A_STATUS_OK) {
-        if (handle->config.transport_type == AMODBUS_TRANSPORT_TCP) {
+        if (status == A_STATUS_EOF ||
+            handle->config.transport_type == AMODBUS_TRANSPORT_TCP) {
             handle->fault = A_TRUE;
         } else {
             handle->recover_input = A_TRUE;

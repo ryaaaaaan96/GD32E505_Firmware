@@ -23,7 +23,8 @@ typedef enum {
     A_STATUS_NO_MEMORY = -7, /**< 无法分配所需内存。 */
     A_STATUS_CANCELLED = -8, /**< 请求已取消。 */
     A_STATUS_NOT_FOUND = -9, /**< 指定对象或标识不存在。 */
-    A_STATUS_DATA_MISMATCH = -10 /**< 已有数据格式与当前定义不兼容。 */
+    A_STATUS_DATA_MISMATCH = -10, /**< 已有数据格式与当前定义不兼容。 */
+    A_STATUS_EOF = -11 /**< 输入结束；供流消费者报告，字节读取仍返回 0。 */
 } aStatus_t;
 
 #endif

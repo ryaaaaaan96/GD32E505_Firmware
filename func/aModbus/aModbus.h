@@ -70,12 +70,13 @@ typedef enum {
 
 /** 协议借用的传输，不创建或关闭端口。
  * stream 负责同步字节收发，允许部分进度；回调返回后不得持有缓冲区。
- * TCP 端口须将 EOF 转成 -1/A_EIO，0 仅表示本次没有数据。
+ * 正长度 read 返回 0 表示 EOF，本次操作返回 EOF，后续返回 NOT_READY。
+ * 暂无数据使用 -1/A_EAGAIN，等待耗尽使用 -1/A_ETIMEDOUT。
  * flush 可为 NULL；非空时在完整报文提交后调用，再等待 RTU 线路完成。
  * 带 flush 的流写入/提交失败后，后续操作返回 NOT_READY，须清理端口
  * 输出缓冲并重建实例；库无法撤回端口已接收的部分报文。
  * RTU 还必须提供输入恢复、帧间隔和发送完成操作；context 只供这些
- * 辅助操作及 finish 使用，不改变 aStream 的无 context 约定。
+ * 辅助操作及 finish 使用，stream.context 独立绑定字节流实例。
  * TCP 的辅助操作通常为空；不得随意清空后续合法 TCP 报文。
  */
 typedef struct {

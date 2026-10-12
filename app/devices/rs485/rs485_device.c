@@ -36,10 +36,12 @@ static aDevUsartHandle_t *usart;
 static aDevUsartHandle_t usart_instance;
 #endif
 
-static aSSize_t writeBytes(const void *data, size_t size, aTimeout_t timeout)
+static aSSize_t writeBytes(void *context, const void *data, size_t size,
+                          aTimeout_t timeout)
 {
-    if (usart == NULL) return aOSFailWithStatus(A_STATUS_NOT_READY);
-    return aDevUsartWrite(usart, data, size, timeout);
+    aDevUsartHandle_t *const *handle = context;
+    if (*handle == NULL) return aOSFailWithStatus(A_STATUS_NOT_READY);
+    return aDevUsartWrite(*handle, data, size, timeout);
 }
 
 static uint32_t ticks(void *context)
@@ -92,6 +94,8 @@ aStatus_t rs485PortPrepare(rs485Port_t *port)
     status = aDrvCycleCounterEnable();
     if (status != A_STATUS_OK) return status;
     aStreamStructInit(&port->output);
+    /* Prepare 先于 Open，借用句柄槽位以获取随后打开的实例。 */
+    port->output.context = &usart;
     port->output.write = writeBytes;
     port->baud_rate = config->baud_rate;
     port->character_bits = 10U +

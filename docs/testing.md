@@ -40,7 +40,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | Modbus 协议、aBus 映射与通用 RTU 多实例/时序 | `python3 tests/modbus/run.py` |
 | 协议统一入口、启动顺序与功能关闭 | `python3 tests/protocol_tasks/run.py` |
 | Modbus 板级端口、主从、任务调度与生命周期 | `python3 tests/modbus_demo/run.py` |
-| Shell / 日志、共享控制台发送互斥及部分写入 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
+| Shell EOF/半行清理、日志、共享控制台发送互斥及部分写入 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
 | 应用设备清理、控制台 RX 溢出恢复、TX 锁超时、启动编排与 Shell 就绪门控 | `python3 tests/app_devices/run.py`、`python3 tests/app_startup/run.py` |
 | 调试脚本 | `python3 tests/scripts/test_debug.py` |
 
@@ -153,3 +153,8 @@ RTU 分帧覆盖即时输入、带采集时间的延迟/分块/多帧批量交�
 采集错误、帧间静默、多实例，以及采集计数器和毫秒时基的 32 位回绕。
 Demo 验证主从、六帧采集、事件提前唤醒、临时请求和资源失败清理。
 构建通过不代表板上时序已验证；主站可通过 `protocol refresh` 检查事件触发。
+
+字节流回归同时验证 read/write/flush 的实例上下文，RTU 同一组回调服务两个
+实例及物理 flush 上下文转交；零长度请求、暂不可用、超时和帧耗尽分别处理。
+Shell 覆盖半行等待后续输入、EOF 清理、EOF 后继续输出及重新初始化；Modbus
+覆盖主从 EOF、半帧 EOF、写入返回零的违约和 EOF 后拒绝继续事务。

@@ -89,11 +89,11 @@ static aStatus_t output_drain(const aTimepoint_t *deadline)
         size = sizeof(output.data) - tail;
         if (size > remaining) size = remaining;
         count = aShellContext.config.stream.write(
-            output.data + tail, size,
+            aShellContext.config.stream.context, output.data + tail, size,
             aTimepointRemaining(deadline, aOSGetUptimeMs()));
         if (count < -1 || count > (aSSize_t)size) return A_STATUS_ERROR;
         if (count < 0) return aShellIoError();
-        if (count == 0) return A_STATUS_BUSY;
+        if (count == 0) return A_STATUS_ERROR;
 
         status = aOSMutexLock(output.mutex, A_TIMEOUT_FOREVER);
         if (status != A_STATUS_OK) return status;

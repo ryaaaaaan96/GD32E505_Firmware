@@ -68,15 +68,17 @@ void aModbusRtuReceive(void *context, uint8_t byte, aStatus_t status);
  */
 void aModbusRtuReceiveAt(aModbusRtuHandle_t *handle, uint8_t byte,
                        aStatus_t status, uint32_t rx_ticks, uint32_t rx_ms);
-/** 将已分帧的输入和物理输出适配成 aStream 的无 context 回调。
- * 应用为每个端口分别提供薄适配函数，转调对应实例的 Read/Write。
+/** 读取当前帧或提交物理输出；流回调由 BindTransport 统一适配。
+ * 正长度 Read 不跨帧，当前帧耗尽后再读返回 -1/A_EIO，不表示流 EOF。
+ * 无帧时按 timeout 返回 -1/A_EAGAIN 或 -1/A_ETIMEDOUT。
  * 仅任务上下文，同一实例由一个协议消费者串行调用。 */
 aSSize_t aModbusRtuRead(aModbusRtuHandle_t *handle, void *data, size_t size,
                       aTimeout_t timeout);
 aSSize_t aModbusRtuWrite(aModbusRtuHandle_t *handle, const void *data,
                        size_t size, aTimeout_t timeout);
-/** 补充 RTU 辅助操作，保留应用已设置的 stream.read/write/flush。
- * read/write 必填；flush 须对应 config.output.flush，可同时为空。
+/** 填写完整 transport，覆盖原有流及辅助操作；无须应用提供帧适配函数。
+ * stream.context 与 transport.context 均绑定 handle；可选 flush
+ * 转交物理 output.context，物理流无 flush 时保持 NULL。
  * 协议只借用实例；销毁前先停止消费者和接收生产者。
  */
 aStatus_t aModbusRtuBindTransport(aModbusRtuHandle_t *handle,

@@ -260,9 +260,12 @@ aSSize_t aModbusRtuRead(aModbusRtuHandle_t *handle, void *data, size_t size,
     if (size == 0U) return 0;
     if (!handle->frame_ready) {
         status = receive_frame(handle, timeout);
+        if (status == A_STATUS_TIMEOUT) return aOSFailWithTimeout(timeout);
         if (status != A_STATUS_OK) return aOSFailWithStatus(status);
     }
     available = handle->frame_size - handle->frame_position;
+    /* 不能越过帧边界补数据；继续索取已耗尽帧是报文不完整，不是流 EOF。 */
+    if (available == 0U) return aOSFailWithStatus(A_STATUS_ERROR);
     if (size > available) size = available;
     memcpy(data, handle->frame + handle->frame_position, size);
     handle->frame_position += size;
@@ -282,7 +285,9 @@ aSSize_t aModbusRtuWrite(aModbusRtuHandle_t *handle, const void *data,
     if (!handle->ready) return aOSFailWithStatus(A_STATUS_NOT_READY);
     if (size == 0U) return 0;
     io = &handle->config.io;
-    count = handle->config.output.write(data, size, timeout);
+    count = handle->config.output.write(
+        handle->config.output.context, data, size, timeout);
+    if (count == 0) return aOSFailWithStatus(A_STATUS_ERROR);
     if (count > 0) {
         handle->tx_pending = A_TRUE;
         handle->last_tx_ticks = io->ticks(io->context);
@@ -352,15 +357,35 @@ static aStatus_t port_discard(void *context, aTimeout_t timeout)
     }
 }
 
+static aSSize_t stream_read(void *context, void *data, size_t size,
+                           aTimeout_t timeout)
+{
+    return aModbusRtuRead(context, data, size, timeout);
+}
+
+static aSSize_t stream_write(void *context, const void *data, size_t size,
+                            aTimeout_t timeout)
+{
+    return aModbusRtuWrite(context, data, size, timeout);
+}
+
+static aStatus_t stream_flush(void *context, aTimeout_t timeout)
+{
+    const aModbusRtuHandle_t *handle = context;
+    const aStream_t *output = &handle->config.output;
+    return output->flush(output->context, timeout);
+}
+
 aStatus_t aModbusRtuBindTransport(aModbusRtuHandle_t *handle,
                                aModbusTransport_t *transport)
 {
     if (handle == NULL || transport == NULL) return A_STATUS_INVALID_PARAM;
     if (!handle->ready) return A_STATUS_NOT_READY;
-    if (transport->stream.read == NULL || transport->stream.write == NULL ||
-        transport->stream.flush != handle->config.output.flush) {
-        return A_STATUS_INVALID_PARAM;
-    }
+    transport->stream.context = handle;
+    transport->stream.read = stream_read;
+    transport->stream.write = stream_write;
+    transport->stream.flush = handle->config.output.flush != NULL ?
+                              stream_flush : NULL;
     transport->context = handle;
     transport->discard_input = port_discard;
     transport->prepare_frame = port_prepare;

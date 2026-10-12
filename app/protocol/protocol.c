@@ -30,7 +30,7 @@ extern const protocolModbusConfig_t IDU_modbus_slave_config;
 #endif
 
 /* 每条通信链路独立持有状态；多个链路可借用同一个 aBus。
- * 当前硬件只注册 USART2，后续新端口增加自己的收发适配函数。
+ * 当前硬件只注册 USART2，流回调由 aModbus 按实例统一绑定。
  */
 typedef struct {
     const protocolModbusConfig_t *product;
@@ -38,7 +38,6 @@ typedef struct {
     aStatus_t (*prepare)(rs485Port_t *port);
     aStatus_t (*open)(rs485ReceiveFn_t receive, void *context);
     aStatus_t (*close)(void);
-    aStream_t framing_stream;
 } protocolLinkConfig_t;
 
 typedef struct {
@@ -69,17 +68,6 @@ static const protocolLinkConfig_t rs485_config;
 static protocolLink_t rs485_link = {.config = &rs485_config};
 static aStatus_t modbusDeInit(protocolLink_t *link);
 
-/* aStream 不带 context，由本应用端口的适配函数选择 RTU 实例。 */
-static aSSize_t readFrame(void *data, size_t size, aTimeout_t timeout)
-{
-    return aModbusRtuRead(rs485_link.rtu, data, size, timeout);
-}
-
-static aSSize_t writeFrame(const void *data, size_t size, aTimeout_t timeout)
-{
-    return aModbusRtuWrite(rs485_link.rtu, data, size, timeout);
-}
-
 /* 每条硬件链路注册自己的配置；总线无需知道协议或端口。 */
 static const protocolLinkConfig_t rs485_config = {
 #if APP_MODBUS_MASTER_ENABLE
@@ -95,7 +83,6 @@ static const protocolLinkConfig_t rs485_config = {
     .prepare = rs485PortPrepare,
     .open = rs485PortOpen,
     .close = rs485PortClose,
-    .framing_stream = {.read = readFrame, .write = writeFrame}
 };
 
 #if APP_MODBUS_MASTER_ENABLE
@@ -231,8 +218,6 @@ static aStatus_t modbusPrepare(protocolLink_t *link, aBusHandle_t *bus)
     config = link->settings->modbus;
     config.bus = bus;
     aModbusTransportStructInit(&config.transport);
-    config.transport.stream = link->config->framing_stream;
-    config.transport.stream.flush = port.output.flush;
     status = aModbusRtuBindTransport(link->rtu, &config.transport);
     if (status != A_STATUS_OK) return status;
 #if AMODBUS_DYNAMIC_ENABLE

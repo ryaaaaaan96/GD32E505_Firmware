@@ -870,7 +870,8 @@ static void port_tests(void)
     assert(port.output.flush == NULL);
     assert(port.baud_rate == 115200U && port.character_bits == 10U);
     assert(port.ticks_per_second == 180000000U);
-    assert(port.output.write(&byte, 1U, A_TIMEOUT_NO_WAIT) == -1);
+    assert(port.output.write(
+            port.output.context, &byte, 1U, A_TIMEOUT_NO_WAIT) == -1);
     assert(rs485PortOpen(NULL, NULL) == A_STATUS_INVALID_PARAM);
     assert(rs485PortOpen(portReceive, NULL) == A_STATUS_OK);
     assert(rs485PortOpen(portReceive, NULL) == A_STATUS_BUSY);
