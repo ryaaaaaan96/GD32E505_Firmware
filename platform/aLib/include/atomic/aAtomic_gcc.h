@@ -1,12 +1,15 @@
-/* GCC 后端：仅映射工具链 C11 原子，不增加函数调用、对象或运行时分支。 */
+/* GCC 后端：仅映射工具链 C11 原子，不增加调用、对象或运行时分支。 */
 #ifndef A_ATOMIC_GCC_H
 #define A_ATOMIC_GCC_H
 
 #ifndef A_ATOMIC_H
 #error "Include aAtomic.h instead of the backend header"
 #endif
+#if !defined(__GNUC__) || defined(__clang__)
+#error "aAtomic_gcc.h requires GCC"
+#endif
 #if defined(__STDC_NO_ATOMICS__) && __STDC_NO_ATOMICS__
-#error "The selected GCC target does not support C11 atomics"
+#error "The selected target does not support C11 atomics"
 #endif
 
 #include <stdatomic.h>
@@ -49,12 +52,14 @@ typedef memory_order aAtomicMemoryOrder_t;
 
 #define aAtomicCompareExchangeStrong(p_, expected_, desired_) \
     atomic_compare_exchange_strong((p_), (expected_), (desired_))
-#define aAtomicCompareExchangeStrongExplicit(p_, expected_, desired_, success_, failure_) \
+#define aAtomicCompareExchangeStrongExplicit(p_, expected_, desired_, \
+                                             success_, failure_) \
     atomic_compare_exchange_strong_explicit((p_), (expected_), (desired_), \
                                              (success_), (failure_))
 #define aAtomicCompareExchangeWeak(p_, expected_, desired_) \
     atomic_compare_exchange_weak((p_), (expected_), (desired_))
-#define aAtomicCompareExchangeWeakExplicit(p_, expected_, desired_, success_, failure_) \
+#define aAtomicCompareExchangeWeakExplicit(p_, expected_, desired_, \
+                                           success_, failure_) \
     atomic_compare_exchange_weak_explicit((p_), (expected_), (desired_), \
                                            (success_), (failure_))
 

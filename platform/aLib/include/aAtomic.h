@@ -1,6 +1,6 @@
 /**
  * @file aAtomic.h
- * @brief 原子类型、读写、读改写及内存屏障；当前仅实现 GCC C11 后端。
+ * @brief 原子类型、读写、读改写及内存屏障；按编译器选择 C11 后端。
  *
  * aAtomicBool_t / aAtomicInt_t / aAtomicUint_t 对应 bool / int / unsigned int。
  * A_ATOMIC_TYPE(T) 可声明其他原子类型；不保证大小、对齐或跨编译器 ABI。
@@ -38,10 +38,13 @@
 #error "aAtomic currently supports C11, not C++"
 #elif !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L
 #error "aAtomic requires C11 or later"
-#elif defined(__GNUC__) && !defined(__clang__)
+#elif defined(__clang__)
+/* Clang 也定义 __GNUC__，必须优先识别；clangd 使用此后端解析。 */
+#include "atomic/aAtomic_clang.h"
+#elif defined(__GNUC__)
 #include "atomic/aAtomic_gcc.h"
 #else
-#error "aAtomic: add a backend for this compiler (only GCC is implemented)"
+#error "aAtomic: add a backend for this compiler (GCC/Clang C11 required)"
 #endif
 
 #endif

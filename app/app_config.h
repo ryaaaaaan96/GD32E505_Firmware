@@ -7,10 +7,11 @@ enum {
 };
 
 /* 应用调试角色：0 为从站，1 为主站；USART2 同时只运行一种角色。
+ * 主站同时启用 test 任务的定时写入 Demo，见 app/protocol/README.md。
  * 正常调试直接修改本文件；自动化测试可通过编译宏覆盖默认值。
  * 模块能力与 Demo 总开关仍由 config/aclass_config.cmake 控制。 */
 #ifndef APP_MODBUS_MASTER_ENABLE
-#define APP_MODBUS_MASTER_ENABLE 0
+#define APP_MODBUS_MASTER_ENABLE 1
 #endif
 
 /* 主站采集的远端地址，以及本机作为从站时的地址。 */

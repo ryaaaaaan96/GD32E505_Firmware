@@ -6,9 +6,15 @@
 
 ## 原子接口
 
-自有代码统一包含 `aAtomic.h`，不直接使用 `<stdatomic.h>`。当前仅实现
-GCC C11 后端，映射集中在 `include/atomic/aAtomic_gcc.h`；Keil、IAR、Clang
-后端尚未实现，不会在未知编译器上静默退化为普通变量或空操作。
+自有代码统一包含 `aAtomic.h`，不直接使用 `<stdatomic.h>` 或后端头文件。
+公共头按编译器选择独立后端：
+
+- GCC：`include/atomic/aAtomic_gcc.h`。
+- Clang / clangd：`include/atomic/aAtomic_clang.h`。
+
+Clang 也定义 `__GNUC__`，因此优先判断 `__clang__`。两个后端各自提供完整的
+标准 C11 原子映射，接口和语义保持一致，互不包含。
+其他编译器尚未适配，不会静默退化为普通变量或空操作。
 接口为宏映射，保留类型和内存序，不增加对象、函数调用或 CPU 核数判断。
 
 | 内容 | 接口 |
@@ -51,7 +57,9 @@ ISR 使用的类型必须始终无锁（对应能力宏为 2）。GCC 对其他�
 
 验证：`SANITIZE=1 python3 tests/atomic/run.py`。覆盖宏单次求值、初始化、
 旧值返回、比较交换失败回写、计数回绕、多线程计数与发布可见性；对比主机
-GCC `-O2` 下封装与原生 C11 的生成指令。测试不代表 Keil/IAR 或 ARM 板上验证。
+GCC `-O2` 下封装与原生 C11 的生成指令。可设置 `CC=clang` 验证 Clang 映射；
+固件工具链仍为 ARM GCC，原子接口兼容 Clang 不代表整套固件已完成 Clang 移植。
+测试不代表 Keil/IAR 或 ARM 板上验证。
 
 ## 整数计算
 
