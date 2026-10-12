@@ -47,7 +47,9 @@ static aStatus_t config_check(const aPollConfig_t *config)
     for (size_t i = 0U; i < config->job_count; i++) {
         const aPollJobConfig_t *job = &config->jobs[i];
         if (job->execute == NULL || job->step_count == 0U ||
-            job->poll_time_ms > INT32_MAX || job->interval_ms > INT32_MAX ||
+            (job->poll_time_ms > INT32_MAX &&
+             job->poll_time_ms != APOLL_POLL_ONCE) ||
+            job->interval_ms > INT32_MAX ||
             job->error_delay_ms == 0U || job->error_delay_ms > INT32_MAX) {
             return A_STATUS_INVALID_PARAM;
         }
@@ -213,7 +215,7 @@ aStatus_t aPollJobTrigger(aPollHandle_t *handle, size_t job_index)
 
 aStatus_t aPollSubmit(aPollHandle_t *handle, const aPollRequest_t *request)
 {
-    aStatus_t status, unlocked;
+    aStatus_t status;
     size_t tail;
     if (handle == NULL || request == NULL || request->execute == NULL) {
         return A_STATUS_INVALID_PARAM;
@@ -231,10 +233,10 @@ aStatus_t aPollSubmit(aPollHandle_t *handle, const aPollRequest_t *request)
                                  handle->head + handle->used;
     handle->requests[tail] = *request;
     handle->used++;
-    unlocked = aOSMutexUnlock(handle->queue_mutex);
+    /* 解锁异常由 aOS 记录；已入队请求仍按接收成功返回。 */
+    (void)aOSMutexUnlock(handle->queue_mutex);
     aOSWaitObjectNotify(handle->wake);
-    /* 解锁故障不撤销已接收请求，调用方不能按业务失败盲目重投。 */
-    return unlocked;
+    return A_STATUS_OK;
 }
 
 static uint32_t job_remaining(aPollHandle_t *handle, size_t index,
@@ -242,8 +244,11 @@ static uint32_t job_remaining(aPollHandle_t *handle, size_t index,
 {
     const aPollJobConfig_t *job = &handle->config.jobs[index];
     aPollJobState_t *state = &handle->jobs[index];
+    if (state->step_index == job->step_count) return UINT32_MAX;
     uint32_t remaining = aTimepointRemaining(&state->delay, now).milliseconds;
-    if (!state->cycle_active && !aAtomicLoad(&state->triggered)) {
+    /* 单轮标记不是时间值，不参与周期差值计算。 */
+    if (job->poll_time_ms != APOLL_POLL_ONCE &&
+        !state->cycle_active && !aAtomicLoad(&state->triggered)) {
         uint32_t elapsed = now - state->cycle_started;
         if (elapsed < job->poll_time_ms &&
             job->poll_time_ms - elapsed > remaining) {
@@ -278,8 +283,10 @@ static aBool_t job_process(aPollHandle_t *handle, aPollProcessResult_t *result)
         if (result->execution.advance) {
             state->step_index++;
             if (state->step_index == job->step_count) {
-                state->step_index = 0U;
                 state->cycle_active = A_FALSE;
+                if (job->poll_time_ms != APOLL_POLL_ONCE) {
+                    state->step_index = 0U;
+                }
             }
         }
         state->delay = aTimepointCalc(A_TIMEOUT_MS(delay), aOSGetUptimeMs());
@@ -336,6 +343,7 @@ static aTimeout_t next_wait(aPollHandle_t *handle)
     uint32_t now = aOSGetUptimeMs();
     for (size_t i = 0U; i < handle->config.job_count; i++) {
         uint32_t remaining = job_remaining(handle, i, now);
+        if (remaining == UINT32_MAX) continue;
         if (wait.type == A_TIMEOUT_TYPE_FOREVER ||
             remaining < wait.milliseconds) wait = A_TIMEOUT_MS(remaining);
     }

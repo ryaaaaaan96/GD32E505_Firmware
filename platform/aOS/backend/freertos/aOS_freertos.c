@@ -866,13 +866,19 @@ aStatus_t aOSMutexLock(aOSMutex_t mutex, aTimeout_t timeout)
 
 aStatus_t aOSMutexUnlock(aOSMutex_t mutex)
 {
-    if (mutex == NULL) {
-        return A_STATUS_INVALID_PARAM;
-    }
+    aStatus_t status;
 
-    return xSemaphoreGive((SemaphoreHandle_t)mutex) == pdTRUE
-               ? A_STATUS_OK
-               : A_STATUS_ERROR;
+    if (mutex == NULL) {
+        status = A_STATUS_INVALID_PARAM;
+    } else {
+        status = xSemaphoreGive((SemaphoreHandle_t)mutex) == pdTRUE
+                     ? A_STATUS_OK : A_STATUS_ERROR;
+    }
+    /* 统一保留解锁故障；调用方忽略返回值时也能通过调试记录定位。 */
+    if (status != A_STATUS_OK) {
+        aOSRecordFault(AOS_FAULT_MUTEX_UNLOCK, status, "aOSMutexUnlock");
+    }
+    return status;
 }
 
 /* 递归锁允许持锁任务重复获取；其他任务仍互斥，释放次数必须与获取次数一致。 */

@@ -115,6 +115,7 @@ typedef enum {
     AOS_FAULT_SCHEDULER_RETURNED = 2U,
     AOS_FAULT_MALLOC_FAILED = 3U,
     AOS_FAULT_STACK_OVERFLOW = 4U,
+    AOS_FAULT_MUTEX_UNLOCK = 5U, /**< 普通互斥锁释放失败。 */
 } aOSFaultCode_t;
 
 /** @brief 调试器可读取的最近故障快照，不是持久化或多条日志。 */
@@ -445,6 +446,7 @@ aStatus_t aOSMutexLock(aOSMutex_t mutex, aTimeout_t timeout);
  * @retval A_STATUS_OK 释放成功。
  * @retval A_STATUS_INVALID_PARAM 对象为空。
  * @retval A_STATUS_ERROR 后端释放失败。
+ * @note 返回非 OK 时自动记录 AOS_FAULT_MUTEX_UNLOCK，成功不清除旧记录。
  * @warning 不能跨任务释放，也不能在 ISR 调用；错误所有者可能触发后端断言。
  */
 aStatus_t aOSMutexUnlock(aOSMutex_t mutex);

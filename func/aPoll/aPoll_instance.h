@@ -6,7 +6,7 @@
 #include "aAtomic.h"
 
 typedef struct {
-    size_t step_index;
+    size_t step_index; /**< 下一步下标；等于 step_count 表示单轮作业已完成。 */
     uint32_t cycle_started;
     aTimepoint_t delay;
     aBool_t cycle_active;

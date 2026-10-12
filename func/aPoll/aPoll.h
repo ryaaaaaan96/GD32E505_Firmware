@@ -35,11 +35,17 @@ typedef void (*aPollExecuteFn_t)(void *context, size_t step_index,
                                aPollStepResult_t *result);
 typedef void (*aPollEventFn_t)(void *context);
 
+/** 执行完整一轮后停止；普通 Trigger 不重新启动。 */
+#define APOLL_POLL_ONCE UINT32_MAX
+
 typedef struct {
     aPollExecuteFn_t execute;
     void *context;
     size_t step_count;
-    uint32_t poll_time_ms; /**< 整轮起点最小间隔；超期不积压补跑。 */
+    /** 整轮起点最小间隔：0 连续执行，APOLL_POLL_ONCE 仅执行一轮。
+     * 普通周期不超过 INT32_MAX；超期不积压补跑。
+     */
+    uint32_t poll_time_ms;
     uint32_t interval_ms; /**< 本作业成功推进后等待，不阻塞其他作业。 */
     uint32_t error_delay_ms; /**< 失败或未推进后的等待，必须大于零。 */
 } aPollJobConfig_t;
@@ -98,7 +104,8 @@ void aPollRequestStructInit(aPollRequest_t *request);
 /* 配置结构体复制，数组及上下文借用至销毁；生命周期由应用单线程编排。
  * 静态实例零初始化，再提供数组及容量；见 aPoll_instance.h。
  * OS 对象仍可能分配。
- * 配置时间不得超过 INT32_MAX；相邻处理间隔须小于时基完整回绕周期。
+ * 除 poll_time_ms 的 APOLL_POLL_ONCE 标记外，配置时间不得超过 INT32_MAX。
+ * 相邻处理间隔须小于时基完整回绕周期。
  */
 #if APOLL_STATIC_ENABLE
 /** @brief 初始化应用持有的零初始化实例及预分配数组。
@@ -155,13 +162,16 @@ aStatus_t aPollEventPost(aPollHandle_t *handle, size_t event_index);
  * @param[in] job_index jobs 数组下标。
  * @return OK；下标越界 NOT_FOUND；实例为空 INVALID_PARAM；未就绪 NOT_READY。
  * 仍遵守成功/失败后的最小等待，不改变物理协议时序。
+ * APOLL_POLL_ONCE 作业完成后不重新启动，调用仍返回 OK。
  */
 aStatus_t aPollJobTrigger(aPollHandle_t *handle, size_t job_index);
 /** @brief 复制描述入队，借用 context 及数据至完成回调结束；不自动重试。
  * @param[in,out] handle 已就绪实例，支持多个任务投递。
  * @param[in] request 有效描述，execute 必填，complete 可为 NULL。
- * @return OK 表示已接收；无队列 UNSUPPORTED；其余为参数、状态或锁错误。
- * 队列满或短暂锁竞争返回 BUSY；已入队后解锁失败不回滚，禁止盲目重投。
+ * @return OK 表示已接收；其他返回值均表示未接收。
+ * 队列满或锁竞争返回 BUSY，无队列返回 UNSUPPORTED。
+ * 入队后解锁异常由 aOS 记录，仍返回 OK，禁止重投。
+ * OK 不表示执行完成；完成回调可能在本函数返回前运行。
  * 销毁前停止所有调用者并排空请求。
  */
 aStatus_t aPollSubmit(aPollHandle_t *handle, const aPollRequest_t *request);
