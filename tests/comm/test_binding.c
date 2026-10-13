@@ -114,7 +114,7 @@ static aStatus_t emit(fixture_t *fixture, uint32_t event, size_t parameter,
     node_t *node = fixture->node;
     assert(node->used);
     aStatus_t status = node->config.notify(node->config.context, &input, &output);
-    assert(output.accepted == (status == A_STATUS_OK && input.delivery != NULL));
+    assert(output.accepted == (status == A_STATUS_OK));
     return status;
 }
 static aStatus_t complete(void *delivery, aStatus_t status)
@@ -199,7 +199,9 @@ static aStatus_t inspect(void *context, void *snapshot, size_t size)
 int main(void)
 {
     fixture_t fixture = {.base.ops = &ops, .values = {1U, 2U}};
-    const aCommBindingConfig_t config = {.data = &fixture.base};
+    const aCommBindingConfig_t config = {
+        .data = &fixture.base, .request_capacity = 1U
+    };
     const aCommBindingEvents_t events = {
         .type = 55U, .context = &fixture, .execute = execute,
         .observe = observe, .submit = submit, .submit_context = &fixture
@@ -216,6 +218,10 @@ int main(void)
     _Alignas(max_align_t) uint8_t storage[1024];
     size_t size;
     assert(aCommBindingStorageSize(&config, SIZE_MAX, &size) ==
+        A_STATUS_INVALID_PARAM);
+    aCommBindingConfig_t oversized = config;
+    oversized.request_capacity = SIZE_MAX;
+    assert(aCommBindingStorageSize(&oversized, 2U, &size) ==
         A_STATUS_INVALID_PARAM);
     assert(aCommBindingStorageSize(&config, 2U, &size) == A_STATUS_OK);
     assert(size <= sizeof(storage));
@@ -239,6 +245,16 @@ int main(void)
     assert(emit(&fixture, ACOMM_REQUEST_WRITE, 1U, &value, 4U, 4U) ==
         A_STATUS_BUSY);
     assert(aCommBindingDeInit(&binding) == A_STATUS_BUSY);
+    node_t *first_node = fixture.node;
+    aCommEntry_t other = entry;
+    other.paramIndex = 0U;
+    other.subscribe_events = ACOMM_REQUEST_READ;
+    assert(aCommBindingSubscribe(&binding, &other) == A_STATUS_OK);
+    /* 不同订阅也受共享池容量约束；拒绝后不会占用该订阅。 */
+    assert(emit(&fixture, ACOMM_REQUEST_READ, 0U, NULL, 0U, 4U) ==
+           A_STATUS_BUSY);
+    assert(!aAtomicLoad(&binding.subscriptions[1].busy));
+    fixture.node = first_node;
     fixture.resubmit = A_TRUE;
     drain(&fixture);
     assert(fixture.pending && fixture.publications == 1U);
@@ -251,7 +267,8 @@ int main(void)
     assert(emit(&fixture, ACOMM_REQUEST_READ, 1U, NULL, 4U, 2U) == A_STATUS_OK);
     assert(fixture.executions == 3U && fixture.completions == 4U);
     assert(fixture.completed_status == A_STATUS_UNSUPPORTED);
-    assert(emit(&fixture, ACOMM_EVENT_UPDATED, 1U, NULL, 4U, 4U) == A_STATUS_OK);
+    assert(emit(&fixture, ACOMM_EVENT_UPDATED, 1U, NULL, 4U, 4U) ==
+           A_STATUS_OK);
     assert(fixture.observations == 1U && !fixture.pending);
 
     aCommBindingTransfer_t transfer = {
@@ -280,8 +297,18 @@ int main(void)
     assert(fixture.subscriptions == 0U);
     assert(aCommBindingRead(&binding, &read) == A_STATUS_NOT_READY);
 
-    /* 零订阅和标记绑定不要求队列、工作回调或额外堆分配。 */
-    assert(aCommBindingInit(&config, &events, &binding) == A_STATUS_OK);
+    /* 观察/标记不需要请求池；按实际能力布置存储。 */
+    aCommBindingConfig_t observer_config = config;
+    observer_config.request_capacity = 0U;
+    size_t observer_size;
+    assert(aCommBindingStorageSize(&observer_config, 2U, &observer_size) ==
+        A_STATUS_OK);
+    assert(observer_size < size);
+    assert(aCommBindingStorageSetup(&binding, &observer_config, storage, 2U) ==
+        A_STATUS_OK);
+    assert(binding.requests == NULL);
+    assert(aCommBindingInit(&observer_config, &events, &binding) ==
+           A_STATUS_OK);
     aCommEntry_t marker = entry;
     marker.subscribe_events = 0U;
     assert(aCommBindingSubscribe(&binding, &marker) == A_STATUS_OK);
@@ -289,6 +316,12 @@ int main(void)
     marker.subscribe_events = ACOMM_SUBSCRIBE_MARK_ONLY;
     assert(aCommBindingSubscribe(&binding, &marker) == A_STATUS_OK);
     assert(binding.subscription_count == 1U);
+    aCommEntry_t observer = entry;
+    observer.subscribe_events = ACOMM_EVENT_UPDATED;
+    assert(aCommBindingSubscribe(&binding, &observer) == A_STATUS_OK);
+    assert(emit(&fixture, ACOMM_EVENT_UPDATED, 1U, NULL, 4U, 4U) ==
+           A_STATUS_OK);
+    assert(fixture.observations == 2U);
     assert(aCommBindingDeInit(&binding) == A_STATUS_OK);
     puts("Protocol-independent binding: events/lifetime/snapshot/storage passed");
     return 0;

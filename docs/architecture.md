@@ -41,7 +41,8 @@ startup、CMSIS Device 和 `SystemInit()` 仍由 aDrv 管理。
 
 `aShell` 是进程内唯一实例，提供 Init/Process/DeInit，由 app 创建任务并调用；
 读写通过 aLib 的 aStream_t 注入，USART 适配由 app/devices 的私有回调提供，
-appSystemConsoleInit 初始化 USART，通过 Stream 绑定并初始化 aShell 单例；flush 为 NULL。
+appSystemConsoleInit 初始化 USART 和 TX 锁；system 的 shellInit 取得设备层配置，
+通过 Stream 初始化 aShell 单例并创建任务，flush 为 NULL。
 aShell 内部适配 nr_micro_shell 2.0.0，命令通过 ASHELL_CMD_EXPORT 分散注册，
 由 GCC 链接器收集，不依赖具体 USART 类型。关闭时保留无操作 stub。
 func 不创建业务任务；aOS worker 属于平台服务。aOS 后端和上游 FreeRTOS
@@ -197,7 +198,7 @@ protocol 通过初始化参数借用 system 的私有 aBus handle，不向业务
 ## 应用设备初始化与句柄访问
 
 当前 app/devices/system/system_device.c 持有 console 与 LED 的配置、缓冲区和
-私有句柄。LED 对象静态存储，console 通过 Create 动态创建；用途及类型明确的
+私有句柄。LED 对象静态存储，console 随 USART 配置选择静态或动态创建；用途明确的
 接口放在同目录 system_device.h。
 通用 device 层仍分别提供 aDevUsart 和 aDevLed，不因为应用组合而合并设备类型。
 
@@ -224,7 +225,7 @@ memoryInit 在 logInit 之前，应用设备回调直接使用 ASHELL_PRINT 输�
 初始化任务通过 aOSTaskExit() 自退出，无需保存全局任务句柄；
 aOSDeleteTask(handle) 仍用于删除指定任务，传入 NULL 保持空操作语义。
 system_init.c 内部的静态函数 statusInit 调用 appSystemStatusLedInit 并创建状态任务；
-同文件内 shellInit 初始化控制台、Shell 并创建任务，
+aSystemInit 先初始化控制台，同文件内 shellInit 初始化 Shell 并创建任务，
 aSystemInit 随后依次调用同文件内的私有 memoryInit 和 logInit，后者完成配置装配、日志初始化、
 失败清理与启动日志；顶层编排只调用并检查返回值。
 日志输出适配及配置合并在 app/devices/system/system_device.c 的独立日志段，
@@ -233,14 +234,15 @@ app/task/system/command_log.c；不再提供独立日志服务初始化接口。
 日志直接调用公开只读 app_system_console_stream，与 Shell 共用 console_write
 中的 TX 锁；日志可能先于仍在 Shell 队列中的启动文字输出。
 Shell 任务通过原子就绪标志等待，服务全部就绪前不调用 Process。
-日志初始化或 Shell 任务创建失败时，通过 appSystemConsoleDeInit 统一释放
-控制台串口、TX 锁与 Shell 队列。串口清理失败保留句柄和 TX 锁，返回清理错误。
+日志初始化或 Shell 初始化、任务创建失败时，system 的 consoleCleanup 分别调用
+appSystemConsoleDeInit 和 aShellDeInit，释放设备资源与 Shell 队列。
+串口清理失败保留句柄和 TX 锁，返回清理错误。
 中途失败向 main 返回错误，Shell 门控不放行，不自动重试；
 已成功初始化的其他服务保留，仍按启动失败停机策略处理。
 不存在集中初始化全部实例的注册表、链接段或分散加载。
 
-应用通过专用 Init 完成设备初始化：LED 返回借用句柄，控制台内部绑定 aStream_t
-并初始化 Shell，只返回状态；不提供独立 Open：
+应用通过专用 Init 完成设备初始化：LED 返回借用句柄，控制台绑定 aStream_t
+并创建 TX 锁，只返回状态；Shell 状态和任务由 system 初始化，不提供独立 Open：
 
 - 仅在驱动/OS 就绪后的启动阶段单线程调用，由应用保证每个实例只初始化一次。
 - 首次初始化可能分配 OS 资源，不能当作无副作用查询。
@@ -248,12 +250,13 @@ Shell 任务通过原子就绪标志等待，服务全部就绪前不调用 Proc
   不做全系统联动回滚。其他服务的重复调用处理以其公共契约为准。
 - LED 的 NULL 输出参数返回 INVALID_PARAM；失败清空输出句柄。
 - 句柄为共享借用，调用者不得销毁、反初始化或修改配置；运行阶段传递已取得的句柄。
-- Shell 关闭时 console 声明、配置和实现一起裁剪。
+- Shell 和日志都关闭时才裁剪 console；日志可在不链接 Shell 的情况下输出。
 - 不做运行时跨设备资源冲突检查；构建期资源告警尚未实现，设备参数/能力检查仍保留。
 
 tests/app_devices/run.py 验证独立初始化、错误传递、参数检查和 Shell 裁剪，使用硬件替身，
 并覆盖 TX 锁分配失败、总超时预算和清理失败后的资源保留及重试。
-tests/log/run.py 使用真实控制台适配验证 Shell 与日志并发发送、部分写入及队列隔离。
+tests/log/run.py 使用真实控制台适配验证 Shell 与日志并发发送、部分写入、队列隔离，
+以及完全不链接 Shell 时的日志输出。
 tests/app_startup/run.py 调用真实
 Shell 任务入口，验证服务初始化间隙及失败后均不处理命令，成功后才放行。
 这些检查不代表上板验证。通用契约见[接口规范](interface_contract.md)，USART 细节见

@@ -264,7 +264,7 @@ aModbusServerMap_t 同样以 comm 为首成员，权限和数据目标位置一�
 
 aModbusHandle_t 的首成员是 aCommEndpoint_t。
 `aModbusCommEndpoint(handle)` 返回这个成员，不再创建独立的 aModbusEndpoint_t。
-传 NULL 返回仅用于初始化预检查的规则端点，不能执行协议事务。
+传 NULL 返回 NULL；从站映射和初始化预检直接使用模块内规则，不构造占位端点。
 协议实例存续期间不能移动；取得端点不增加引用计数，应用按顺序管理生命周期。
 
 寄存器编码：U8/U16 占一寄存器，U32/S32 占两个；字序由
@@ -287,10 +287,19 @@ maps 与 ranges 平级，各自按 area/address 排序且不重叠，允许空�
 从站可订阅变化作为观察通知；通知仅登记或尝试入队，不等待通信。
 整组与字段按交集匹配；写请求使用请求快照，借用至完成回调返回。
 映射实例嵌入 `aCommBinding_t comm`，绑定配置位于 `binding.comm`。
-静态映射提供 `comm.subscriptions`、`comm.subscription_capacity` 及原生节点；
-动态映射使用 aComm 的存储布局接口，一次分配宿主、槽位和原生节点。
+静态映射提供 `links` 和 `map_capacity`，每个注册映射项对应一个
+`aModbusMapLink_t`；另提供 `comm.subscriptions`、容量及原生节点。
+请求订阅通过 `binding.comm.request_capacity` 配置共享池大小；静态实例另提供
+`comm.requests` 和容量。仅观察或标记关系不需要请求池。
+动态映射一次分配宿主、分组索引、订阅、共享请求池和原生节点。
 未订阅项不占订阅 RAM。请求槽、入队、通用目标检查和完成发布均由 aComm 管理；
 Modbus 只注册执行回调，按实际目标计算地址并执行事务。
+
+初始化缓存注册表中同一 SIG 的前后项关系，收发时沿组内索引处理，同一 SIG
+仍只获取一次快照或提交一次更新。主站支持原表及其连续切片；独立临时计划
+仍可使用另一份数组，此时使用局部扫描，不借用注册表索引。
+标量完整读取直接编码到目标缓冲，局部读取仅使用两寄存器临时区；RAW 只转换
+请求区间。范围检查复用 aLib，协议字序和寄存器长度检查仍由 aModbus 负责。
 
 ```c
 mapping.binding.comm.data = &data_endpoint.base;

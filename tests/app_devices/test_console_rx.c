@@ -123,12 +123,16 @@ static void begin(void)
     discard_status = A_STATUS_OK;
     output_size = 0U; output[0] = '\0';
     assert(appSystemConsoleInit() == A_STATUS_OK);
+    aShellConfig_t shell_config;
+    appSystemShellConfigInit(&shell_config);
+    assert(aShellInit(&shell_config) == A_STATUS_OK);
     process(A_STATUS_BUSY);
     output_size = 0U; output[0] = '\0';
 }
 
 static void end(void)
 {
+    assert(aShellDeInit() == A_STATUS_OK);
     assert(appSystemConsoleDeInit() == A_STATUS_OK);
     assert(testMutexCount() == 0U);
 }

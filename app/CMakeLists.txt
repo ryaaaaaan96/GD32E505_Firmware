@@ -11,9 +11,9 @@ if(ADEV_USART_ENABLE)
     target_link_libraries(${APP_TARGET} PRIVATE aDevUsart)
 endif()
 
-# 当前控制台随 Shell 初始化和裁剪，日志直接共享控制台串口。
+# 当前日志输出使用控制台串口，独立于 Shell 功能裁剪。
 set(app_log_enable OFF)
-if(ALOG_ENABLE AND ASHELL_ENABLE)
+if(ALOG_ENABLE AND ADEV_USART_ENABLE)
     set(app_log_enable ON)
 endif()
 target_compile_definitions(${APP_TARGET} PRIVATE

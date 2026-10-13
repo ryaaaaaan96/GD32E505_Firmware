@@ -15,8 +15,11 @@
 #if APP_DATABASE_ENABLE
 #include "aDataBase.h"
 #endif
-#if ASHELL_ENABLE
+#if ASHELL_ENABLE || APP_LOG_ENABLE
 #include "aStream.h"
+#endif
+#if ASHELL_ENABLE
+#include "aShell.h"
 #endif
 #if APP_LOG_ENABLE
 #include "aLog.h"
@@ -33,7 +36,7 @@
  * @return 底层初始化错误直接返回，由上层处理，不在本层重试。
  */
 aStatus_t appSystemStatusLedInit(aDevLedHandle_t **handle_out);
-#if ASHELL_ENABLE
+#if ASHELL_ENABLE || APP_LOG_ENABLE
 /** 控制台只读流描述，Init 成功后至 DeInit 前可用；串口句柄私有。
  * read 仅供 Shell 任务使用，不加接收锁；不得增加第二个读取者。
  * write 可由多个任务调用，在内部共用一把 TX 锁；禁止绕过它访问串口。
@@ -45,26 +48,21 @@ aStatus_t appSystemStatusLedInit(aDevLedHandle_t **handle_out);
  */
 extern const aStream_t app_system_console_stream;
 
-/**
- * @brief 初始化控制台 USART 并绑定 Stream，初始化 aShell 单例。
- * @return 已持有串口返回 BUSY；否则返回初始化错误或失败清理错误。
- * @note Shell 初始化失败时回收串口；回收失败保留句柄，须调用 DeInit 清理。
- * @note 仅 ASHELL_ENABLE 时声明；可能创建内部 OS 对象，不是无副作用查找。
- * 创建控制台 TX 锁，Shell 与日志通过同一个 stream.write 共享串口发送。
- * ASHELL_PRINT/aShellWrite 仍可供其他任务入队；命令回复仅限 Shell 任务。
+/** 初始化控制台 USART 与 TX 锁；Shell/日志由 system 初始化层装配。
+ * 已持有串口返回 BUSY；创建失败回收 TX 锁。
+ * Shell 或应用日志启用时提供，不要求启用命令行。
  */
 aStatus_t appSystemConsoleInit(void);
 
-/**
- * @brief 释放控制台 USART、TX 锁与 Shell 队列，主要用于启动失败清理。
- * @return OK、NOT_READY（无串口实例）或底层清理错误。
- * @warning 任务上下文调用，必须先停止 Shell、日志及所有 stream 使用者。
- * 销毁 TX 锁前必须没有持锁者、等待者及新调用；本函数不负责停止任务。
- * 启动等待中的 Shell 任务尚未访问控制台，可在保持未就绪时清理。
- * 运行期不能仅调用此函数停止系统；应用仍须先协调任务及日志使用者。
- * 串口释放失败保留句柄、TX 锁与 Shell，允许重试；成功后丢弃排队输出。
+/** 释放串口及 TX 锁；调用者须先停止 Shell/日志等全部读写者。
+ * 不销毁 Shell/日志自身状态。串口忙时保留资源，允许重试。
+ * 返回 OK、NOT_READY（无串口）或串口释放错误。
  */
 aStatus_t appSystemConsoleDeInit(void);
+#endif
+#if ASHELL_ENABLE
+/** 仅填写 Shell 的流和超时配置；使用前需先初始化共享控制台。 */
+void appSystemShellConfigInit(aShellConfig_t *config);
 #endif
 
 #if APP_LOG_ENABLE

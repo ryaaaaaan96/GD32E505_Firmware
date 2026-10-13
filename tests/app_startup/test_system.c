@@ -24,6 +24,7 @@ static char test_kv, test_ts;
 #endif
 static const aBusTable_t test_tables[1];
 static aBool_t console_owned, expect_commands, cleanup_failure;
+static aBool_t shell_init_failure;
 static aOSTaskFunction_t shell_entry;
 static void *shell_argument;
 static jmp_buf task_slice;
@@ -98,9 +99,21 @@ aStatus_t appSystemConsoleInit(void)
     return status;
 }
 
+void appSystemShellConfigInit(aShellConfig_t *config)
+{
+    *config = (aShellConfig_t){0};
+}
+aStatus_t aShellInit(const aShellConfig_t *config)
+{
+    assert(config != NULL && console_owned && stage == 3U);
+    return shell_init_failure ? A_STATUS_ERROR : A_STATUS_OK;
+}
+aStatus_t aShellDeInit(void) { return A_STATUS_OK; }
+
 aStatus_t appSystemConsoleDeInit(void)
 {
-    assert(console_owned && (failure == 4U || failure == 6U));
+    assert(console_owned &&
+           (shell_init_failure || failure == 4U || failure == 6U));
     ++cleanup_calls;
     probe_shell(A_FALSE);
     if (cleanup_failure) return A_STATUS_BUSY;
@@ -359,12 +372,21 @@ int main(int argc, char **argv)
     aStatus_t expected;
 
     assert(argc == 2 || argc == 3);
+    shell_init_failure = strcmp(argv[1], "shell_init") == 0;
     failure = (unsigned)strtoul(argv[1], NULL, 10);
     cleanup_failure = argc == 3;
     assert(failure <= 11U);
-    assert(!cleanup_failure || failure == 4U || failure == 6U ||
+    assert(!cleanup_failure || shell_init_failure ||
+           failure == 4U || failure == 6U ||
            failure == 10U);
     status = aSystemInit();
+    if (shell_init_failure) {
+        assert(status == (cleanup_failure ? A_STATUS_BUSY : A_STATUS_ERROR));
+        assert(stage == 3U && shell_tasks == 0U && cleanup_calls == 1U);
+        assert(console_owned == cleanup_failure);
+        puts("Shell initialization failure cleanup passed");
+        return 0;
+    }
     expected = failure == 0U ? A_STATUS_OK : A_STATUS_ERROR;
     if (cleanup_failure) expected = A_STATUS_BUSY;
     assert(status == expected);

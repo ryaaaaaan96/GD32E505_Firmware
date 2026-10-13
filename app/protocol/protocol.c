@@ -45,9 +45,12 @@ typedef struct {
 } protocolLinkConfig_t;
 
 /* 静态资源上限只在应用编排处维护，产品映射文件保持只读。 */
-#if (!ACOMM_DYNAMIC_ENABLE || !AMODBUS_DYNAMIC_ENABLE) && \
-    APP_MODBUS_CLIENT_ENABLE
+#if !ACOMM_DYNAMIC_ENABLE || !AMODBUS_DYNAMIC_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
 #define PROTOCOL_MAP_CAPACITY 50U
+#else
+#define PROTOCOL_MAP_CAPACITY 100U
+#endif
 #endif
 
 typedef struct {
@@ -65,9 +68,11 @@ typedef struct {
 #if !AMODBUS_DYNAMIC_ENABLE
     aModbusHandle_t modbus_instance;
     aModbusMapping_t mapping_instance;
+    aModbusMapLink_t map_links[PROTOCOL_MAP_CAPACITY];
 #if ABUS_EVENT_ENABLE
 #if APP_MODBUS_CLIENT_ENABLE
     aCommBindingSubscription_t subscriptions[PROTOCOL_MAP_CAPACITY];
+    aCommBindingRequestSlot_t binding_requests[4];
     aBusEndpointSubscription_t nodes[PROTOCOL_MAP_CAPACITY];
 #else
     aCommBindingSubscription_t subscriptions[1];
@@ -81,6 +86,7 @@ typedef struct {
     size_t indices[PROTOCOL_MAP_CAPACITY];
 #endif
     aCommChannel_t channel_instance;
+    aCommChannelStorage_t channel_storage;
     aCommHandle_t comm_instance;
 #if APP_MODBUS_CLIENT_ENABLE
     aCommTableJob_t table_jobs[PROTOCOL_MAP_CAPACITY];
@@ -217,6 +223,7 @@ static aStatus_t modbusPrepare(protocolLink_t *link,
 #if ACOMM_DYNAMIC_ENABLE
     status = aCommChannelCreate(&framing, &link->channel);
 #else
+    link->channel_instance.storage = &link->channel_storage;
     status = aCommChannelInitStatic(&framing, &link->channel_instance);
     if (status == A_STATUS_OK) link->channel = &link->channel_instance;
 #endif
@@ -225,11 +232,17 @@ static aStatus_t modbusPrepare(protocolLink_t *link,
 #if !AMODBUS_DYNAMIC_ENABLE
     link->protocol.protocol_storage = &link->modbus_instance;
     link->protocol.mapping_storage = &link->mapping_instance;
+    link->mapping_instance.links = link->map_links;
+    link->mapping_instance.map_capacity = PROTOCOL_MAP_CAPACITY;
 #if ABUS_EVENT_ENABLE
     for (size_t i = 0U; i < sizeof(link->subscriptions) /
          sizeof(link->subscriptions[0]); i++) {
         link->subscriptions[i].native = &link->nodes[i];
     }
+#if APP_MODBUS_CLIENT_ENABLE
+    link->mapping_instance.comm.requests = link->binding_requests;
+    link->mapping_instance.comm.request_capacity = 4U;
+#endif
     link->mapping_instance.comm.subscriptions = link->subscriptions;
     link->mapping_instance.comm.subscription_capacity =
         sizeof(link->subscriptions) / sizeof(link->subscriptions[0]);
@@ -262,15 +275,15 @@ static aStatus_t modbusInit(protocolLink_t *link, aBusHandle_t *bus)
     if (status != A_STATUS_OK) return status;
     link->protocol.binding.data = &link->data_endpoint.base;
 #if APP_MODBUS_CLIENT_ENABLE && ABUS_EVENT_ENABLE
+    link->protocol.binding.request_capacity = 4U;
     link->protocol.submit = requestedSubmit;
     link->protocol.submit_context = link;
 #endif
     aCommConfig_t config = *link->config->product;
     config.protocol.context = &link->protocol;
-    status = aCommConfigCheck(&config);
-    if (status != A_STATUS_OK) return status;
     /* 板级链路是 RTU；通用注册本身也支持其他端口及协议。 */
     const aModbusCommConfig_t *product = config.protocol.config;
+    if (product == NULL) return A_STATUS_INVALID_PARAM;
     if (product->transport_type != AMODBUS_TRANSPORT_RTU) {
         return A_STATUS_UNSUPPORTED;
     }

@@ -1,6 +1,7 @@
 # aLib
 
-不依赖 MCU、RTOS、链接脚本或 C 运行库的纯 C 基础层，提供统一布尔、状态、
+不依赖 MCU、RTOS 或链接脚本的纯 C 基础层，仅使用标准 C 类型和内存操作，
+提供统一布尔、状态、
 超时与错误类型、`aStatusToErrno()` 状态映射、编译器属性、原子接口和纯计算工具。errno
 的任务局部存储仍由 aOS 提供；GCC newlib syscall 不属于 aLib。
 
@@ -89,6 +90,12 @@ crc = aCrc32(crc, payload, payload_size);
 非零初始 CRC、空段、分段和未对齐输入。
 
 ## 可选布局断言
+
+`aDataLayout.h` 提供共享字段布局及整数范围检查：`aDataValueInRange` 检查
+联合体数值，`aDataRangeCheck` 检查可能未对齐的内存值。范围为 NULL 时通过；
+指定范围时只接受 U8/U16/U32/S32，端点均包含。内存值为 NULL 时检查零默认值。
+调用方保证数据长度与类型一致；RAW、STRUCT 的整体规则由使用模块决定。
+这些函数无状态、不分配内存，aBus 和 Modbus 共用同一数值比较实现。
 
 `aLayout.h` 提供编译期检查，也由 `aLib.h` 包含。由定义结构体的应用层
 选择调用，C11/C++11 均支持；不受 `NDEBUG` 影响，不产生运行时代码。

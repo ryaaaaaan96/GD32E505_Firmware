@@ -43,4 +43,11 @@ with tempfile.TemporaryDirectory(prefix="aclass-log-matrix-") as directory:
         assert "pthread" not in symbols
         if name == "disabled":
             assert " U aOSMutex" not in symbols
+        if name == "independent":
+            executable = next((build / "bin").glob("*.elf"))
+            firmware = subprocess.check_output([
+                str(toolchain / "bin/arm-none-eabi-nm"), str(executable)],
+                text=True)
+            assert " T aLogInit" in firmware
+            assert " T aShellInit" not in firmware
         print(f"{name}: Release build and log archive checks passed")

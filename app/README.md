@@ -97,7 +97,7 @@ app/
 func 不创建/删除任务，不配置任务优先级和栈大小。
 协议配置、注册和扩展步骤见 [protocol 说明](protocol/README.md)。
 
-日志由 aSystemInit 在 Shell 和存储初始化完成后调用同文件内的私有 logInit，
+日志由 aSystemInit 在控制台及可选的 Shell、存储初始化完成后调用私有 logInit，
 该函数负责装配配置、初始化、失败清理和启动日志，顶层只检查返回状态。
 Shell 任务在 shellInit 中创建，等待全部服务就绪后才处理命令及输出，
 不创建单独日志任务。
@@ -121,17 +121,18 @@ SIG 就绪后启动 Modbus 演示，使用 USART2 PC10/PC11、PA15 手动 DE、
 system 设备公开 appSystemStatusLedInit 与 appSystemConsoleInit，保留按实例初始化；
 控制台失败清理由 appSystemConsoleDeInit 统一处理，不提供系统运行期重启。
 
-控制台通过 `appSystemConsoleInit(void)` 初始化 USART、绑定 Stream 并初始化 aShell 单例，
+控制台通过 `appSystemConsoleInit(void)` 初始化 USART 和 TX 锁，不初始化 Shell，
 USART 类型、私有控制台句柄指针和适配回调只在 app/devices 内部使用；
 公开只读 `app_system_console_stream`，Shell 和日志统一通过它访问串口；
 流接口通过 context 借用控制台端口，端口保存串口句柄与 TX 锁。aStream_t 定义在
-platform/aLib/include/aStream.h；Shell 配置在设备初始化函数内构造，任务层创建并运行 Shell 任务。
+platform/aLib/include/aStream.h；设备层 appSystemShellConfigInit 填充 Shell 配置，
+system_init.c 的 shellInit 初始化 Shell 并创建任务。日志仅依赖串口，不依赖 Shell。
 flush 非空时表示显式提交缓冲输出；NULL 表示 write 已直接提交，无需刷新。
 flush 不等待线路完成、不丢弃输入；Shell 不自动调用。
 
-当前控制台使用 aDevUsartCreate 动态分配对象，Shell 初始化失败时调用
-aDevUsartDestroy 回收；产品必须开启 ADEV_USART_DYNAMIC_ENABLE。
-创建 Shell 任务或初始化日志失败时，统一释放控制台串口、TX 锁及 Shell 队列；
+控制台随 ADEV_USART_DYNAMIC_ENABLE 选择动态或静态句柄。Shell 或日志任一
+开启即可初始化控制台，两者都关闭才裁剪。Shell 初始化、任务创建或日志初始化
+失败时，system_init.c 的 consoleCleanup 协调释放串口、TX 锁及 Shell 队列；
 串口清理失败保留句柄和 TX 锁，允许在独占条件下重试清理。
 日志就绪后的服务初始化失败仍进入 appFatal，Shell 门控不放行，
 不尝试回滚可能已有使用者的全部服务，也不支持重试整个系统初始化。

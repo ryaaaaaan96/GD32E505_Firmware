@@ -60,7 +60,8 @@ aStatus_t aCommBindingEntryCheck(const aCommBindingConfig_t *config,
         config->data->ops->data->subscribe == NULL) return A_STATUS_OK;
     if (events == NULL ||
         ((mask & (ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE)) != 0U &&
-         (events->submit == NULL || events->execute == NULL)) ||
+         (events->submit == NULL || events->execute == NULL ||
+          config->request_capacity == 0U)) ||
         ((mask & (ACOMM_EVENT_UPDATED | ACOMM_EVENT_WRITE_COMPLETE)) != 0U &&
          events->observe == NULL)) return A_STATUS_INVALID_PARAM;
     return A_STATUS_OK;
@@ -69,10 +70,11 @@ aStatus_t aCommBindingEntryCheck(const aCommBindingConfig_t *config,
 /* 通知只借用数据和登记任务；字段重叠检查在消费者中完成。 */
 static aStatus_t requested(void *context)
 {
-    aCommBindingSubscription_t *sub = context;
+    aCommBindingRequestSlot_t *slot = context;
+    aCommBindingSubscription_t *sub = slot->subscription;
     aCommBinding_t *binding = sub->owner;
     const aCommEntry_t *entry = sub->entry;
-    const aCommNotifyInput_t *input = &sub->input;
+    const aCommNotifyInput_t *input = &slot->input;
     aCommBindingRequest_t request = {
         .entry = entry,
         .target = {entry->deviceID, entry->sigIndex, entry->paramIndex},
@@ -131,8 +133,9 @@ static aStatus_t requested(void *context)
 }
 static void completed(void *context, aStatus_t status)
 {
-    aCommBindingSubscription_t *sub = context;
-    const aCommNotifyInput_t input = sub->input;
+    aCommBindingRequestSlot_t *slot = context;
+    aCommBindingSubscription_t *sub = slot->subscription;
+    const aCommNotifyInput_t input = slot->input;
     const aCommDataOps_t *ops = input.endpoint->ops->data;
     if (input.event == ACOMM_REQUEST_WRITE &&
         (sub->entry->publish_events & ACOMM_EVENT_WRITE_COMPLETE) != 0U) {
@@ -143,6 +146,7 @@ static void completed(void *context, aStatus_t status)
         (void)ops->publish(input.endpoint, &publish);
     }
     /* 完成回调可立即再次提交或销毁宿主；释放槽位后不再访问绑定对象。 */
+    aAtomicStore(&slot->busy, A_FALSE);
     aAtomicStore(&sub->busy, A_FALSE);
     (void)ops->complete(input.delivery, status);
 }
@@ -156,6 +160,7 @@ static aStatus_t notify(void *context, const aCommNotifyInput_t *input,
         input->event == ACOMM_EVENT_WRITE_COMPLETE) {
         if (binding->events.observe == NULL) return A_STATUS_UNSUPPORTED;
         binding->events.observe(binding->events.context, sub->entry, input);
+        output->accepted = A_TRUE;
         return A_STATUS_OK;
     }
     if ((input->event != ACOMM_REQUEST_READ &&
@@ -167,13 +172,31 @@ static aStatus_t notify(void *context, const aCommNotifyInput_t *input,
     if (!aAtomicCompareExchangeStrong(&sub->busy, &expected, A_TRUE)) {
         return A_STATUS_BUSY;
     }
-    sub->input = *input;
-    sub->work = (aCommRequest_t){requested, completed, sub};
+    aCommBindingRequestSlot_t *slot = NULL;
+    /* 池大小由应用限制；只尝试原子占用，不等待、不申请内存。 */
+    for (size_t i = 0U; i < binding->config.request_capacity; i++) {
+        expected = A_FALSE;
+        if (aAtomicCompareExchangeStrong(&binding->requests[i].busy,
+                                        &expected, A_TRUE)) {
+            slot = &binding->requests[i];
+            break;
+        }
+    }
+    if (slot == NULL) {
+        aAtomicStore(&sub->busy, A_FALSE);
+        return A_STATUS_BUSY;
+    }
+    slot->subscription = sub;
+    slot->input = *input;
+    slot->work = (aCommRequest_t){requested, completed, slot};
     aStatus_t status = binding->events.submit(binding->events.submit_context,
-        &sub->work);
+        &slot->work);
     output->accepted = status == A_STATUS_OK;
-    /* OK 后请求可能已完成且重新入队，禁止再次访问槽位。 */
-    if (!output->accepted) aAtomicStore(&sub->busy, A_FALSE);
+    /* OK 后可能已完成、重入或销毁宿主，此后禁止访问请求池。 */
+    if (!output->accepted) {
+        aAtomicStore(&slot->busy, A_FALSE);
+        aAtomicStore(&sub->busy, A_FALSE);
+    }
     return status;
 }
 
@@ -186,6 +209,13 @@ aStatus_t aCommBindingInit(const aCommBindingConfig_t *config,
     if (status != A_STATUS_OK) return status;
     if (binding->subscription_capacity != 0U &&
         binding->subscriptions == NULL) return A_STATUS_INVALID_PARAM;
+    if (binding->request_capacity < config->request_capacity ||
+        (config->request_capacity != 0U && binding->requests == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    for (size_t i = 0U; i < config->request_capacity; i++) {
+        aAtomicInit(&binding->requests[i].busy, A_FALSE);
+    }
     binding->config = *config;
     binding->events = events == NULL ? (aCommBindingEvents_t){0} : *events;
     binding->subscription_count = 0U;
@@ -323,8 +353,13 @@ static aStatus_t storage_layout(const aCommBindingConfig_t *config,
         count > (SIZE_MAX - (align - 1U)) /
             sizeof(aCommBindingSubscription_t)) return A_STATUS_INVALID_PARAM;
     *stride = (native + align - 1U) / align * align;
-    *nodes = (count * sizeof(aCommBindingSubscription_t) + align - 1U) /
-        align * align;
+    size_t requests = (count * sizeof(aCommBindingSubscription_t) +
+        align - 1U) / align * align;
+    if (config->request_capacity > (SIZE_MAX - requests - (align - 1U)) /
+        sizeof(aCommBindingRequestSlot_t)) return A_STATUS_INVALID_PARAM;
+    *nodes = requests + config->request_capacity *
+        sizeof(aCommBindingRequestSlot_t);
+    *nodes = (*nodes + align - 1U) / align * align;
     if (*stride != 0U && count > (SIZE_MAX - *nodes) / *stride) {
         return A_STATUS_INVALID_PARAM;
     }
@@ -342,8 +377,9 @@ aStatus_t aCommBindingStorageSetup(aCommBinding_t *binding,
     const aCommBindingConfig_t *config, void *storage, size_t count)
 {
     size_t nodes, stride, size;
-    if (binding == NULL || (count != 0U && (storage == NULL ||
-        (uintptr_t)storage % _Alignof(max_align_t) != 0U))) {
+    if (binding == NULL || config == NULL ||
+        ((count != 0U || config->request_capacity != 0U) && (storage == NULL ||
+         (uintptr_t)storage % _Alignof(max_align_t) != 0U))) {
         return A_STATUS_INVALID_PARAM;
     }
     if (binding->ready) return A_STATUS_BUSY;
@@ -351,6 +387,12 @@ aStatus_t aCommBindingStorageSetup(aCommBinding_t *binding,
     if (status != A_STATUS_OK) return status;
     binding->subscriptions = storage;
     binding->subscription_capacity = count;
+    const size_t align = _Alignof(max_align_t);
+    size_t requests = (count * sizeof(aCommBindingSubscription_t) +
+        align - 1U) / align * align;
+    binding->requests = config->request_capacity == 0U ? NULL :
+        (void *)((uint8_t *)storage + requests);
+    binding->request_capacity = config->request_capacity;
     for (size_t i = 0U; i < count; i++) {
         binding->subscriptions[i].native = (uint8_t *)storage + nodes +
             i * stride;

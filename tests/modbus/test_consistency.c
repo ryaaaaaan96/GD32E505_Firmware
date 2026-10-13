@@ -179,6 +179,47 @@ static void plan_tests(void)
             handle, &plan_config, &completed, &result) != A_STATUS_OK);
     assert(completed == 2U && result.exception == 2U);
     close_instance(handle);
+    /* 注册表路径复用初始化分组；从中间截取的独立计划使用正确的基址。 */
+    items[0].address = 0U;
+    items[1].address = 2U;
+    const aModbusMappingClientConfig_t registered = {
+        .maps = items, .map_count = 2U, .unit_id = 1U,
+        .request_timeout = A_TIMEOUT_MS(500U)
+    };
+    client.client_override = &registered;
+    handle = open_instance(&client, &client_storage);
+    remote_motor = (motor_t){3500U, 42};
+    unlocks = 0U;
+    assert(execute_first_plan(handle, &plan_config, &completed, &result) ==
+           A_STATUS_OK);
+    assert(unlocks == 1U && motor.speed == 3500U && motor.temperature == 42);
+    plan_config.items = &items[1];
+    plan_config.count = 1U;
+    remote_motor = (motor_t){5000U, 43};
+    unlocks = 0U;
+    assert(execute_first_plan(handle, &plan_config, &completed, &result) ==
+           A_STATUS_OK);
+    assert(unlocks == 1U && motor.speed == 3500U && motor.temperature == 43);
+    close_instance(handle);
+    /* 原表中夹着另一周期的同 SIG 项，不得把未采集项解码进本次快照。 */
+    aModbusClientMap_t periodic[] = {items[0], items[0], items[1]};
+    periodic[0].comm.poll_time_ms = 100U;
+    periodic[1].comm.poll_time_ms = 200U;
+    periodic[2].comm.poll_time_ms = 100U;
+    aModbusMappingClientConfig_t mixed = registered;
+    mixed.maps = periodic;
+    mixed.map_count = 3U;
+    client.client_override = &mixed;
+    handle = open_instance(&client, &client_storage);
+    plan_config.items = periodic;
+    plan_config.count = 3U;
+    remote_motor = (motor_t){2000U, 32};
+    unlocks = 0U;
+    assert(execute_first_plan(handle, &plan_config, &completed, &result) ==
+           A_STATUS_OK);
+    assert(completed == 2U && unlocks == 1U);
+    assert(motor.speed == 2000U && motor.temperature == 32);
+    close_instance(handle);
     close_instance(link.server);
 }
 

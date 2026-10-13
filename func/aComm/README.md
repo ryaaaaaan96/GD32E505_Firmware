@@ -291,8 +291,8 @@ ReceiveAt 使用真实捕获时间，批量补送不能与消费者判断静默�
 错误、帧内超时和容量耗尽丢弃整帧；满队列丢弃新帧，保留已接收的帧。
 默认帧上限 256 字节、队列 3 帧，可通过全工程一致的
 ACOMM_CHANNEL_FRAME_SIZE/ACOMM_CHANNEL_FRAME_COUNT 编译定义调整。
-静态和动态通道均内置这组固定存储；STREAM 不复制数据，但当前实例布局仍预留
-帧存储。后续有大量网络通道时，可以独立裁剪这部分 RAM。
+STREAM 不分配帧缓冲。GAP 动态创建时一次分配通道与帧存储；静态初始化前，
+应用须将实例的 `storage` 指向生命周期覆盖通道的 `aCommChannelStorage_t`。
 
 `aCommChannelBindTransport` 返回通用流和 discard_input、prepare_frame、
 wait_transmit_complete、finish 回调。同步协议栈通过这些回调读写通道。
@@ -326,8 +326,8 @@ flush 只提交输出缓冲，物理发送完成由单独回调确认。
 
 aCommEndpoint_t 包含只读操作表，具体实现可将它放在自身首成员。
 read/write 的 target 为不透明指针，由提供者解释；data 操作组提供数据元信息、
-整组更新及可选的订阅、发布、完成通知。extension 仅供提供者保存自己的规则，
-aComm 不转换它、不按协议类型分派。
+整组更新及可选的订阅、发布、完成通知。协议自己的规则留在协议模块内，
+aComm 不维护协议扩展表，也不按协议类型分派。
 
 aComm 不再提供带 unit_id、area、address、quantity、word_order 的公共映射。
 Modbus 的寄存器映射和编解码在协议模块；通用层不会假定所有协议都使用线性地址。
@@ -359,14 +359,24 @@ MARK_ONLY 只登记关系，不执行工作。观察通知不会自动转换为�
 请求数据借用到完成回调结束；队列拒绝不会保留槽位，已接受请求不会撤销接收。
 协议模块无需重复实现 busy 标记、请求排队和完成通知。
 
-静态宿主提供 `aCommBindingSubscription_t[]`，并为每个槽填入数据端点原生节点。
-动态宿主通过 StorageSize/StorageSetup 将槽位和原生节点放入宿主的一次分配中；
+订阅节点只保存绑定关系；在途请求单独使用有界共享池。
+`aCommBindingConfig_t.request_capacity` 是同时接受请求的上限；仅观察或标记
+关系时可为零。请求订阅必须配置非零容量，池满立即返回 BUSY，不等待或分配。
+同一订阅最多接受一个在途请求；成功观察通知的 `accepted` 为真。
+
+静态宿主提供 `aCommBindingSubscription_t[]`，并为每个槽填入数据端点原生节点；
+另提供 `requests` 指向 `aCommBindingRequestSlot_t[]`，设置存储容量。
+动态宿主通过 StorageSize/StorageSetup 将订阅、请求池和原生节点放入一次分配；
 这两个接口只计算和布置内存，不调用 Alloc。绑定的分配方式跟随宿主，
 不要求创建 aComm 调度器，可注册应用自己的执行队列。
 默认工作区为 ACOMM_VALUE_CAPACITY；大 SIG 可配置独占外部工作区。
 
 独立测试 `python3 tests/comm/run.py` 的绑定用例不链接协议、aBus 或 OS 实现，
 覆盖请求拒绝、同步完成、重入投递、字段范围、快照提交和存储对齐。
+
+`aCommConfigCheck` 用于显式预检，会调用协议的 `check`。正常创建只调用协议
+`init`，该回调必须完整校验输入；避免先预检再重复初始化校验。计划创建期间
+只做一次定义检查和容量统计，再绑定存储并准备报文，固定配置保持只读。
 
 应用实例见 [app/protocol](../../app/protocol/README.md)，具体协议数组例子见
 [aModbus](../aModbus/README.md)。aComm 的头文件、CMake 与目标文件都不引用

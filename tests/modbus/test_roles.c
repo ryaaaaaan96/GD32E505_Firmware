@@ -126,6 +126,13 @@ static void roles(void)
     work->complete(work->context, status);
     assert(aBusRequestDone(&request));
     assert(notifications == 1U); /* 收到远端写入，仅由 aBus 发布一次。 */
+    assert(!aBusNotificationFailed(&bus));
+    const aBusPublishRequest_t accepted_update = {
+        .target = {1U, COUNTER, ABUS_SIG_WHOLE}, .event = ABUS_EVENT_UPDATED
+    };
+    assert(aBusPublish(&bus, &accepted_update, &dispatched) == A_STATUS_OK);
+    assert(dispatched.matched == 1U && dispatched.accepted == 1U);
+    assert(dispatched.rejected == 0U && notifications == 2U);
     assert(release(wire.server) == A_STATUS_OK);
 
     /* 仅登记关系可以不提供任何回调；从站主动读写请求必须明确拒绝。 */
@@ -149,7 +156,7 @@ static void roles(void)
         .target = {1U, COUNTER, ABUS_SIG_WHOLE}, .event = ABUS_EVENT_UPDATED
     };
     assert(aBusPublish(&bus, &update, &dispatched) == A_STATUS_OK);
-    assert(dispatched.matched == 0U && notifications == 1U);
+    assert(dispatched.matched == 0U && notifications == 2U);
     assert(release(wire.server) == A_STATUS_OK);
     map.comm.subscribe_events = ABUS_REQUEST_READ;
     assert(aModbusMappingServerConfigCheck(&server) == A_STATUS_UNSUPPORTED);

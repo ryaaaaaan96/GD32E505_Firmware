@@ -106,7 +106,7 @@ static aStatus_t config_check(const aCommConfig_t *config)
     return A_STATUS_OK;
 }
 
-aStatus_t aCommConfigCheck(const aCommConfig_t *config)
+static aStatus_t registration_check(const aCommConfig_t *config)
 {
     aStatus_t status = config_check(config);
     if (status != A_STATUS_OK) return status;
@@ -122,7 +122,14 @@ aStatus_t aCommConfigCheck(const aCommConfig_t *config)
         (protocol->count != 0U && protocol->items == NULL) ||
         config->interval_ms > INT32_MAX || config->error_delay_ms == 0U ||
         config->error_delay_ms > INT32_MAX) return A_STATUS_INVALID_PARAM;
-    return protocol->ops->check == NULL ? A_STATUS_OK :
+    return A_STATUS_OK;
+}
+aStatus_t aCommConfigCheck(const aCommConfig_t *config)
+{
+    aStatus_t status = registration_check(config);
+    if (status != A_STATUS_OK) return status;
+    const aCommProtocol_t *protocol = &config->protocol;
+    return protocol->ops == NULL || protocol->ops->check == NULL ? A_STATUS_OK :
         protocol->ops->check(protocol);
 }
 
@@ -130,7 +137,7 @@ aStatus_t aCommConfigCheck(const aCommConfig_t *config)
 static aStatus_t protocol_prepare(const aCommConfig_t *config,
     aCommConfig_t *resolved, aCommJobConfig_t *job)
 {
-    aStatus_t status = aCommConfigCheck(config);
+    aStatus_t status = registration_check(config);
     if (status != A_STATUS_OK) return status;
     *resolved = *config;
     const aCommProtocol_t *protocol = &config->protocol;
@@ -161,17 +168,14 @@ static aStatus_t protocol_cleanup(const aCommConfig_t *config,
 }
 
 static aStatus_t instance_init(const aCommConfig_t *config,
-                              aCommHandle_t *handle, aBool_t dynamic)
+    aCommHandle_t *handle, aBool_t dynamic, const aCommPlanSize_t *layout)
 {
-    aStatus_t status = config_check(config);
-    if (status != A_STATUS_OK) return status;
+    aStatus_t status;
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (handle->ready) return A_STATUS_BUSY;
     size_t job_count = config->job_count;
     if (table_enabled(config)) {
-        size_t frames, items;
-        status = aCommPlanMeasure(&config->table, &frames, &items, &job_count);
-        if (status != A_STATUS_OK) return status;
+        job_count = layout->groups;
         if (handle->table_capacity < job_count ||
             (job_count != 0U && handle->table_jobs == NULL)) {
             return A_STATUS_INVALID_PARAM;
@@ -194,7 +198,7 @@ static aStatus_t instance_init(const aCommConfig_t *config,
         if (status != A_STATUS_OK) goto cleanup;
     }
     if (table_enabled(config)) {
-        status = aCommPlanBind(&config->table, &handle->plan);
+        status = aCommPlanBindMeasured(&config->table, &handle->plan, layout);
         if (status != A_STATUS_OK) goto cleanup;
     }
     handle->config = *config;
@@ -263,7 +267,14 @@ aStatus_t aCommInitStatic(const aCommConfig_t *config, aCommHandle_t *handle)
     if (handle->ready) return A_STATUS_BUSY;
     aStatus_t status = protocol_prepare(config, &resolved, &job);
     if (status != A_STATUS_OK) return status;
-    status = instance_init(&resolved, handle, A_FALSE);
+    aCommPlanSize_t layout = {0};
+    status = config_check(&resolved);
+    if (status == A_STATUS_OK && table_enabled(&resolved)) {
+        status = aCommPlanMeasure(&resolved.table, &layout);
+    }
+    if (status == A_STATUS_OK) {
+        status = instance_init(&resolved, handle, A_FALSE, &layout);
+    }
     return status == A_STATUS_OK ? status : protocol_cleanup(&resolved, status);
 }
 
@@ -292,7 +303,7 @@ aStatus_t aCommCreate(const aCommConfig_t *config, aCommHandle_t **handle_out)
 {
     aCommHandle_t *handle;
     size_t size = sizeof(*handle), jobs, events, requests;
-    size_t frames = 0U, items = 0U, groups = 0U;
+    aCommPlanSize_t layout = {0};
     size_t frame_offset, index_offset, group_offset;
     aStatus_t status;
     aCommConfig_t resolved;
@@ -306,13 +317,15 @@ aStatus_t aCommCreate(const aCommConfig_t *config, aCommHandle_t **handle_out)
     if (status != A_STATUS_OK) goto cleanup;
     size_t job_count = config->job_count;
     if (table_enabled(config)) {
-        status = aCommPlanMeasure(&config->table, &frames, &items, &groups);
+        status = aCommPlanMeasure(&config->table, &layout);
         if (status != A_STATUS_OK) goto cleanup;
-        job_count = groups;
+        job_count = layout.groups;
     }
-    if (!reserve(&size, groups, sizeof(aCommTableJob_t), &group_offset) ||
-        !reserve(&size, frames, sizeof(aCommPlanFrame_t), &frame_offset) ||
-        !reserve(&size, items, sizeof(size_t), &index_offset) ||
+    if (!reserve(&size, layout.groups, sizeof(aCommTableJob_t),
+                 &group_offset) ||
+        !reserve(&size, layout.frames, sizeof(aCommPlanFrame_t),
+                 &frame_offset) ||
+        !reserve(&size, layout.items, sizeof(size_t), &index_offset) ||
         !reserve(&size, job_count, sizeof(aCommJobState_t), &jobs) ||
         !reserve(&size, config->event_count, sizeof(aCommEventState_t),
                  &events) ||
@@ -332,14 +345,14 @@ aStatus_t aCommCreate(const aCommConfig_t *config, aCommHandle_t **handle_out)
     handle->requests = (void *)((uint8_t *)handle + requests);
     handle->job_capacity = job_count;
     handle->table_jobs = (void *)((uint8_t *)handle + group_offset);
-    handle->table_capacity = groups;
+    handle->table_capacity = layout.groups;
     handle->plan.frames = (void *)((uint8_t *)handle + frame_offset);
-    handle->plan.capacity = frames;
+    handle->plan.capacity = layout.frames;
     handle->plan.indices = (void *)((uint8_t *)handle + index_offset);
-    handle->plan.index_capacity = items;
+    handle->plan.index_capacity = layout.items;
     handle->event_capacity = config->event_count;
     handle->request_capacity = config->request_capacity;
-    status = instance_init(config, handle, A_TRUE);
+    status = instance_init(config, handle, A_TRUE, &layout);
     if (status != A_STATUS_OK) {
         aOSFree(handle);
         goto cleanup;

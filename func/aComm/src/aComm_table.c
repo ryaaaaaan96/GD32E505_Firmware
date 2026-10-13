@@ -114,24 +114,26 @@ static aStatus_t plan_build(const aCommPlanConfig_t *config,
 }
 
 aStatus_t aCommPlanMeasure(const aCommPlanConfig_t *config,
-    size_t *frames, size_t *items, size_t *groups)
+    aCommPlanSize_t *size)
 {
     aStatus_t status = table_check(config);
     return status == A_STATUS_OK ?
-        plan_build(config, NULL, frames, items, groups) : status;
+        plan_build(config, NULL, &size->frames, &size->items, &size->groups) :
+        status;
 }
 
-aStatus_t aCommPlanBind(const aCommPlanConfig_t *config, aCommPlan_t *plan)
+aStatus_t aCommPlanBindMeasured(const aCommPlanConfig_t *config,
+    aCommPlan_t *plan, const aCommPlanSize_t *size)
 {
-    size_t frames, items, groups;
+    size_t items, groups;
     if (plan == NULL) return A_STATUS_INVALID_PARAM;
     if (plan->ready) return A_STATUS_BUSY;
-    aStatus_t status = aCommPlanMeasure(config, &frames, &items, &groups);
-    if (status != A_STATUS_OK) return status;
-    if (plan->capacity < frames || plan->index_capacity < items ||
-        (frames != 0U && plan->frames == NULL) ||
-        (items != 0U && plan->indices == NULL)) return A_STATUS_INVALID_PARAM;
-    status = plan_build(config, plan, &plan->count, &items, &groups);
+    if (plan->capacity < size->frames || plan->index_capacity < size->items ||
+        (size->frames != 0U && plan->frames == NULL) ||
+        (size->items != 0U && plan->indices == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    aStatus_t status = plan_build(config, plan, &plan->count, &items, &groups);
     if (status != A_STATUS_OK) return status;
     /* 全部准备成功后才建立借用，避免失败回滚再次调用释放回调。 */
     if (config->ops->acquire != NULL) {
@@ -158,7 +160,10 @@ aStatus_t aCommPlanUnbind(aCommPlan_t *plan)
 aStatus_t aCommPlanInitStatic(const aCommPlanConfig_t *config,
     aCommPlan_t *plan)
 {
-    return aCommPlanBind(config, plan);
+    aCommPlanSize_t size;
+    aStatus_t status = aCommPlanMeasure(config, &size);
+    return status == A_STATUS_OK ?
+        aCommPlanBindMeasured(config, plan, &size) : status;
 }
 aStatus_t aCommPlanDeInitStatic(aCommPlan_t *plan)
 {
@@ -170,11 +175,12 @@ aStatus_t aCommPlanDeInitStatic(aCommPlan_t *plan)
 aStatus_t aCommPlanCreate(const aCommPlanConfig_t *config,
     aCommPlan_t **plan_out)
 {
-    size_t frames, items, groups;
+    aCommPlanSize_t layout;
     if (plan_out == NULL) return A_STATUS_INVALID_PARAM;
     *plan_out = NULL;
-    aStatus_t status = aCommPlanMeasure(config, &frames, &items, &groups);
+    aStatus_t status = aCommPlanMeasure(config, &layout);
     if (status != A_STATUS_OK) return status;
+    size_t frames = layout.frames, items = layout.items;
     if (frames > (SIZE_MAX - sizeof(aCommPlan_t)) / sizeof(aCommPlanFrame_t)) {
         return A_STATUS_INVALID_PARAM;
     }
@@ -187,7 +193,7 @@ aStatus_t aCommPlanCreate(const aCommPlanConfig_t *config,
     *plan = (aCommPlan_t){.frames = (void *)(plan + 1), .capacity = frames,
                          .index_capacity = items};
     plan->indices = (void *)(plan->frames + frames);
-    status = aCommPlanBind(config, plan);
+    status = aCommPlanBindMeasured(config, plan, &layout);
     if (status != A_STATUS_OK) { aOSFree(plan); return status; }
     plan->dynamic = A_TRUE;
     *plan_out = plan;

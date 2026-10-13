@@ -61,6 +61,20 @@ static aStatus_t statusInit(void)
     return A_STATUS_OK;
 }
 
+#if ASHELL_ENABLE || APP_LOG_ENABLE
+/* 启动失败且消费者尚未放行时，按设备、功能状态的顺序清理。 */
+static aStatus_t consoleCleanup(void)
+{
+    aStatus_t status = appSystemConsoleDeInit();
+    if (status != A_STATUS_OK) return status;
+#if ASHELL_ENABLE
+    status = aShellDeInit();
+    if (status == A_STATUS_NOT_READY) status = A_STATUS_OK;
+#endif
+    return status;
+}
+#endif
+
 /* --------------------------------------------------------------------------
  * 系统控制台：Shell 初始化、输入处理与输出队列发送任务。
  * -------------------------------------------------------------------------- */
@@ -86,14 +100,17 @@ static void shellTask(void *argument)
 
 static aStatus_t shellInit(void)
 {
+    aShellConfig_t config;
     aOSTaskConfig_t task_config;
     aStatus_t status;
     aStatus_t cleanup_status;
     uint32_t core_clock_hz;
 
-    status = appSystemConsoleInit();
+    appSystemShellConfigInit(&config);
+    status = aShellInit(&config);
     if (status != A_STATUS_OK) {
-        return status;
+        cleanup_status = consoleCleanup();
+        return cleanup_status == A_STATUS_OK ? status : cleanup_status;
     }
 
     core_clock_hz = aDrvGetCoreClockHz();
@@ -108,7 +125,7 @@ static aStatus_t shellInit(void)
     task_config.priority = AOS_TASK_PRIO_LOW;
     status = aOSCreateTask(&task_config, NULL);
     if (status != A_STATUS_OK) {
-        cleanup_status = appSystemConsoleDeInit();
+        cleanup_status = consoleCleanup();
         if (cleanup_status != A_STATUS_OK) return cleanup_status;
     }
     return status;
@@ -149,7 +166,7 @@ static aStatus_t logInit(void)
     status = aLogInit(&config);
     if (status != A_STATUS_OK) {
         /* 日志尚未就绪，Shell 仍在等待；此时可清理未使用的控制台。 */
-        cleanup_status = appSystemConsoleDeInit();
+        cleanup_status = consoleCleanup();
         if (cleanup_status != A_STATUS_OK) return cleanup_status;
         return status;
     }
@@ -519,6 +536,11 @@ aStatus_t aSystemInit(void)
     if (status != A_STATUS_OK) {
         return status;
     }
+
+#if ASHELL_ENABLE || APP_LOG_ENABLE
+    status = appSystemConsoleInit();
+    if (status != A_STATUS_OK) return status;
+#endif
 
 #if ASHELL_ENABLE
     status = shellInit();

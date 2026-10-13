@@ -15,7 +15,7 @@ typedef struct aModbusMapping aModbusMapping_t;
  */
 typedef struct {
     aCommBindingConfig_t comm;
-    aCommEndpoint_t *protocol;
+    aCommEndpoint_t *protocol; /**< 主站借用真实实例；从站可为 NULL。 */
 } aModbusMappingConfig_t;
 void aModbusMappingConfigStructInit(aModbusMappingConfig_t *config);
 #if AMODBUS_STATIC_ENABLE

@@ -69,7 +69,8 @@ transport_type 选择 Modbus 的 RTU/TCP 格式；通道的 STREAM/GAP 模式由
 protocol.c 配置给 aComm，两者含义独立。实际收发回调在协议初始化时注入。
 采集周期、权限、数据目标在具体数组的 comm 成员中。
 protocol.c 持有 `aModbusComm_t` 运行环境，注入数据端点、通道和提交队列回调，
-通过 aCommConfigCheck 在开启端口前检查，再统一调用 aCommCreate/InitStatic。
+统一调用 aCommCreate/InitStatic，由协议 init 完整校验并初始化；需要单独预检时
+可调用 aCommConfigCheck，正常启动不再重复调用。
 检查、初始化、处理和释放函数由 aModbus 提供，回调表在对应产品 .c 中定义，
 没有跨文件的全局回调表。主站 process=NULL，执行初始化返回的采集表；
 从站注册 aModbusCommProcess。应用可替换或包装回调，不增加独立 Adapter。
@@ -83,7 +84,9 @@ ServerProcess 仍为同步事务，等待期间同一消费者不能执行其他
 统一负责占用槽位、完成发布与释放借用；Modbus 回调只执行实际协议请求。
 应用将数据端点放入 `aModbusComm_t.binding.data`，协议回调将其装配到
 映射，并自动关联实际协议端点。静态订阅槽类型为 `aCommBindingSubscription_t`，
-保存在映射实例的 `comm` 成员中；动态模式仍为一次分配。
+保存在映射实例的 `comm` 成员中；主站另提供 4 个共享请求槽，从站标记关系
+不分配请求池。每条映射提供一个分组索引；GAP 通道单独提供帧存储。
+这些资源均在 protocol.c 配置，动态模式仍由各宿主一次分配。
 aModbus 从站可使用其他地址回调，不要求使用 aBus；模块依赖 aComm。
 
 `protocolPersistenceConfigInit` 只向数据库配置填入只读点表和持久化清单。

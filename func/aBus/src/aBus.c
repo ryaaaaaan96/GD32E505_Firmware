@@ -12,47 +12,12 @@
 #error "ABUS_DEF_CHECK_ENABLE must be 0 or 1"
 #endif
 
-static aBool_t value_in_range(aDataType_t type,
-    const aBusRange_t *range, aDataValue_t value)
-{
-    if (range == NULL) return A_TRUE;
-    switch (type) {
-    case ALIB_DATA_U8:
-        return value.u8 >= range->min.u8 && value.u8 <= range->max.u8;
-    case ALIB_DATA_U16:
-        return value.u16 >= range->min.u16 && value.u16 <= range->max.u16;
-    case ALIB_DATA_U32:
-        return value.u32 >= range->min.u32 && value.u32 <= range->max.u32;
-    case ALIB_DATA_S32:
-        return value.s32 >= range->min.s32 && value.s32 <= range->max.s32;
-    default: return A_FALSE;
-    }
-}
-
-/* memcpy 支持非对齐字段；NULL 源表示初始化时的全零默认值。 */
+/* 范围规则由 aLib 共享；aBus 决定检查时机及错误码。 */
 static aStatus_t range_check(aDataType_t type, const aBusRange_t *range,
-                             const void *src)
+    const void *src)
 {
-    aDataValue_t value = {.u32 = 0U};
-
-    if (range == NULL) return A_STATUS_OK;
-    switch (type) {
-    case ALIB_DATA_U8:
-        if (src != NULL) memcpy(&value.u8, src, sizeof(value.u8));
-        break;
-    case ALIB_DATA_U16:
-        if (src != NULL) memcpy(&value.u16, src, sizeof(value.u16));
-        break;
-    case ALIB_DATA_U32:
-        if (src != NULL) memcpy(&value.u32, src, sizeof(value.u32));
-        break;
-    case ALIB_DATA_S32:
-        if (src != NULL) memcpy(&value.s32, src, sizeof(value.s32));
-        break;
-    default: return A_STATUS_INVALID_PARAM;
-    }
-    return value_in_range(type, range, value) ? A_STATUS_OK :
-           A_STATUS_INVALID_PARAM;
+    return aDataRangeCheck(type, range, src) ? A_STATUS_OK :
+        A_STATUS_INVALID_PARAM;
 }
 
 static aStatus_t values_check(const aBusSig_t *sig, const void *src)
@@ -80,7 +45,7 @@ static aBool_t type_valid(aDataType_t type, size_t size,
         return range == NULL;
     }
     return aDataTypeSize(type) != 0U && aDataTypeSize(type) == size &&
-           (range == NULL || value_in_range(type, range, range->min));
+           (range == NULL || aDataValueInRange(type, range, range->min));
 }
 
 /* 定义检查只在初始化执行；写入范围检查始终保留。 */

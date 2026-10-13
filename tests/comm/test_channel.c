@@ -62,7 +62,9 @@ static aCommChannel_t *create(const aCommChannelConfig_t *config)
     assert(aCommChannelCreate(config, &handle) == A_STATUS_OK);
     return handle;
 #else
+    static aCommChannelStorage_t frames;
     static aCommChannel_t storage;
+    storage.storage = &frames;
     assert(aCommChannelInitStatic(config, &storage) == A_STATUS_OK);
     return &storage;
 #endif
@@ -93,6 +95,8 @@ static void stream_test(void)
         .flush = flush_bytes
     };
     aCommChannel_t *handle = create(&config);
+    assert((handle->storage == NULL) ==
+        (config.mode == ACOMM_CHANNEL_STREAM));
     assert(aCommChannelBindTransport(handle, &transport) == A_STATUS_OK);
     assert(transport.stream.read(transport.stream.context, data,
         sizeof(data), A_TIMEOUT_NO_WAIT) == 1);
@@ -131,6 +135,8 @@ static void framing_test(void)
     config.frame_check = check_frame;
     config.frame_context = &checks;
     aCommChannel_t *handle = create(&config);
+    assert((handle->storage == NULL) ==
+        (config.mode == ACOMM_CHANNEL_STREAM));
     assert(aCommChannelBindTransport(handle, &transport) == A_STATUS_OK);
     aOSDelayMs(2U);
     feed(handle, 0x7EU, 1U); /* 一字节帧同样有效。 */
@@ -189,7 +195,8 @@ static aStatus_t config_status(const aCommChannelConfig_t *config)
     if (status == A_STATUS_OK) destroy(handle);
     else assert(handle == NULL);
 #else
-    aCommChannel_t storage;
+    aCommChannelStorage_t frames;
+    aCommChannel_t storage = {.storage = &frames};
     aStatus_t status = aCommChannelInitStatic(config, &storage);
     if (status == A_STATUS_OK) destroy(&storage);
 #endif

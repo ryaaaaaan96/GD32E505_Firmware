@@ -23,10 +23,10 @@ target_include_directories(
         "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-if(ASHELL_ENABLE AND
+if((ASHELL_ENABLE OR app_log_enable) AND
    (NOT ADEV_USART_ENABLE OR NOT ADEV_USART_INTERRUPT_ENABLE))
     message(FATAL_ERROR
-        "Shell transport requires ADEV_USART_ENABLE=ON "
+        "Console requires ADEV_USART_ENABLE=ON "
         "and ADEV_USART_INTERRUPT_ENABLE=ON"
     )
 endif()
@@ -43,10 +43,6 @@ if(app_database_enable)
     target_include_directories(${APP_TARGET} PRIVATE
         "${ACLASS_PRODUCT_DIR}/config")
     target_link_libraries(${APP_TARGET} PRIVATE aDataBase)
-endif()
-
-if(ASHELL_ENABLE AND NOT ADEV_USART_DYNAMIC_ENABLE)
-    message(FATAL_ERROR "Console requires ADEV_USART_DYNAMIC_ENABLE=ON")
 endif()
 
 target_compile_definitions(${APP_TARGET} PRIVATE

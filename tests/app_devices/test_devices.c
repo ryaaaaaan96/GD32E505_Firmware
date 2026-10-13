@@ -227,25 +227,14 @@ int main(void)
     assert(usart_calls == 1);
     assert(appSystemConsoleDeInit() == A_STATUS_NOT_READY);
     assert(mutex_creates == 1U && mutex_destroys == 1U);
-#elif defined(SHELL_FAILURE)
-#ifdef CLEANUP_FAILURE
-    assert(appSystemConsoleInit() == A_STATUS_BUSY);
-    assert(appSystemConsoleInit() == A_STATUS_BUSY);
-    assert(usart_calls == 1 && deinit_calls == 1);
-    assert(tx_mutex != NULL && mutex_destroys == 0U);
-    assert(appSystemConsoleDeInit() == A_STATUS_OK);
-    assert(deinit_calls == 2 && shell_deinit_calls == 1);
-#else
-    assert(appSystemConsoleInit() == A_STATUS_NO_MEMORY);
-    assert(shell_calls == 1 && deinit_calls == 1);
-#endif
-    assert(appSystemConsoleDeInit() == A_STATUS_NOT_READY);
-    assert(mutex_creates == 1U && mutex_destroys == 1U);
 #else
     assert(appSystemConsoleInit() == A_STATUS_OK);
     /* 重复初始化不能覆盖仍被 Shell 使用的串口句柄。 */
     assert(appSystemConsoleInit() == A_STATUS_BUSY);
-    assert(shell_calls == 1 && deinit_calls == 0);
+    assert(shell_calls == 0 && deinit_calls == 0);
+    aShellConfig_t config;
+    appSystemShellConfigInit(&config);
+    assert(aShellInit(&config) == A_STATUS_OK);
     assert(stream.read && stream.write && !stream.flush);
     assert(stream.read(
             stream.context, data, sizeof(data), A_TIMEOUT_MS(7U)) == 2);
@@ -275,6 +264,8 @@ int main(void)
             stream.context, data, sizeof(data), A_TIMEOUT_MS(9U)) == 2);
 #endif
     assert(appSystemConsoleDeInit() == A_STATUS_OK);
+    assert(shell_ready && shell_deinit_calls == 0U);
+    assert(aShellDeInit() == A_STATUS_OK);
     assert(!shell_ready && shell_deinit_calls == 1U);
     assert(mutex_creates == 1U && mutex_destroys == 1U);
     assert(app_system_console_stream.write(

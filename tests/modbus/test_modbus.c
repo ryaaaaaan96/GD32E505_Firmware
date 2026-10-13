@@ -496,11 +496,13 @@ static void fixtureConfigInit(fixtureConfig_t *config)
 typedef struct {
     aModbusHandle_t *protocol;
     aModbusMapping_t *mapping;
+    aModbusMapLink_t links[128];
     aBusEndpoint_t data;
     aBool_t used;
 #if ABUS_EVENT_ENABLE
     aBusEndpointSubscription_t nodes[64];
     aCommBindingSubscription_t subscriptions[64];
+    aCommBindingRequestSlot_t requests[4];
 #endif
 } fixtureEndpoints_t;
 static fixtureEndpoints_t endpoint_storage[8];
@@ -522,7 +524,9 @@ static aModbusMappingConfig_t fixtureConnection(const fixtureConfig_t *config,
             .sig_read = config->sig_read, .sig_write = config->sig_write,
             .sig_context = config->sig_context,
             .snapshot = config->snapshot,
-            .snapshot_size = config->snapshot_size
+            .snapshot_size = config->snapshot_size,
+            .request_capacity = config->role == AMODBUS_ROLE_CLIENT &&
+                ABUS_EVENT_ENABLE ? 4U : 0U
         }
     };
     return connection;
@@ -570,11 +574,17 @@ static aStatus_t fixtureOpen(const fixtureConfig_t *config,
     }
     assert(endpoints != NULL);
     endpoints->protocol = NULL;
+    if (storage != NULL) {
+        storage->links = endpoints->links;
+        storage->map_capacity = 128U;
+    }
     if (config->bus != NULL) {
         assert(aBusEndpointInit(&endpoints->data, config->bus) == A_STATUS_OK);
     }
 #if ABUS_EVENT_ENABLE
     if (storage != NULL) {
+        storage->comm.requests = endpoints->requests;
+        storage->comm.request_capacity = 4U;
         if (storage->comm.subscriptions == NULL) {
             storage->comm.subscriptions = endpoints->subscriptions;
             storage->comm.subscription_capacity = 64U;
@@ -896,7 +906,10 @@ static void stream_tests(void)
         uint16_t value = 0xBCDE;
         aCommChannel_t *channels[2] = {NULL, NULL};
 #if ACOMM_STATIC_ENABLE
-        aCommChannel_t channel_storage[2];
+        aCommChannelStorage_t frames[2];
+        aCommChannel_t channel_storage[2] = {
+            {.storage = &frames[0]}, {.storage = &frames[1]}
+        };
 #endif
 
         if (link.type == AMODBUS_TRANSPORT_TCP) {

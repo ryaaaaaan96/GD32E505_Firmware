@@ -141,7 +141,8 @@ static void multi_instance(void)
     link_t first = {.mutex = PTHREAD_MUTEX_INITIALIZER};
     link_t second = {.mutex = PTHREAD_MUTEX_INITIALIZER};
     aCommChannelConfig_t config = configuration(&first);
-    aCommChannel_t storage, *other;
+    aCommChannelStorage_t frames;
+    aCommChannel_t storage = {.storage = &frames}, *other;
     aCommTransport_t one, two;
     uint8_t data[20];
     const uint8_t request[] = {1, 3, 0, 0, 0, 1, 0, 0};
@@ -225,7 +226,8 @@ static void timing(uint32_t baud, uint8_t bits, uint32_t gap,
 {
     link_t link = {.mutex = PTHREAD_MUTEX_INITIALIZER};
     aCommChannelConfig_t config = configuration(&link);
-    aCommChannel_t handle;
+    aCommChannelStorage_t frames;
+    aCommChannel_t handle = {.storage = &frames};
     aCommTransport_t transport;
     uint8_t data[8];
     const uint8_t request[] = {7, 3, 0, 0, 0, 1, 0, 0};
@@ -258,7 +260,8 @@ static void failures(void)
 {
     link_t link = {.mutex = PTHREAD_MUTEX_INITIALIZER};
     aCommChannelConfig_t config = configuration(&link);
-    aCommChannel_t handle, *created = (void *)1;
+    aCommChannelStorage_t frames;
+    aCommChannel_t handle = {.storage = &frames}, *created = (void *)1;
     assert(aCommChannelCreate(NULL, &created) == A_STATUS_INVALID_PARAM);
     assert(created == NULL);
     config.timing.frame_gap_us = 0U;
@@ -295,7 +298,8 @@ static void captured_timing(uint64_t start_us)
 {
     link_t link = {.mutex = PTHREAD_MUTEX_INITIALIZER};
     aCommChannelConfig_t config = configuration(&link);
-    aCommChannel_t handle;
+    aCommChannelStorage_t frames;
+    aCommChannel_t handle = {.storage = &frames};
     aCommTransport_t transport;
     const uint8_t request[] = {1, 3, 0, 0, 0, 1, 0, 0};
     const uint8_t next[] = {1, 3, 0, 1, 0, 1, 0, 0};

@@ -86,15 +86,20 @@ typedef struct {
     size_t size;
 } aCommChannelFrame_t;
 
+/** 仅 GAP 模式需要；静态实例由调用者提供，流式实例不占帧缓冲。 */
+typedef struct {
+    aCommChannelFrame_t frames[ACOMM_CHANNEL_FRAME_COUNT];
+    uint8_t frame[ACOMM_CHANNEL_FRAME_SIZE];
+} aCommChannelStorage_t;
+
 struct aCommChannel {
     aCommChannelConfig_t config;
-    aCommChannelFrame_t frames[ACOMM_CHANNEL_FRAME_COUNT];
+    aCommChannelStorage_t *storage;
     size_t head, tail, count, building;
     uint32_t last_rx_ticks, last_rx_ms;
     uint32_t last_tx_ticks, last_tx_ms;
     uint32_t frame_gap, byte_gap, character_ticks, idle_ms;
     uint32_t dropped_frames;
-    uint8_t frame[ACOMM_CHANNEL_FRAME_SIZE];
     size_t frame_size, frame_position;
     aBool_t invalid_frame, frame_ready, tx_pending;
     aBool_t ready, dynamic;
@@ -106,14 +111,20 @@ typedef struct {
     void *native; /**< 数据端点原生节点；初始化前由宿主提供。 */
     const aCommEntry_t *entry;
     aCommBinding_t *owner;
+    aAtomicBool_t busy; /**< 同一订阅最多接受一个未完成请求。 */
+} aCommBindingSubscription_t;
+typedef struct {
+    aCommBindingSubscription_t *subscription;
     aAtomicBool_t busy;
     aCommNotifyInput_t input;
     aCommRequest_t work;
-} aCommBindingSubscription_t;
+} aCommBindingRequestSlot_t;
 struct aCommBinding {
     aCommBindingSubscription_t *subscriptions;
     size_t subscription_capacity;
     size_t subscription_count;
+    aCommBindingRequestSlot_t *requests;
+    size_t request_capacity;
     aCommBindingConfig_t config;
     aCommBindingEvents_t events;
     aBool_t ready;

@@ -9,7 +9,7 @@
 #define AMODBUS_WORD_LOW_FIRST 1U
 
 /** 返回协议实例中的公共首成员，不分配独立端点。
- * NULL 返回只供配置检查使用的规则端点，不能执行事务。
+ * NULL 返回 NULL；配置检查直接使用 Modbus 规则，不需要伪实例。
  */
 aCommEndpoint_t *aModbusCommEndpoint(aModbusHandle_t *handle);
 /** 只转交通道回调，不持有或销毁通道。 */

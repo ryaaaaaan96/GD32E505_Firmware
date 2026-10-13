@@ -161,7 +161,9 @@ typedef aStatus_t (*aCommSubmitFn_t)(void *context,
 
 typedef struct aCommProtocol aCommProtocol_t;
 /** 协议注册回调，不规定主从角色、地址格式或传输介质。
- * check 不分配资源、不访问端口；init 失败须撤销本次创建的资源。
+ * check 仅供显式 aCommConfigCheck 预检，不分配资源、不访问端口。
+ * init 自行检查协议配置；Create/InitStatic 不再先调用 check 重复遍历点表。
+ * init 失败须撤销本次创建的资源。
  * init 成功后可返回采集表；空表则由 process 处理一个服务步骤。
  * deinit 在计划解除引用后调用，须支持失败后重试，成功才转移所有权。
  * 初始化/释放由应用串行编排，启动前和释放前必须停止所有生产者。
@@ -336,6 +338,7 @@ typedef struct {
     void *sig_context;
     void *snapshot; /**< NULL 使用内部工作区；外部区须对齐且不与数据重叠。 */
     size_t snapshot_size;
+    size_t request_capacity; /**< 未完成事件请求上限；仅观察/标记时为零。 */
 } aCommBindingConfig_t;
 
 /** 请求已通过目标、权限及重叠范围检查；协议只解释自己的表项和地址。
@@ -393,7 +396,7 @@ aStatus_t aCommBindingWrite(aCommBinding_t *binding,
     const aCommValueWriteRequest_t *request);
 aStatus_t aCommBindingTransfer(aCommBinding_t *binding,
     const aCommBindingTransfer_t *request);
-/** 为宿主的一次分配计算附加存储；只给订阅项分配槽位及端点原生节点。 */
+/** 为宿主的一次分配计算附加存储；订阅节点与有限请求池分别计算。 */
 aStatus_t aCommBindingStorageSize(const aCommBindingConfig_t *config,
     size_t count, size_t *size);
 /** storage 必须标准最大对齐，容量至少为 StorageSize 返回值。 */

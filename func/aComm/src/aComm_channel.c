@@ -52,7 +52,10 @@ static aStatus_t instance_init(const aCommChannelConfig_t *config,
     uint64_t idle_ms = divide_up((frame_gap + character) * 1000U,
                                  frequency) + 1U;
     if (idle_ms > INT32_MAX) return A_STATUS_UNSUPPORTED;
+    aCommChannelStorage_t *storage = handle->storage;
+    if (storage == NULL) return A_STATUS_INVALID_PARAM;
     memset(handle, 0, sizeof(*handle));
+    handle->storage = storage;
     handle->config = *config;
     handle->character_ticks = (uint32_t)character;
     handle->byte_gap = (uint32_t)byte_gap;
@@ -91,8 +94,14 @@ aStatus_t aCommChannelCreate(const aCommChannelConfig_t *config,
     if (handle_out == NULL) return A_STATUS_INVALID_PARAM;
     *handle_out = NULL;
     if (config == NULL) return A_STATUS_INVALID_PARAM;
-    handle = aOSAlloc(sizeof(*handle));
+    const size_t size = sizeof(*handle) +
+        (config->mode == ACOMM_CHANNEL_GAP ? sizeof(*handle->storage) : 0U);
+    handle = aOSAlloc(size);
     if (handle == NULL) return A_STATUS_NO_MEMORY;
+    *handle = (aCommChannel_t){
+        .storage = config->mode == ACOMM_CHANNEL_GAP ?
+            (void *)(handle + 1) : NULL
+    };
     status = instance_init(config, handle);
     if (status != A_STATUS_OK) {
         aOSFree(handle);
@@ -124,7 +133,7 @@ static aBool_t elapsed(aCommChannel_t *handle, uint32_t ticks,
 static void finish_frame(aCommChannel_t *handle)
 {
     if (handle->building != 0U && !handle->invalid_frame) {
-        handle->frames[handle->head].size = handle->building;
+        handle->storage->frames[handle->head].size = handle->building;
         handle->head = (handle->head + 1U) % ACOMM_CHANNEL_FRAME_COUNT;
         handle->count++;
     } else if (handle->invalid_frame) {
@@ -156,7 +165,7 @@ void aCommChannelReceiveAt(aCommChannel_t *handle, uint8_t byte,
         handle->invalid_frame = A_TRUE;
     }
     if (!handle->invalid_frame) {
-        handle->frames[handle->head].data[handle->building++] = byte;
+        handle->storage->frames[handle->head].data[handle->building++] = byte;
     }
 }
 
@@ -195,8 +204,8 @@ static aStatus_t receive_frame(aCommChannel_t *handle, aTimeout_t timeout)
         io->exit(io->context);
         if (available != 0U) {
             /* 槽位归还前生产者不会覆盖它；整帧复制不占用临界区。 */
-            handle->frame_size = handle->frames[tail].size;
-            memcpy(handle->frame, handle->frames[tail].data,
+            handle->frame_size = handle->storage->frames[tail].size;
+            memcpy(handle->storage->frame, handle->storage->frames[tail].data,
                    handle->frame_size);
             io->enter(io->context);
             handle->tail = (tail + 1U) % ACOMM_CHANNEL_FRAME_COUNT;
@@ -205,7 +214,7 @@ static aStatus_t receive_frame(aCommChannel_t *handle, aTimeout_t timeout)
             aStatus_t status = A_STATUS_OK;
             if (handle->config.frame_check != NULL) {
                 status = handle->config.frame_check(
-                    handle->config.frame_context, handle->frame,
+                    handle->config.frame_context, handle->storage->frame,
                     handle->frame_size);
             }
             if (status == A_STATUS_OK) {
@@ -246,7 +255,7 @@ static aSSize_t stream_read(void *context, void *data, size_t size,
     /* 不能越过帧边界补数据；继续索取已耗尽帧是报文不完整，不是流 EOF。 */
     if (available == 0U) return aOSFailWithStatus(A_STATUS_ERROR);
     if (size > available) size = available;
-    memcpy(data, handle->frame + handle->frame_position, size);
+    memcpy(data, handle->storage->frame + handle->frame_position, size);
     handle->frame_position += size;
     return (aSSize_t)size;
 }

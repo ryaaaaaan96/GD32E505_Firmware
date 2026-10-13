@@ -85,7 +85,8 @@ DeInit 先写熄灭电平再将引脚恢复为浮空输入，释放后的电平�
 创建、销毁和重试行为以各自接口为准。
 
 - 按设备用途提供专用初始化：appSystemStatusLedInit(&handle) 返回 LED 句柄，
-  appSystemConsoleInit() 初始化控制台并通过 aStream_t 绑定 aShell 单例。
+  appSystemConsoleInit() 初始化控制台及 TX 锁，提供只读 aStream_t；
+  system 的 shellInit 使用设备层配置初始化 aShell 单例和任务。
 - 合并初始化和句柄获取，不再提供独立 Open。直接初始化选中实例；应用保证每个实例只初始化一次。
 - 失败清空输出；NULL 输出指针返回 INVALID_PARAM。
 - 首次初始化可能耗时、分配 OS 资源并操作硬件，不能当作无副作用查询。

@@ -15,7 +15,8 @@
 `system_device.c` 的存储段持有 Flash 实例、设备操作和区域描述，
 `appSystemMemoryConfigInit` 仅填充配置；本目录 `system_init.c` 的私有
 `memoryInit()` 调用 aMemoryInit，由 aMemory 执行设备初始化与失败清理。
-顶层按 Shell → memory → log → bus → database 的顺序调用，再启动通信服务。
+顶层按控制台 → Shell → memory → log → bus → database 调用，再启动通信服务；
+可选模块关闭时跳过，关闭 Shell 不影响日志输出。
 main 的 appInitTask 在 aSystemInit 成功返回后调用 appTestTaskInit，统一创建应用测试任务。
 存储、数据总线和数据库不新增独立任务。
 存储设备初始化直接使用 ASHELL_PRINT，不依赖 aLog；启动信息先入队，
@@ -75,7 +76,7 @@ flash test 0
 
 ## 日志初始化
 
-`aSystemInit` 在 Shell 和存储初始化完成后调用同文件内的私有 `logInit()`，
+`aSystemInit` 在控制台及可选的 Shell、存储初始化后调用私有 `logInit()`，
 Shell 任务已在 `shellInit` 中创建，但等待全部服务就绪后才处理命令和发送队列。
 日志初始化不由 `shellInit` 承担。
 `logInit` 集中完成配置装配、aLog 初始化、失败清理和启动日志；顶层只负责顺序和
@@ -84,7 +85,8 @@ Shell 任务已在 `shellInit` 中创建，但等待全部服务就绪后才处�
 当前后端直接调用 `app_system_console_stream.write`，不经过 Shell 队列。
 没有新增日志任务或日志队列；Shell 与日志共用 console_write 的 TX 锁。
 aLog 保留格式化状态锁，Shell 保留输出队列锁，实际串口操作不持 Shell 队列锁。
-Shell 任务创建失败或日志初始化失败时，通过 appSystemConsoleDeInit 清理控制台；
+Shell 初始化、任务创建或日志初始化失败时，由本文件的 consoleCleanup
+调用 appSystemConsoleDeInit 和 aShellDeInit，分别释放设备资源和 Shell 状态；
 串口释放失败保留句柄及 TX 锁并报告错误。其他服务启动失败不回滚全部系统资源，
 仍按启动失败停止运行处理，不开放 Shell 命令或重新执行系统初始化。
 启动时会看到含等级和启动毫秒数的 `EasyLogger ready` 日志。

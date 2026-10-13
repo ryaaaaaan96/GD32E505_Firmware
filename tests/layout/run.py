@@ -76,3 +76,12 @@ with tempfile.TemporaryDirectory(prefix="aclass-layout-") as directory:
                                "-o", executable], cwd=root, check=True)
         subprocess.run([executable], check=True)
         print(f"SIG parameter size check NDEBUG={release} passed")
+
+with tempfile.TemporaryDirectory(prefix="aclass-range-") as directory:
+    executable = str(Path(directory) / "range")
+    subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Wpedantic",
+                    "-Werror", "-fsanitize=undefined",
+                    "-fno-sanitize-recover=all", "-Iplatform/aLib/include",
+                    "tests/layout/test_range.c", "-o", executable],
+                   cwd=root, check=True)
+    subprocess.run([executable], check=True)

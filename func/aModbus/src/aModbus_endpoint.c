@@ -4,7 +4,7 @@
 
 #include <string.h>
 
-static aCommEndpoint_t validation_endpoint;
+static const aCommEndpointOps_t endpoint_ops;
 
 static aBool_t area_valid(uint16_t area)
 {
@@ -17,7 +17,7 @@ static aBool_t area_writable(uint16_t area)
            area == AMODBUS_AREA_HOLDING_REGISTERS;
 }
 
-static aStatus_t value_info(const aCommDataInfo_t *sig,
+aStatus_t aModbusMapDescribe(const aCommDataInfo_t *sig,
     const aCommTarget_t *target, uint16_t area,
     uint8_t order, aModbusMapValue_t *info)
 {
@@ -84,7 +84,7 @@ static aStatus_t value_info(const aCommDataInfo_t *sig,
 /* 严格整组布局：每项占完整寄存器，按偏移连续覆盖全部 RAM 字节。
  * 从站初始化及主站请求预检查执行；定义在实例使用期间不可修改。
  */
-static aStatus_t structure_check(const aModbusMapValue_t *info)
+aStatus_t aModbusMapLayout(const aModbusMapValue_t *info)
 {
     size_t end = 0U;
     if (info->type != ALIB_DATA_STRUCT) return A_STATUS_OK;
@@ -126,34 +126,8 @@ static uint8_t param_order(const aDataField_t *param,
 static aStatus_t value_check(const aModbusMapValue_t *info,
                              const void *data)
 {
-    aDataValue_t value = {0};
-    const aDataRange_t *range = info->range;
-    if (range == NULL) return A_STATUS_OK;
-    memcpy(&value, data, info->size);
-    switch (info->type) {
-    case ALIB_DATA_U8:
-        if (value.u8 >= range->min.u8 && value.u8 <= range->max.u8) {
-            return A_STATUS_OK;
-        }
-        break;
-    case ALIB_DATA_U16:
-        if (value.u16 >= range->min.u16 && value.u16 <= range->max.u16) {
-            return A_STATUS_OK;
-        }
-        break;
-    case ALIB_DATA_U32:
-        if (value.u32 >= range->min.u32 && value.u32 <= range->max.u32) {
-            return A_STATUS_OK;
-        }
-        break;
-    case ALIB_DATA_S32:
-        if (value.s32 >= range->min.s32 && value.s32 <= range->max.s32) {
-            return A_STATUS_OK;
-        }
-        break;
-    default: return A_STATUS_INVALID_PARAM;
-    }
-    return A_STATUS_INVALID_PARAM;
+    return aDataRangeCheck(info->type, info->range, data) ? A_STATUS_OK :
+        A_STATUS_INVALID_PARAM;
 }
 
 static aStatus_t value_decode(const aModbusMapValue_t *info,
@@ -221,7 +195,7 @@ static aStatus_t scalar_register_copy(const aModbusMapValue_t *info,
     uint8_t order, size_t first, size_t count,
     void *value, uint16_t *registers, aBool_t write)
 {
-    uint16_t encoded[AMODBUS_MAX_REGISTERS];
+    uint16_t encoded[2];
     aStatus_t status;
     if (write) {
         if (first != 0U || count != info->quantity) {
@@ -229,6 +203,19 @@ static aStatus_t scalar_register_copy(const aModbusMapValue_t *info,
         }
         return value_decode(info, AMODBUS_AREA_HOLDING_REGISTERS,
                             order, registers, value);
+    }
+    if (first == 0U && count == info->quantity) {
+        return value_encode(info, AMODBUS_AREA_HOLDING_REGISTERS,
+                            order, value, registers);
+    }
+    if (info->type == ALIB_DATA_RAW) {
+        const uint8_t *bytes = value;
+        for (size_t i = 0U; i < count; i++) {
+            size_t offset = (first + i) * 2U;
+            registers[i] = (uint16_t)((uint16_t)bytes[offset] << 8U);
+            if (offset + 1U < info->size) registers[i] |= bytes[offset + 1U];
+        }
+        return A_STATUS_OK;
     }
     status = value_encode(info, AMODBUS_AREA_HOLDING_REGISTERS,
                            order, value, encoded);
@@ -269,7 +256,7 @@ static aStatus_t register_copy(const aModbusMapValue_t *info,
     return A_STATUS_OK;
 }
 
-static aStatus_t copy_value(const aModbusMapValue_t *info, uint16_t area,
+aStatus_t aModbusMapCopy(const aModbusMapValue_t *info, uint16_t area,
     uint8_t order, size_t first, size_t count, void *value, void *wire,
     aBool_t write)
 {
@@ -281,10 +268,9 @@ static aStatus_t copy_value(const aModbusMapValue_t *info, uint16_t area,
     return register_copy(info, order, first, count, value, wire, write);
 }
 
-static aStatus_t area_info(aCommEndpoint_t *base, uint16_t area,
+aStatus_t aModbusMapArea(uint16_t area,
     aModbusMapArea_t *info)
 {
-    (void)base;
     if (!area_valid(area)) return A_STATUS_INVALID_PARAM;
     aBool_t bits = aModbusAreaIsBits(area);
     *info = (aModbusMapArea_t){
@@ -296,12 +282,12 @@ static aStatus_t area_info(aCommEndpoint_t *base, uint16_t area,
     return A_STATUS_OK;
 }
 
-static aStatus_t access_check(aCommEndpoint_t *base,
+aStatus_t aModbusMapCheck(aCommEndpoint_t *base,
     const aModbusMapAddress_t *address, const void *data, size_t size,
     aBool_t write)
 {
     aModbusInfo_t info = {.transport_type = AMODBUS_TRANSPORT_RTU};
-    if (base != &validation_endpoint) {
+    if (base != NULL) {
         aModbusHandle_t *handle = (aModbusHandle_t *)base;
         aStatus_t status = aModbusGetInfo(handle, &info);
         if (status != A_STATUS_OK) return status;
@@ -314,10 +300,10 @@ static aStatus_t access_check(aCommEndpoint_t *base,
         address->quantity, data, size, write);
 }
 
-static aStatus_t ready(aCommEndpoint_t *base)
+aStatus_t aModbusMapReady(aCommEndpoint_t *base)
 {
     aModbusInfo_t info;
-    if (base == &validation_endpoint) return A_STATUS_NOT_READY;
+    if (base == NULL) return A_STATUS_NOT_READY;
     aModbusHandle_t *handle = (aModbusHandle_t *)base;
     aStatus_t status = aModbusGetInfo(handle, &info);
     if (status != A_STATUS_OK) return status;
@@ -337,7 +323,7 @@ static aStatus_t read_value(aCommEndpoint_t *base,
     const aCommReadAccess_t *request)
 {
 #if AMODBUS_CLIENT_ENABLE
-    if (base == &validation_endpoint) return A_STATUS_NOT_READY;
+    if (base == NULL) return A_STATUS_NOT_READY;
     aModbusHandle_t *handle = (aModbusHandle_t *)base;
     const aModbusMapAddress_t *address = request->target;
     aModbusResult_t result = {0};
@@ -360,7 +346,7 @@ static aStatus_t write_value(aCommEndpoint_t *base,
     const aCommWriteAccess_t *request)
 {
 #if AMODBUS_CLIENT_ENABLE
-    if (base == &validation_endpoint) return A_STATUS_NOT_READY;
+    if (base == NULL) return A_STATUS_NOT_READY;
     aModbusHandle_t *handle = (aModbusHandle_t *)base;
     const aModbusMapAddress_t *address = request->target;
     aModbusResult_t result = {0};
@@ -379,11 +365,10 @@ static aStatus_t write_value(aCommEndpoint_t *base,
 #endif
 }
 
-static aStatus_t prepare(aCommEndpoint_t *base,
-    const aModbusMapAddress_t *address, aCommPrepared_t *prepared)
+aStatus_t aModbusMapPrepare(const aModbusMapAddress_t *address,
+    aCommPrepared_t *prepared)
 {
 #if AMODBUS_CLIENT_ENABLE
-    (void)base;
     aModbusPreparedRead_t frame;
     const aModbusReadSpec_t spec = {address->unit_id,
         (aModbusArea_t)address->area, address->address, address->quantity};
@@ -396,16 +381,16 @@ static aStatus_t prepare(aCommEndpoint_t *base,
     }
     return status;
 #else
-    (void)base; (void)address; (void)prepared;
+    (void)address; (void)prepared;
     return A_STATUS_UNSUPPORTED;
 #endif
 }
 
-static aStatus_t read_prepared(aCommEndpoint_t *base,
+aStatus_t aModbusMapReadPrepared(aCommEndpoint_t *base,
     const aCommPrepared_t *prepared, const aCommReadAccess_t *request)
 {
 #if AMODBUS_CLIENT_ENABLE
-    if (base == &validation_endpoint) return A_STATUS_NOT_READY;
+    if (base == NULL) return A_STATUS_NOT_READY;
     aModbusHandle_t *handle = (aModbusHandle_t *)base;
     aModbusPreparedRead_t frame;
     aModbusResult_t result = {0};
@@ -423,7 +408,7 @@ static aStatus_t read_prepared(aCommEndpoint_t *base,
 #endif
 }
 
-static aStatus_t slice(const aCommDataInfo_t *info, size_t index,
+aStatus_t aModbusMapSlice(const aCommDataInfo_t *info, size_t index,
     uint16_t *offset, uint8_t *order)
 {
     if (index >= info->param_count) return A_STATUS_NOT_FOUND;
@@ -437,33 +422,30 @@ static aStatus_t slice(const aCommDataInfo_t *info, size_t index,
     return A_STATUS_OK;
 }
 
-static aBool_t merge(aCommEndpoint_t *base, const aModbusMapAddress_t *first,
+aBool_t aModbusMapMerge(const aModbusMapAddress_t *first,
     const aModbusMapAddress_t *next)
 {
     aModbusMapArea_t area;
-    if (area_info(base, first->area, &area) != A_STATUS_OK) return A_FALSE;
+    if (aModbusMapArea(first->area, &area) != A_STATUS_OK) return A_FALSE;
     return first->unit_id == next->unit_id && first->area == next->area &&
         (uint32_t)first->address + first->quantity == next->address &&
         first->quantity <= area.read_limit &&
         next->quantity <= area.read_limit - first->quantity;
 }
 
-static const aModbusAddressOps_t address_ops = {
-    .ready = ready, .area = area_info, .check = access_check,
-    .describe = value_info, .layout = structure_check, .copy = copy_value,
-    .slice = slice, .merge = merge,
-    .prepare = prepare, .read_prepared = read_prepared,
-    .provider_type = 1U
-};
 static const aCommEndpointOps_t endpoint_ops = {
-    .read = read_value, .write = write_value, .extension = &address_ops
+    .read = read_value, .write = write_value
 };
-static aCommEndpoint_t validation_endpoint = {.ops = &endpoint_ops};
+aStatus_t aModbusMapEndpointCheck(const aCommEndpoint_t *endpoint)
+{
+    return endpoint == NULL || endpoint->ops == &endpoint_ops ?
+        A_STATUS_OK : A_STATUS_UNSUPPORTED;
+}
 _Static_assert(offsetof(aModbusHandle_t, comm) == 0U,
                "common endpoint must be first");
 aCommEndpoint_t *aModbusCommEndpoint(aModbusHandle_t *handle)
 {
-    if (handle == NULL) return &validation_endpoint;
+    if (handle == NULL) return NULL;
     return &handle->comm;
 }
 /* 仅在实例初始化时写入，运行中查询端点不修改状态。 */

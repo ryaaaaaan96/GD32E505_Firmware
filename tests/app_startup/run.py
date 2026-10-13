@@ -57,3 +57,6 @@ with tempfile.TemporaryDirectory(prefix="aclass-system-") as directory:
             for failure in (4, 6, 10):
                 subprocess.run([executable, str(failure), "cleanup_failure"],
                                check=True)
+            subprocess.run([executable, "shell_init"], check=True)
+            subprocess.run([executable, "shell_init", "cleanup_failure"],
+                           check=True)

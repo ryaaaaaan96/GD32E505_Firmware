@@ -63,6 +63,17 @@ with tempfile.TemporaryDirectory(prefix="aclass-log-") as directory:
                        + ["-o", executable], check=True)
         subprocess.run([executable], check=True, timeout=20)
 
+    executable = str(Path(directory) / "console_only")
+    no_shell = [flag for flag in flags if flag != "-DASHELL_ENABLE=1"]
+    subprocess.run(common + no_shell + ["-DASHELL_ENABLE=0",
+        "-DALOG_LINE_BUFFER_SIZE=256", *[str(source) for source in sources],
+        str(root / "app/devices/system/system_device.c"),
+        str(root / "tests/log/test_console_only.c"), "-o", executable],
+        check=True)
+    subprocess.run([executable], check=True, timeout=20)
+    symbols = subprocess.check_output(["nm", executable], text=True)
+    assert "aShellInit" not in symbols and "aShellProcess" not in symbols
+
     executable = str(Path(directory) / "stub")
     subprocess.run(common + ["-DALOG_ENABLE=0", "-DALOG_OUTPUT_LEVEL=5",
                    "-DALOG_LINE_BUFFER_SIZE=256",

@@ -125,7 +125,6 @@ typedef struct {
     aStatus_t (*read)(aCommEndpoint_t *, const aCommReadAccess_t *);
     aStatus_t (*write)(aCommEndpoint_t *, const aCommWriteAccess_t *);
     const aCommDataOps_t *data;
-    const void *extension; /**< 具体提供者解释，通用层不访问。 */
 } aCommEndpointOps_t;
 struct aCommEndpoint {
     const aCommEndpointOps_t *ops;

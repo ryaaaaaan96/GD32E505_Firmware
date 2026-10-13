@@ -26,41 +26,70 @@ static aStatus_t mapping_begin(aModbusMapping_t *handle,
 }
 aStatus_t aModbusMappingConfigCheck(const aModbusMappingConfig_t *config)
 {
-    if (config == NULL || config->protocol == NULL ||
-        config->protocol->ops == NULL) return A_STATUS_INVALID_PARAM;
-    aStatus_t status = aCommBindingConfigCheck(&config->comm);
-    if (status != A_STATUS_OK) return status;
-    const aModbusAddressOps_t *address = aModbusAddressOps(config->protocol);
-    if (address == NULL || address->area == NULL || address->check == NULL ||
-        address->describe == NULL || address->layout == NULL ||
-        address->copy == NULL || address->slice == NULL) {
-        return A_STATUS_UNSUPPORTED;
-    }
-    if ((address->prepare == NULL) != (address->read_prepared == NULL)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-    return A_STATUS_OK;
+    if (config == NULL) return A_STATUS_INVALID_PARAM;
+    aStatus_t status = aModbusMapEndpointCheck(config->protocol);
+    return status == A_STATUS_OK ?
+        aCommBindingConfigCheck(&config->comm) : status;
 }
 static aStatus_t storage_prepare(aModbusMapping_t *handle,
-    size_t subscriptions)
+    size_t subscriptions, size_t maps)
 {
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (handle->ready) return A_STATUS_BUSY;
     aCommBindingSubscription_t *storage = handle->comm.subscriptions;
     size_t capacity = handle->comm.subscription_capacity;
+    aCommBindingRequestSlot_t *requests = handle->comm.requests;
+    size_t request_capacity = handle->comm.request_capacity;
     if (subscriptions > capacity || (subscriptions != 0U && storage == NULL)) {
         return A_STATUS_INVALID_PARAM;
     }
+    aModbusMapLink_t *links = handle->links;
+    size_t map_capacity = handle->map_capacity;
+    if (maps > map_capacity || (maps != 0U && links == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
     memset(handle, 0, sizeof(*handle));
+    handle->links = links;
+    handle->map_capacity = map_capacity;
     handle->comm.subscriptions = storage;
     handle->comm.subscription_capacity = capacity;
+    handle->comm.requests = requests;
+    handle->comm.request_capacity = request_capacity;
     aAtomicInit(&handle->active, A_FALSE);
     return A_STATUS_OK;
+}
+static void links_init(aModbusMapping_t *handle)
+{
+    const aBool_t client = handle->role == AMODBUS_MAPPING_CLIENT;
+    const size_t count = client ? handle->client.map_count :
+        handle->server.map_count;
+    for (size_t i = 0U; i < count; i++) {
+        const aCommEntry_t *entry = client ? &handle->client.maps[i].comm :
+            &handle->server.maps[i].comm;
+        uint16_t area = client ? handle->client.maps[i].area :
+            handle->server.maps[i].area;
+        handle->links[i] = (aModbusMapLink_t){SIZE_MAX, SIZE_MAX};
+        for (size_t j = i; j-- > 0U;) {
+            const aCommEntry_t *other = client ? &handle->client.maps[j].comm :
+                &handle->server.maps[j].comm;
+            uint16_t other_area = client ? handle->client.maps[j].area :
+                handle->server.maps[j].area;
+            if (entry->deviceID != other->deviceID ||
+                entry->sigIndex != other->sigIndex || area != other_area ||
+                (client && entry->poll_time_ms != other->poll_time_ms)) {
+                continue;
+            }
+            handle->links[i].previous = j;
+            handle->links[j].next = i;
+            break;
+        }
+    }
 }
 static aStatus_t mapping_init(aModbusMapping_t *handle,
     aModbusMappingRole_t role, const aCommBindingEvents_t *events)
 {
     handle->role = role;
+    links_init(handle);
     handle->config = role == AMODBUS_MAPPING_CLIENT ?
         &handle->client.binding : &handle->server.binding;
     aStatus_t status = aCommBindingInit(&handle->config->comm, events,
@@ -89,17 +118,26 @@ aStatus_t aModbusMappingDeInitStatic(aModbusMapping_t *handle)
 #endif
 #if AMODBUS_DYNAMIC_ENABLE
 static aModbusMapping_t *mapping_allocate(const aModbusMappingConfig_t *config,
-    size_t subscriptions)
+    size_t subscriptions, size_t maps)
 {
     size_t size;
     if (aCommBindingStorageSize(&config->comm, subscriptions, &size) !=
         A_STATUS_OK || size > SIZE_MAX - sizeof(aModbusMapping_t)) return NULL;
-    aModbusMapping_t *handle = aOSAlloc(sizeof(*handle) + size);
+    const size_t align = _Alignof(max_align_t);
+    if (maps > (SIZE_MAX - (align - 1U)) / sizeof(aModbusMapLink_t))
+        return NULL;
+    size_t binding_offset = maps * sizeof(aModbusMapLink_t);
+    binding_offset = (binding_offset + align - 1U) / align * align;
+    if (binding_offset > SIZE_MAX - sizeof(aModbusMapping_t) - size)
+        return NULL;
+    aModbusMapping_t *handle =
+        aOSAlloc(sizeof(*handle) + binding_offset + size);
     if (handle == NULL) return NULL;
-    memset(handle, 0, sizeof(*handle));
-    /* 宿主包含最大对齐成员，因此紧随其后的存储同样满足最大对齐。 */
+    *handle = (aModbusMapping_t){
+        .links = (void *)(handle + 1), .map_capacity = maps
+    };
     aStatus_t status = aCommBindingStorageSetup(&handle->comm, &config->comm,
-        handle + 1, subscriptions);
+        (uint8_t *)(handle + 1) + binding_offset, subscriptions);
     if (status != A_STATUS_OK) {
         aOSFree(handle);
         return NULL;
@@ -167,12 +205,12 @@ static aStatus_t client_sig(aModbusMapping_t *handle,
             source = value.bytes;
         }
         if (status == A_STATUS_OK) {
-            status = aModbusMappingValueEncode(handle, &info, request->area,
+            status = aModbusMappingValueEncode(&info, request->area,
                 request->word_order, source, protocol);
         }
         /* 即时新值也必须通过范围校验，不能依赖本地旧副本已校验。 */
         if (status == A_STATUS_OK) {
-            status = aModbusMappingValueDecode(handle, &info, request->area,
+            status = aModbusMappingValueDecode(&info, request->area,
                 request->word_order, protocol, value.bytes);
         }
     }
@@ -193,7 +231,7 @@ static aStatus_t client_sig(aModbusMapping_t *handle,
             status = aCommEndpointRead(handle->config->protocol, &access);
         }
         if (status == A_STATUS_OK && !write) {
-            status = aModbusMappingValueDecode(handle, &info, request->area,
+            status = aModbusMappingValueDecode(&info, request->area,
                 request->word_order, protocol, value.bytes);
             if (status == A_STATUS_OK) {
                 status = aCommBindingWrite(&handle->comm,
@@ -231,7 +269,7 @@ static aStatus_t requested(void *context, const aCommBindingRequest_t *request)
     };
     if (request->target.paramIndex != map->comm.paramIndex) {
         uint16_t offset;
-        aStatus_t status = aModbusAddressOps(handle->config->protocol)->slice(
+        aStatus_t status = aModbusMapSlice(
             &request->info, request->target.paramIndex, &offset,
             &access.word_order);
         if (status != A_STATUS_OK) return status;
@@ -254,7 +292,7 @@ static aCommBindingEvents_t events_config(
     const aModbusMappingClientConfig_t *config, aModbusMapping_t *handle)
 {
     const aCommBindingEvents_t events = {
-        .type = aModbusAddressOps(config->binding.protocol)->provider_type,
+        .type = 1U,
         .context = handle, .execute = requested,
         .submit = config->submit, .submit_context = config->submit_context
     };
@@ -266,12 +304,8 @@ static aStatus_t client_config_check(
     if (config == NULL) return A_STATUS_INVALID_PARAM;
     aStatus_t status = aModbusMappingConfigCheck(&config->binding);
     if (status != A_STATUS_OK) return status;
-    if (aModbusAddressOps(config->binding.protocol)->ready == NULL) {
-        return A_STATUS_UNSUPPORTED;
-    }
     if (require_ready) {
-        status = aModbusAddressOps(config->binding.protocol)->ready(
-            config->binding.protocol);
+        status = aModbusMapReady(config->binding.protocol);
         if (status != A_STATUS_OK) return status;
     }
     if ((config->maps == NULL) != (config->map_count == 0U) ||
@@ -324,7 +358,7 @@ static aStatus_t client_init(const aModbusMappingClientConfig_t *config,
     aModbusMapping_t *handle)
 {
     aStatus_t status = storage_prepare(handle,
-        client_subscription_count(config));
+        client_subscription_count(config), config->map_count);
     if (status != A_STATUS_OK) return status;
     handle->client = *config;
     const aCommBindingEvents_t events = events_config(config, handle);
@@ -350,15 +384,13 @@ aStatus_t aModbusMappingClientInitStatic(
 }
 #endif
 #if AMODBUS_DYNAMIC_ENABLE
-aStatus_t aModbusMappingClientCreate(const aModbusMappingClientConfig_t *config,
+static aStatus_t client_create(const aModbusMappingClientConfig_t *config,
     aModbusMapping_t **handle_out)
 {
-    if (handle_out == NULL) return A_STATUS_INVALID_PARAM;
-    *handle_out = NULL;
-    aStatus_t status = aModbusMappingClientConfigCheck(config);
-    if (status != A_STATUS_OK) return status;
+    aStatus_t status;
     aModbusMapping_t *handle =
-        mapping_allocate(&config->binding, client_subscription_count(config));
+        mapping_allocate(&config->binding, client_subscription_count(config),
+            config->map_count);
     if (handle == NULL) return A_STATUS_NO_MEMORY;
     status = client_init(config, handle);
     if (status != A_STATUS_OK) aOSFree(handle);
@@ -368,6 +400,15 @@ aStatus_t aModbusMappingClientCreate(const aModbusMappingClientConfig_t *config,
     }
     return status;
 }
+aStatus_t aModbusMappingClientCreate(const aModbusMappingClientConfig_t *config,
+    aModbusMapping_t **handle_out)
+{
+    if (handle_out == NULL) return A_STATUS_INVALID_PARAM;
+    *handle_out = NULL;
+    aStatus_t status = aModbusMappingClientConfigCheck(config);
+    return status == A_STATUS_OK ? client_create(config, handle_out) : status;
+}
+
 #endif
 
 /* -------------------- 注册给 aComm 的数组与批次回调 -------------------- */
@@ -390,6 +431,15 @@ static aStatus_t entry_check(void *context, const aCommEntry_t *entry)
     }
     if (!handle->ready) return A_STATUS_NOT_READY;
     if (handle->role != AMODBUS_MAPPING_CLIENT) return A_STATUS_UNSUPPORTED;
+    /* 注册表在实例初始化时已检查；独立计划仍可带另一张表。 */
+    uintptr_t first = (uintptr_t)handle->client.maps;
+    uintptr_t current = (uintptr_t)entry;
+    if (handle->client.maps != NULL && current >= first &&
+        (current - first) / sizeof(aModbusClientMap_t) <
+            handle->client.map_count &&
+        (current - first) % sizeof(aModbusClientMap_t) == 0U) {
+        return A_STATUS_OK;
+    }
     return aModbusMappingClientMapCheck(handle->config,
         (const aModbusClientMap_t *)entry, handle->client.unit_id);
 }
@@ -400,13 +450,12 @@ static aBool_t entries_merge(void *context, const aCommEntry_t *first_entry,
     const aModbusClientMap_t *first = (const void *)first_entry;
     const aModbusClientMap_t *previous = (const void *)previous_entry;
     const aModbusClientMap_t *next = (const void *)next_entry;
-    aCommEndpoint_t *endpoint = handle->config->protocol;
     if (first->area != next->area ||
         (uint32_t)previous->address + previous->quantity != next->address) {
         return A_FALSE;
     }
     uint32_t quantity = (uint32_t)next->address - first->address;
-    aModbusMapArea_t area = aModbusMappingArea(endpoint, next->area);
+    aModbusMapArea_t area = aModbusMappingArea(next->area);
     size_t capacity = area.unit_bits == 1U ? ACOMM_VALUE_CAPACITY * 8U :
         ACOMM_VALUE_CAPACITY / (area.unit_bits / 8U);
     if (quantity + next->quantity > capacity || quantity > UINT16_MAX) {
@@ -416,8 +465,7 @@ static aBool_t entries_merge(void *context, const aCommEntry_t *first_entry,
         first->area, first->address, (uint16_t)quantity};
     const aModbusMapAddress_t candidate = {handle->client.unit_id,
         next->area, next->address, next->quantity};
-    return aModbusAddressOps(endpoint)->merge != NULL &&
-        aModbusAddressOps(endpoint)->merge(endpoint, &accumulated, &candidate);
+    return aModbusMapMerge(&accumulated, &candidate);
 }
 static aModbusMapAddress_t batch_address(aModbusMapping_t *handle,
     const aCommBatch_t *batch)
@@ -436,10 +484,8 @@ static aStatus_t batch_prepare(void *context, const aCommBatch_t *batch,
     aCommPrepared_t *prepared)
 {
     aModbusMapping_t *handle = context;
-    aCommEndpoint_t *endpoint = handle->config->protocol;
     const aModbusMapAddress_t address = batch_address(handle, batch);
-    if (aModbusAddressOps(endpoint)->prepare == NULL) return A_STATUS_OK;
-    return aModbusAddressOps(endpoint)->prepare(endpoint, &address, prepared);
+    return aModbusMapPrepare(&address, prepared);
 }
 static void batch_execute(void *context, const aCommBatch_t *batch,
     const aCommPrepared_t *prepared, aCommStepResult_t *execution,
@@ -457,9 +503,8 @@ static void batch_execute(void *context, const aCommBatch_t *batch,
             .timeout = aModbusMappingRemaining(handle), .result = response
         };
         aCommEndpoint_t *endpoint = handle->config->protocol;
-        if (prepared->size != 0U &&
-            aModbusAddressOps(endpoint)->read_prepared != NULL) {
-            status = aModbusAddressOps(endpoint)->read_prepared(endpoint,
+        if (prepared->size != 0U) {
+            status = aModbusMapReadPrepared(endpoint,
                 prepared, &access);
         } else {
             status = aCommEndpointRead(endpoint, &access);
@@ -560,11 +605,11 @@ static aStatus_t server_init(const aModbusMappingServerConfig_t *config,
     aModbusMapping_t *handle)
 {
     aStatus_t status = storage_prepare(handle,
-        server_subscription_count(config));
+        server_subscription_count(config), config->map_count);
     if (status != A_STATUS_OK) return status;
     handle->server = *config;
     const aCommBindingEvents_t events = {
-        .type = aModbusAddressOps(config->binding.protocol)->provider_type,
+        .type = 1U,
         .context = handle, .observe = config->notify == NULL ? NULL : observe
     };
     status = mapping_init(handle, AMODBUS_MAPPING_SERVER, &events);
@@ -589,15 +634,13 @@ aStatus_t aModbusMappingServerInitStatic(
 }
 #endif
 #if AMODBUS_DYNAMIC_ENABLE
-aStatus_t aModbusMappingServerCreate(const aModbusMappingServerConfig_t *config,
+static aStatus_t server_create(const aModbusMappingServerConfig_t *config,
     aModbusMapping_t **handle_out)
 {
-    if (handle_out == NULL) return A_STATUS_INVALID_PARAM;
-    *handle_out = NULL;
-    aStatus_t status = aModbusMappingServerConfigCheck(config);
-    if (status != A_STATUS_OK) return status;
+    aStatus_t status;
     aModbusMapping_t *handle =
-        mapping_allocate(&config->binding, server_subscription_count(config));
+        mapping_allocate(&config->binding, server_subscription_count(config),
+            config->map_count);
     if (handle == NULL) return A_STATUS_NO_MEMORY;
     status = server_init(config, handle);
     if (status != A_STATUS_OK) aOSFree(handle);
@@ -607,6 +650,15 @@ aStatus_t aModbusMappingServerCreate(const aModbusMappingServerConfig_t *config,
     }
     return status;
 }
+aStatus_t aModbusMappingServerCreate(const aModbusMappingServerConfig_t *config,
+    aModbusMapping_t **handle_out)
+{
+    if (handle_out == NULL) return A_STATUS_INVALID_PARAM;
+    *handle_out = NULL;
+    aStatus_t status = aModbusMappingServerConfigCheck(config);
+    return status == A_STATUS_OK ? server_create(config, handle_out) : status;
+}
+
 #endif
 aStatus_t aModbusMappingServerRead(void *context,
     const aModbusAddressReadRequest_t *request)
@@ -662,7 +714,7 @@ static aModbusMappingServerConfig_t comm_server_config(
     const aModbusMappingServerConfig_t mapping = {
         .binding = {
             .comm = context->binding,
-            .protocol = aModbusCommEndpoint(NULL)
+            .protocol = NULL
         },
         .maps = registration->items, .map_count = registration->count,
         .ranges = config->ranges, .range_count = config->range_count,
@@ -792,7 +844,7 @@ aStatus_t aModbusCommInit(const aCommProtocol_t *registration,
         aModbusMappingClientConfig_t mapping = comm_client_config(registration);
 #if AMODBUS_STATIC_ENABLE
         if (context->mapping_storage != NULL) {
-            status = aModbusMappingClientInitStatic(&mapping,
+            status = client_init(&mapping,
                 context->mapping_storage);
             if (status == A_STATUS_OK) {
                 context->mapping = context->mapping_storage;
@@ -801,7 +853,7 @@ aStatus_t aModbusCommInit(const aCommProtocol_t *registration,
 #endif
         {
 #if AMODBUS_DYNAMIC_ENABLE
-            status = aModbusMappingClientCreate(&mapping, &context->mapping);
+            status = client_create(&mapping, &context->mapping);
 #else
             status = A_STATUS_INVALID_PARAM;
 #endif
@@ -817,7 +869,7 @@ aStatus_t aModbusCommInit(const aCommProtocol_t *registration,
         aModbusMappingServerConfig_t mapping = comm_server_config(registration);
 #if AMODBUS_STATIC_ENABLE
         if (context->mapping_storage != NULL) {
-            status = aModbusMappingServerInitStatic(&mapping,
+            status = server_init(&mapping,
                 context->mapping_storage);
             if (status == A_STATUS_OK) {
                 context->mapping = context->mapping_storage;
@@ -826,7 +878,7 @@ aStatus_t aModbusCommInit(const aCommProtocol_t *registration,
 #endif
         {
 #if AMODBUS_DYNAMIC_ENABLE
-            status = aModbusMappingServerCreate(&mapping, &context->mapping);
+            status = server_create(&mapping, &context->mapping);
 #else
             status = A_STATUS_INVALID_PARAM;
 #endif

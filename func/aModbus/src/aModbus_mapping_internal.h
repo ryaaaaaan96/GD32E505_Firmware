@@ -18,44 +18,36 @@ typedef struct {
     uint16_t address;
     uint16_t quantity;
 } aModbusMapAddress_t;
-/** 线性地址端的协议规则；回调不修改映射，不执行调度。
- * unit_bits 为 1 或 8 的倍数；缓冲区为端点约定的数据表示。
- * copy 处理单位区间与业务值的转换，write 表示解码写入业务值。
- * prepare/read_prepared 可选，预编码对象是字节表示，禁止强转为私有结构。
- */
+/** Modbus 区域规则：位区域单位为 1 bit，寄存器区域为 16 bit。
+ * 只描述地址容量、读写上限及权限，不参与调度。 */
 typedef struct {
     uint16_t unit_bits;
     uint16_t read_limit, write_limit;
     uint32_t address_limit;
     aBool_t writable;
 } aModbusMapArea_t;
-typedef struct {
-    aStatus_t (*ready)(aCommEndpoint_t *);
-    aStatus_t (*area)(aCommEndpoint_t *, uint16_t, aModbusMapArea_t *);
-    aStatus_t (*check)(aCommEndpoint_t *, const aModbusMapAddress_t *,
-        const void *, size_t, aBool_t);
-    aStatus_t (*describe)(const aCommDataInfo_t *, const aCommTarget_t *,
-        uint16_t, uint8_t, aModbusMapValue_t *);
-    aStatus_t (*layout)(const aModbusMapValue_t *);
-    aStatus_t (*copy)(const aModbusMapValue_t *, uint16_t, uint8_t,
-        size_t, size_t, void *, void *, aBool_t);
-    aStatus_t (*slice)(const aCommDataInfo_t *, size_t, uint16_t *, uint8_t *);
-    aBool_t (*merge)(aCommEndpoint_t *, const aModbusMapAddress_t *,
-        const aModbusMapAddress_t *);
-    aStatus_t (*prepare)(aCommEndpoint_t *, const aModbusMapAddress_t *,
-        aCommPrepared_t *);
-    aStatus_t (*read_prepared)(aCommEndpoint_t *, const aCommPrepared_t *,
-        const aCommReadAccess_t *);
-    uint32_t provider_type;
-} aModbusAddressOps_t;
-
-
-static inline const aModbusAddressOps_t *aModbusAddressOps(
-    const aCommEndpoint_t *endpoint)
-{
-    return endpoint == NULL || endpoint->ops == NULL ? NULL :
-        endpoint->ops->extension;
-}
+/* Modbus 内部规则直接调用，不再通过通用端点扩展表二次分派。 */
+aStatus_t aModbusMapEndpointCheck(const aCommEndpoint_t *endpoint);
+aStatus_t aModbusMapReady(aCommEndpoint_t *endpoint);
+aStatus_t aModbusMapArea(uint16_t area, aModbusMapArea_t *info);
+aStatus_t aModbusMapCheck(aCommEndpoint_t *endpoint,
+    const aModbusMapAddress_t *address, const void *data, size_t size,
+    aBool_t write);
+aStatus_t aModbusMapDescribe(const aCommDataInfo_t *sig,
+    const aCommTarget_t *target, uint16_t area, uint8_t order,
+    aModbusMapValue_t *info);
+aStatus_t aModbusMapLayout(const aModbusMapValue_t *info);
+aStatus_t aModbusMapCopy(const aModbusMapValue_t *info, uint16_t area,
+    uint8_t order, size_t first, size_t count, void *value, void *wire,
+    aBool_t write);
+aStatus_t aModbusMapSlice(const aCommDataInfo_t *info, size_t index,
+    uint16_t *offset, uint8_t *order);
+aBool_t aModbusMapMerge(const aModbusMapAddress_t *first,
+    const aModbusMapAddress_t *next);
+aStatus_t aModbusMapPrepare(const aModbusMapAddress_t *address,
+    aCommPrepared_t *prepared);
+aStatus_t aModbusMapReadPrepared(aCommEndpoint_t *endpoint,
+    const aCommPrepared_t *prepared, const aCommReadAccess_t *request);
 
 typedef union {
     max_align_t alignment;
@@ -69,7 +61,7 @@ typedef union {
     (c).subscribe_events, (c).publish_events})
 /* 所有内部入口由已取得实例使用权的 Process/Client 调用。 */
 aTimeout_t aModbusMappingRemaining(aModbusMapping_t *handle);
-aModbusMapArea_t aModbusMappingArea(aCommEndpoint_t *endpoint, uint16_t area);
+aModbusMapArea_t aModbusMappingArea(uint16_t area);
 aStatus_t aModbusMappingAccessCheck(const aModbusMappingConfig_t *config,
     uint8_t unit, uint16_t area, uint16_t address, uint16_t quantity,
     const void *data, size_t size, aBool_t write);
@@ -78,12 +70,10 @@ aStatus_t aModbusMappingDataDefinitionsCheck(
 aStatus_t aModbusMappingDataTargetInfo(aModbusMapping_t *handle,
     const aCommTarget_t *target, uint16_t area,
     uint8_t order, aModbusMapValue_t *info);
-aStatus_t aModbusMappingValueDecode(aModbusMapping_t *handle,
-    const aModbusMapValue_t *info,
+aStatus_t aModbusMappingValueDecode(const aModbusMapValue_t *info,
     uint16_t area, uint8_t order,
     const void *protocol, void *value);
-aStatus_t aModbusMappingValueEncode(aModbusMapping_t *handle,
-    const aModbusMapValue_t *info,
+aStatus_t aModbusMappingValueEncode(const aModbusMapValue_t *info,
     uint16_t area, uint8_t order,
     const void *value, void *protocol);
 aStatus_t aModbusMappingDataRead(aModbusMapping_t *handle,

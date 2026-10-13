@@ -42,10 +42,20 @@ void aShellOutputDrop(void)
                                  A_ATOMIC_RELAXED);
 }
 
+/* 调用者已持锁且确认容量；两个生产入口共用相同的环形写入规则。 */
+static void output_append(const char *data, size_t size)
+{
+    size_t first = sizeof(output.data) - output.head;
+    if (first > size) first = size;
+    memcpy(output.data + output.head, data, first);
+    memcpy(output.data, data + first, size - first);
+    output.head = (output.head + size) % sizeof(output.data);
+    output.used += size;
+}
+
 aStatus_t aShellOutputWrite(const char *data, size_t size)
 {
     aStatus_t status;
-    size_t first;
 
     if (size == 0U) return A_STATUS_OK;
     status = aOSMutexLock(output.mutex, A_TIMEOUT_NO_WAIT);
@@ -58,12 +68,7 @@ aStatus_t aShellOutputWrite(const char *data, size_t size)
         aShellOutputDrop();
         return A_STATUS_BUSY;
     }
-    first = sizeof(output.data) - output.head;
-    if (first > size) first = size;
-    memcpy(output.data + output.head, data, first);
-    memcpy(output.data, data + first, size - first);
-    output.head = (output.head + size) % sizeof(output.data);
-    output.used += size;
+    output_append(data, size);
     (void)aOSMutexUnlock(output.mutex);
     return A_STATUS_OK;
 }
@@ -143,12 +148,7 @@ aStatus_t aShellOutputReply(const char *data, size_t size)
             aTimepointRemaining(&deadline, aOSGetUptimeMs()));
         if (status != A_STATUS_OK) return status;
         if (chunk <= sizeof(output.data) - output.used) {
-            size_t first = sizeof(output.data) - output.head;
-            if (first > chunk) first = chunk;
-            memcpy(output.data + output.head, data, first);
-            memcpy(output.data, data + first, chunk - first);
-            output.head = (output.head + chunk) % sizeof(output.data);
-            output.used += chunk;
+            output_append(data, chunk);
             data += chunk;
             size -= chunk;
         }

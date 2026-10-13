@@ -121,6 +121,9 @@ int main(void)
 
     assert(aShellWrite("test", 4U) == A_STATUS_NOT_READY);
     assert(appSystemConsoleInit() == A_STATUS_OK);
+    aShellConfig_t shell_config;
+    appSystemShellConfigInit(&shell_config);
+    assert(aShellInit(&shell_config) == A_STATUS_OK);
     assert(aShellWrite(NULL, 1U) == A_STATUS_INVALID_PARAM);
     assert(aShellWrite(NULL, 0U) == A_STATUS_OK);
     assert(aShellProcess() == A_STATUS_BUSY);
@@ -219,6 +222,7 @@ int main(void)
     assert(aShellProcess() == A_STATUS_BUSY);
     assert(aAtomicLoad(&writers) == 0U);
 
+    assert(aShellDeInit() == A_STATUS_OK);
     assert(appSystemConsoleDeInit() == A_STATUS_OK);
     assert(ALOG_ERROR("test", "backend closed") == A_STATUS_NOT_READY);
     assert(aLogDeInit() == A_STATUS_OK);

@@ -77,6 +77,8 @@ static aStatus_t check(const aCommProtocol_t *protocol)
 }
 static aStatus_t init(const aCommProtocol_t *protocol, aCommPlanConfig_t *table)
 {
+    aStatus_t status = check(protocol);
+    if (status != A_STATUS_OK) return status;
     const config_t *config = protocol->config;
     context_t *context = protocol->context;
     assert(!context->live);

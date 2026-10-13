@@ -23,7 +23,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 
 | 范围 | 命令 |
 | --- | --- |
-| 可选布局断言与 SIG 参数长度求和（需要 C/C++ 编译器） | `python3 tests/layout/run.py` |
+| 可选布局断言、SIG 参数长度与整数范围检查（需要 C/C++ 编译器） | `python3 tests/layout/run.py` |
 | aLib CRC32（C11/C++11、标准向量及 zlib 对照） | `python3 tests/crc/run.py` |
 | aLib GCC 原子封装（并发、内存序及生成代码对照） | `python3 tests/atomic/run.py` |
 | OS 任务创建/退出/Join、通知、定时器与工作队列 | `python3 tests/aos/run.py` |
@@ -82,6 +82,16 @@ SANITIZE=1 python3 tests/modbus_demo/run.py
 
 测试范围及开关以对应脚本为准。主机替身测试不表示已经实现 Linux aOS，
 也不验证真实 GPIO、DMA、总线时序或调度负载。
+
+通信回归覆盖观察通知接收结果、共享请求池耗尽及同步完成重入，STREAM 无帧
+存储和 GAP 静态帧存储，以及注册映射分组索引、连续切片和整组快照一致性。
+日志回归增加未链接 Shell 时的真实控制台输出；启动回归包含 Shell 初始化
+失败的资源清理。构建矩阵覆盖主从、静动态和功能裁剪组合。
+
+当前 FreeRTOS 堆配置为 40 KiB。预算必须覆盖 appInit 尚未退出时的任务栈、
+TCB、队列、互斥量、通信计划、数据池及堆管理开销，不能只统计稳态句柄大小。
+板端仍需记录启动与运行期最小剩余堆，以及任务栈高水位；链接器 RAM 占用包含
+整个堆的预留空间，不代表实测分配峰值。本次不依据静态估算缩减任务栈。
 
 ## 固件与构建矩阵
 

@@ -4,40 +4,28 @@ typedef union {
     max_align_t alignment;
     uint8_t bytes[ACOMM_VALUE_CAPACITY];
 } value_buffer_t;
-aModbusMapArea_t aModbusMappingArea(aCommEndpoint_t *endpoint, uint16_t area)
+aModbusMapArea_t aModbusMappingArea(uint16_t area)
 {
     aModbusMapArea_t info = {0};
-    if (endpoint != NULL && endpoint->ops != NULL &&
-        aModbusAddressOps(endpoint) != NULL &&
-        aModbusAddressOps(endpoint)->area != NULL) {
-        (void)aModbusAddressOps(endpoint)->area(endpoint, area, &info);
-    }
+    (void)aModbusMapArea(area, &info);
     return info;
 }
 
-static aBool_t area_valid(aCommEndpoint_t *endpoint, uint16_t area)
+static aBool_t area_valid(uint16_t area)
 {
-    aModbusMapArea_t info = aModbusMappingArea(endpoint, area);
+    aModbusMapArea_t info = aModbusMappingArea(area);
     return info.unit_bits != 0U && (info.unit_bits == 1U ||
         info.unit_bits % 8U == 0U) && info.address_limit <= 65536U;
 }
 
-static size_t unit_size(aCommEndpoint_t *endpoint, uint16_t area)
+static size_t unit_size(uint16_t area)
 {
-    return aModbusMappingArea(endpoint, area).unit_bits / 8U;
+    return aModbusMappingArea(area).unit_bits / 8U;
 }
 
-static aBool_t area_bits(aCommEndpoint_t *endpoint, uint16_t area)
+static aBool_t area_bits(uint16_t area)
 {
-    return aModbusMappingArea(endpoint, area).unit_bits == 1U;
-}
-
-static aStatus_t value_info(aCommEndpoint_t *endpoint,
-    const aCommDataInfo_t *sig, const aCommTarget_t *target,
-    uint16_t area, uint8_t order, aModbusMapValue_t *info)
-{
-    return aModbusAddressOps(endpoint)->describe(
-        sig, target, area, order, info);
+    return aModbusMappingArea(area).unit_bits == 1U;
 }
 
 aStatus_t aModbusMappingAccessCheck(const aModbusMappingConfig_t *config,
@@ -45,15 +33,15 @@ aStatus_t aModbusMappingAccessCheck(const aModbusMappingConfig_t *config,
     const void *data, size_t size, aBool_t write)
 {
     const aModbusMapAddress_t target = {unit, area, address, quantity};
-    aModbusMapArea_t info = aModbusMappingArea(config->protocol, area);
-    if (!area_valid(config->protocol, area) || quantity == 0U ||
+    aModbusMapArea_t info = aModbusMappingArea(area);
+    if (!area_valid(area) || quantity == 0U ||
         data == NULL) return A_STATUS_INVALID_PARAM;
     size_t bytes = info.unit_bits == 1U ? (quantity + 7U) / 8U :
         (size_t)quantity * (info.unit_bits / 8U);
     if (bytes > size || bytes > ACOMM_VALUE_CAPACITY) {
         return A_STATUS_INVALID_PARAM;
     }
-    return aModbusAddressOps(config->protocol)->check(config->protocol,
+    return aModbusMapCheck(config->protocol,
         &target, data, size, write);
 }
 
@@ -65,7 +53,7 @@ static aStatus_t target_info(const aModbusMappingConfig_t *config,
     aCommDataInfo_t sig;
     aStatus_t status = aCommDataInfo(config->comm.data, &query, &sig);
     if (status != A_STATUS_OK) return status;
-    status = value_info(config->protocol, &sig, target, area, order, info);
+    status = aModbusMapDescribe(&sig, target, area, order, info);
     if (status == A_STATUS_OK &&
         (info->size == 0U || info->size > ACOMM_VALUE_CAPACITY)) {
         return A_STATUS_INVALID_PARAM;
@@ -81,7 +69,7 @@ aStatus_t aModbusMappingDataTargetInfo(aModbusMapping_t *handle,
                                     area, order, info);
     /* 从站映射已在初始化检查；主站可临时提交任意目标，需逐请求检查。 */
     if (status == A_STATUS_OK && handle->role == AMODBUS_MAPPING_CLIENT) {
-        return aModbusAddressOps(handle->config->protocol)->layout(info);
+        return aModbusMapLayout(info);
     }
     return status;
 }
@@ -99,7 +87,7 @@ aStatus_t aModbusMappingClientSigCheck(const aModbusMappingConfig_t *config,
     status = target_info(config, &request->target, request->area,
                         request->word_order, &info);
     if (status != A_STATUS_OK) return status;
-    status = aModbusAddressOps(config->protocol)->layout(&info);
+    status = aModbusMapLayout(&info);
     if (status != A_STATUS_OK) return status;
     if (!write && config->comm.sig_write == NULL) {
         aCommDataInfo_t sig;
@@ -158,13 +146,12 @@ aStatus_t aModbusMappingClientMapCheck(const aModbusMappingConfig_t *config,
            A_STATUS_INVALID_PARAM;
 }
 /* 区域决定基础读写能力；每个回调段和离散映射独立声明权限。 */
-static aBool_t permissions_valid(aCommEndpoint_t *endpoint,
-    uint16_t area, uint16_t flags)
+static aBool_t permissions_valid(uint16_t area, uint16_t flags)
 {
     return flags != 0U &&
         (flags & ~(ACOMM_MAP_FLAG_READ |
                    ACOMM_MAP_FLAG_WRITE)) == 0U &&
-        (aModbusMappingArea(endpoint, area).writable ||
+        (aModbusMappingArea(area).writable ||
          (flags & ACOMM_MAP_FLAG_WRITE) == 0U);
 }
 
@@ -182,17 +169,14 @@ aStatus_t aModbusMappingDataDefinitionsCheck(
     for (size_t i = 0U; i < config->range_count; i++) {
         const aModbusMappingAddressRange_t *range = &config->ranges[i];
         uint32_t end;
-        if (!area_valid(config->binding.protocol, range->area) ||
+        if (!area_valid(range->area) ||
             range->quantity == 0U ||
-            range->quantity > aModbusMappingArea(config->binding.protocol,
-                range->area).address_limit ||
-            !permissions_valid(config->binding.protocol,
-                range->area, range->flags)) {
+            range->quantity > aModbusMappingArea(range->area).address_limit ||
+            !permissions_valid(range->area, range->flags)) {
             return A_STATUS_INVALID_PARAM;
         }
         end = (uint32_t)range->address + range->quantity;
-        if (end > aModbusMappingArea(config->binding.protocol,
-            range->area).address_limit || (i != 0U &&
+        if (end > aModbusMappingArea(range->area).address_limit || (i != 0U &&
             (range->area < previous_area ||
              (range->area == previous_area &&
               range->address < previous_end))) ||
@@ -223,27 +207,24 @@ aStatus_t aModbusMappingDataDefinitionsCheck(
         if (mask != 0U && mask != ACOMM_SUBSCRIBE_MARK_ONLY &&
             config->binding.comm.data->ops->data->subscribe != NULL &&
             config->notify == NULL) return A_STATUS_INVALID_PARAM;
-        if (!area_valid(config->binding.protocol, map->area) ||
+        if (!area_valid(map->area) ||
             map->quantity == 0U ||
-            !permissions_valid(config->binding.protocol,
-                map->area, map->comm.flags)) {
+            !permissions_valid(map->area, map->comm.flags)) {
             return A_STATUS_INVALID_PARAM;
         }
         status = target_info(&config->binding,
             &ACOMM_MAP_LOCATION(map->comm),
                              map->area, map->word_order, &info);
         if (status != A_STATUS_OK) return status;
-        status = aModbusAddressOps(config->binding.protocol)->layout(&info);
+        status = aModbusMapLayout(&info);
         if (status != A_STATUS_OK) return status;
         if (map->quantity != info.quantity) return A_STATUS_INVALID_PARAM;
         end = (uint32_t)map->address + map->quantity;
-        if (end > aModbusMappingArea(config->binding.protocol,
-            map->area).address_limit || (i != 0U &&
+        if (end > aModbusMappingArea(map->area).address_limit || (i != 0U &&
             (map->area < previous_area ||
              (map->area == previous_area && map->address < previous_end))) ||
             ((map->comm.flags & ACOMM_MAP_FLAG_WRITE) != 0U &&
-             map->quantity > aModbusMappingArea(config->binding.protocol,
-                 map->area).write_limit)) {
+             map->quantity > aModbusMappingArea(map->area).write_limit)) {
             return A_STATUS_INVALID_PARAM;
         }
         previous_area = map->area;
@@ -281,19 +262,19 @@ aStatus_t aModbusMappingDataDefinitionsCheck(
     return A_STATUS_OK;
 }
 
-aStatus_t aModbusMappingValueDecode(aModbusMapping_t *handle,
-    const aModbusMapValue_t *info, uint16_t area, uint8_t order,
+aStatus_t aModbusMappingValueDecode(const aModbusMapValue_t *info,
+    uint16_t area, uint8_t order,
     const void *protocol, void *value)
 {
-    return aModbusAddressOps(handle->config->protocol)->copy(info, area, order,
+    return aModbusMapCopy(info, area, order,
         0U, info->quantity, value, (void *)protocol, A_TRUE);
 }
 
-aStatus_t aModbusMappingValueEncode(aModbusMapping_t *handle,
-    const aModbusMapValue_t *info, uint16_t area, uint8_t order,
+aStatus_t aModbusMappingValueEncode(const aModbusMapValue_t *info,
+    uint16_t area, uint8_t order,
     const void *value, void *protocol)
 {
-    return aModbusAddressOps(handle->config->protocol)->copy(info, area, order,
+    return aModbusMapCopy(info, area, order,
         0U, info->quantity, (void *)value, protocol, A_FALSE);
 }
 /* 定义表按区域和地址排序；二分找到起点之前的最后一段/映射。 */
@@ -366,15 +347,14 @@ static aStatus_t map_write_check(aModbusMapping_t *handle,
     aModbusMapValue_t info;
     aStatus_t status;
     size_t first = (at - map->address) *
-        unit_size(handle->config->protocol, map->area);
+        unit_size(map->area);
     size_t end = first + count *
-        unit_size(handle->config->protocol, map->area);
+        unit_size(map->area);
     aBool_t start_found = A_FALSE;
     aBool_t end_found = A_FALSE;
     if (at == map->address && count == map->quantity) return A_STATUS_OK;
     status = aModbusMappingDataTargetInfo(handle,
-        &ACOMM_MAP_LOCATION(map->comm), map->area,
-                                   map->word_order, &info);
+        &ACOMM_MAP_LOCATION(map->comm), map->area, map->word_order, &info);
     if (status != A_STATUS_OK) return status;
     if (info.type != ALIB_DATA_STRUCT) return A_STATUS_NOT_FOUND;
     for (size_t i = 0U; i < info.param_count; i++) {
@@ -424,30 +404,17 @@ static aStatus_t route_check(aModbusMapping_t *handle, uint16_t area,
 /* 帧内同一 SIG 统一取快照或提交，非连续映射也属于同一组。
  * 跨 SIG 仍独立处理；用户自定义回调自行决定同步及事务边界。
  */
-static aBool_t same_sig(const aCommTarget_t *a,
-                        const aCommTarget_t *b)
+static aBool_t same_sig(const aCommEntry_t *a, const aCommEntry_t *b)
 {
     return a->deviceID == b->deviceID && a->sigIndex == b->sigIndex;
 }
-
-static aBool_t group_seen(aModbusMapping_t *handle, uint16_t area,
-    uint32_t start, uint32_t current, const aCommTarget_t *target)
+static aBool_t group_seen(aModbusMapping_t *handle, uint32_t start,
+    const aModbusServerMap_t *map)
 {
-    size_t first;
-    if (current == start) return A_FALSE;
-    first = map_upper_bound(&handle->server, area, start);
-    if (first != 0U) first--;
-    for (size_t m = first; m < handle->server.map_count; m++) {
-        const aModbusServerMap_t *map = &handle->server.maps[m];
-        if (map->area < area) continue;
-        if (map->area > area || map->address >= current) break;
-        if (!same_sig(&ACOMM_MAP_LOCATION(map->comm), target)) continue;
-        if (map->address >= start) return A_TRUE;
-        if ((uint32_t)map->address + map->quantity > start) {
-            return A_TRUE;
-        }
-    }
-    return A_FALSE;
+    size_t previous = handle->links[map - handle->server.maps].previous;
+    if (previous == SIZE_MAX) return A_FALSE;
+    const aModbusServerMap_t *before = &handle->server.maps[previous];
+    return (uint32_t)before->address + before->quantity > start;
 }
 typedef struct {
     aModbusMapping_t *handle;
@@ -455,7 +422,7 @@ typedef struct {
     uint32_t start;
     uint32_t end;
     void *protocol;
-    const aCommTarget_t *target;
+    size_t first;
     aCommDataInfo_t sig;
     aBool_t write;
 } group_access_t;
@@ -463,11 +430,9 @@ static aStatus_t group_copy(void *context, void *snapshot, size_t size)
 {
     group_access_t *group = context;
     aModbusMapping_t *handle = group->handle;
-    size_t first = map_upper_bound(&handle->server, group->area, group->start);
     (void)size;
-    /* 从请求起点二分定位，只扫描可能参与本帧的映射。 */
-    if (first != 0U) first--;
-    for (size_t m = first; m < handle->server.map_count; m++) {
+    /* 初始化已串起同一 SIG；帧内只访问本组成员，避免重复扫描点表。 */
+    for (size_t m = group->first; m != SIZE_MAX; m = handle->links[m].next) {
         const aModbusServerMap_t *map = &handle->server.maps[m];
         aModbusMapValue_t info;
         aStatus_t status;
@@ -478,10 +443,7 @@ static aStatus_t group_copy(void *context, void *snapshot, size_t size)
         void *protocol;
         if (map->area < group->area) continue;
         if (map->area > group->area || map->address >= group->end) break;
-        if (!same_sig(&ACOMM_MAP_LOCATION(map->comm), group->target)) {
-            continue;
-        }
-        status = value_info(handle->config->protocol, &group->sig,
+        status = aModbusMapDescribe(&group->sig,
             &ACOMM_MAP_LOCATION(map->comm), group->area,
             map->word_order, &info);
         if (status != A_STATUS_OK) return status;
@@ -496,7 +458,7 @@ static aStatus_t group_copy(void *context, void *snapshot, size_t size)
             value = (uint8_t *)snapshot +
                 group->sig.params[map->comm.paramIndex].offset;
         }
-        if (area_bits(handle->config->protocol, group->area)) {
+        if (area_bits(group->area)) {
             if (group->write) {
                 bit = bit_read(
                     (uint8_t *)group->protocol, offset);
@@ -504,22 +466,19 @@ static aStatus_t group_copy(void *context, void *snapshot, size_t size)
             protocol = &bit;
         } else {
             protocol = (uint8_t *)group->protocol + offset *
-                unit_size(handle->config->protocol, group->area);
+                unit_size(group->area);
         }
-        if (!area_bits(handle->config->protocol, group->area)) {
-            status = aModbusAddressOps(handle->config->protocol)->copy(
-                    &info,
-                map->area, map->word_order,
+        if (!area_bits(group->area)) {
+            status = aModbusMapCopy(&info, map->area, map->word_order,
                 at - map->address, count, value, protocol, group->write);
         } else if (group->write) {
-            status = aModbusMappingValueDecode(handle, &info, group->area,
-                                        map->word_order, protocol, value);
+            status = aModbusMappingValueDecode(&info, group->area,
+                map->word_order, protocol, value);
         } else {
-            status = aModbusMappingValueEncode(handle, &info, group->area,
+            status = aModbusMappingValueEncode(&info, group->area,
                 map->word_order, value, &bit);
             if (status == A_STATUS_OK) {
-                bit_write((uint8_t *)group->protocol,
-                                    offset, bit != 0U);
+                bit_write((uint8_t *)group->protocol, offset, bit != 0U);
             }
         }
         if (status != A_STATUS_OK) return status;
@@ -529,16 +488,17 @@ static aStatus_t group_copy(void *context, void *snapshot, size_t size)
 
 static aStatus_t group_transfer(aModbusMapping_t *handle,
     uint16_t area, uint16_t address, uint16_t quantity, void *protocol,
-    const aCommTarget_t *target, aBool_t write)
+    const aModbusServerMap_t *map, aBool_t write)
 {
+    const aCommTarget_t target = ACOMM_MAP_LOCATION(map->comm);
     group_access_t group = {
         .handle = handle, .area = area, .start = address,
         .end = (uint32_t)address + quantity, .protocol = protocol,
-        .target = target, .write = write
+        .first = (size_t)(map - handle->server.maps), .write = write
     };
-    aCommDataQuery_t query = {target->deviceID, target->sigIndex};
+    aCommDataQuery_t query = {target.deviceID, target.sigIndex};
     aStatus_t status = aCommDataInfo(handle->config->comm.data, &query,
-                                      &group.sig);
+        &group.sig);
     if (status != A_STATUS_OK) return status;
     const aCommBindingTransfer_t transfer = {
         .target = query, .size = group.sig.size,
@@ -560,7 +520,7 @@ aStatus_t aModbusMappingDataRead(aModbusMapping_t *handle,
     status = route_check(handle, request->area, request->address,
                           request->quantity, A_FALSE);
     if (status != A_STATUS_OK) return status;
-    if (area_bits(handle->config->protocol, request->area)) {
+    if (area_bits(request->area)) {
         memset(request->data, 0, (request->quantity + 7U) / 8U);
     }
     while (left != 0U) {
@@ -575,13 +535,13 @@ aStatus_t aModbusMappingDataRead(aModbusMapping_t *handle,
                                   range->quantity, left);
             part.address = (uint16_t)at;
             part.quantity = count;
-            part.data = area_bits(handle->config->protocol, request->area) ?
+            part.data = area_bits(request->area) ?
                 (void *)bits :
                         (uint8_t *)request->data + offset *
-                        unit_size(handle->config->protocol, request->area);
-            part.size = area_bits(handle->config->protocol, request->area) ?
+                        unit_size(request->area);
+            part.size = area_bits(request->area) ?
                         (count + 7U) / 8U : count *
-                        unit_size(handle->config->protocol, request->area);
+                        unit_size(request->area);
             part.timeout = aModbusMappingRemaining(handle);
             status = range->read(range->context, &part);
         } else {
@@ -592,11 +552,10 @@ aStatus_t aModbusMappingDataRead(aModbusMapping_t *handle,
             count = segment_size(at, (uint32_t)map->address +
                                   map->quantity, left);
             if (handle->config->comm.sig_read == NULL) {
-                if (!group_seen(handle, request->area, request->address,
-                                 at, &ACOMM_MAP_LOCATION(map->comm))) {
+                if (!group_seen(handle, request->address, map)) {
                     status = group_transfer(handle, request->area,
                         request->address, request->quantity, request->data,
-                        &ACOMM_MAP_LOCATION(map->comm), A_FALSE);
+                        map, A_FALSE);
                     if (status != A_STATUS_OK) return status;
                 }
                 at += count;
@@ -615,21 +574,19 @@ aStatus_t aModbusMappingDataRead(aModbusMapping_t *handle,
                     .timeout = aModbusMappingRemaining(handle)
                 });
             if (status != A_STATUS_OK) return status;
-            if (area_bits(handle->config->protocol, request->area)) {
-                status = aModbusMappingValueEncode(handle, &info, request->area,
+            if (area_bits(request->area)) {
+                status = aModbusMappingValueEncode(&info, request->area,
                     map->word_order, value.bytes, bits);
             } else {
-                status = aModbusAddressOps(handle->config->protocol)->copy(
-                    &info,
-                map->area, map->word_order,
+                status = aModbusMapCopy(&info, map->area, map->word_order,
                     at - map->address, count, value.bytes,
                     (uint8_t *)request->data + offset *
-                        unit_size(handle->config->protocol, request->area),
+                        unit_size(request->area),
                     A_FALSE);
             }
         }
         if (status != A_STATUS_OK) return status;
-        if (area_bits(handle->config->protocol, request->area)) {
+        if (area_bits(request->area)) {
             uint8_t *out = request->data;
             for (size_t i = 0U; i < count; i++) {
                 bit_write(out, offset + i,
@@ -663,9 +620,9 @@ static aStatus_t map_callback_write(aModbusMapping_t *handle,
             ACOMM_MAP_LOCATION(map->comm);
         aStatus_t status;
         if (param->offset < first *
-            unit_size(handle->config->protocol, map->area)) continue;
+            unit_size(map->area)) continue;
         if (param->offset >= (first + count) *
-            unit_size(handle->config->protocol, map->area)) break;
+            unit_size(map->area)) break;
         target.paramIndex = i;
         status = aCommBindingWrite(&handle->comm,
             &(aCommValueWriteRequest_t){
@@ -700,7 +657,7 @@ static aStatus_t write_pass(aModbusMapping_t *handle,
             if (apply) {
                 part.address = (uint16_t)at;
                 part.quantity = count;
-                if (area_bits(handle->config->protocol, request->area)) {
+                if (area_bits(request->area)) {
                     const uint8_t *input = request->data;
                     for (size_t i = 0U; i < count; i++) {
                         bit_write(bits, i,
@@ -710,9 +667,9 @@ static aStatus_t write_pass(aModbusMapping_t *handle,
                     part.size = (count + 7U) / 8U;
                 } else {
                     part.data = (const uint8_t *)request->data + offset *
-                        unit_size(handle->config->protocol, request->area);
+                        unit_size(request->area);
                     part.size = count *
-                        unit_size(handle->config->protocol, request->area);
+                        unit_size(request->area);
                 }
                 part.timeout = aModbusMappingRemaining(handle);
                 status = range->write(range->context, &part);
@@ -729,33 +686,29 @@ static aStatus_t write_pass(aModbusMapping_t *handle,
             if (status != A_STATUS_OK) return status;
             count = segment_size(at, (uint32_t)map->address +
                                   map->quantity, left);
-            if (area_bits(handle->config->protocol, request->area)) {
+            if (area_bits(request->area)) {
                 const uint8_t *input = request->data;
                 bits[0] = bit_read(input, offset) ? 1U : 0U;
                 protocol = bits;
             } else {
                 protocol = (const uint8_t *)request->data + offset *
-                        unit_size(handle->config->protocol, request->area);
+                        unit_size(request->area);
             }
-            if (area_bits(handle->config->protocol, request->area)) {
-                status = aModbusMappingValueDecode(handle, &info, request->area,
+            if (area_bits(request->area)) {
+                status = aModbusMappingValueDecode(&info, request->area,
                     map->word_order, protocol, value.bytes);
             } else {
-                status = aModbusAddressOps(handle->config->protocol)->copy(
-                    &info,
-                map->area, map->word_order,
+                status = aModbusMapCopy(&info, map->area, map->word_order,
                     at - map->address, count, value.bytes,
                     (void *)protocol, A_TRUE);
             }
             if (status == A_STATUS_OK && apply) {
                 if (handle->config->comm.sig_write == NULL) {
-                    if (!group_seen(handle, request->area, request->address,
-                                     at,
-                                     &ACOMM_MAP_LOCATION(map->comm))) {
+                    if (!group_seen(handle, request->address, map)) {
                         status = group_transfer(handle, request->area,
                             request->address, request->quantity,
                             (void *)request->data,
-                            &ACOMM_MAP_LOCATION(map->comm), A_TRUE);
+                            map, A_TRUE);
                     }
                 } else {
                     status = map_callback_write(handle, map, &info,
@@ -791,6 +744,7 @@ typedef struct {
     const size_t *indices;
     size_t count;
     size_t selected;
+    size_t map_offset; /**< 独立临时表无缓存时为 SIZE_MAX。 */
     const void *data;
     aCommDataInfo_t sig;
 } publish_context_t;
@@ -808,14 +762,14 @@ static aStatus_t publish_decode(const publish_context_t *publish,
     size_t offset = item->address - publish_item(publish, 0U)->address;
     uint8_t bit;
     const void *protocol;
-    if (area_bits(publish->handle->config->protocol, item->area)) {
+    if (area_bits(item->area)) {
         bit = bit_read((const uint8_t *)publish->data, offset);
         protocol = &bit;
     } else {
         protocol = (const uint8_t *)publish->data + offset *
-            unit_size(publish->handle->config->protocol, item->area);
+            unit_size(item->area);
     }
-    return aModbusMappingValueDecode(publish->handle, info, item->area,
+    return aModbusMappingValueDecode(info, item->area,
         item->word_order,
         protocol, value);
 }
@@ -823,23 +777,24 @@ static aStatus_t publish_decode(const publish_context_t *publish,
 static aStatus_t publish_edit(void *context, void *snapshot, size_t size)
 {
     publish_context_t *publish = context;
-    const aModbusClientMap_t *selected =
-        publish_item(publish, publish->selected);
-    const aCommTarget_t *target =
-        &ACOMM_MAP_LOCATION(selected->comm);
+    const aBool_t cached = publish->map_offset != SIZE_MAX;
+    size_t cursor = cached ? publish->selected + publish->map_offset : 0U;
+    size_t end = cached ? publish->map_offset +
+        publish->indices[publish->count - 1U] + 1U : publish->count;
     (void)size;
-    for (size_t i = 0U; i < publish->count; i++) {
-        const aModbusClientMap_t *item = publish_item(publish, i);
+    while (cursor < end) {
+        size_t index = cached ? cursor - publish->map_offset :
+            publish->indices[cursor];
+        cursor = cached ? publish->handle->links[cursor].next : cursor + 1U;
+        const aModbusClientMap_t *item = &publish->items[index];
+        if (!cached && !same_sig(&item->comm,
+            &publish->items[publish->selected].comm)) continue;
         aModbusMapValue_t info;
         aStatus_t status;
         void *value = snapshot;
-        if (!same_sig(&ACOMM_MAP_LOCATION(item->comm), target))
-            continue;
-        status =
-            value_info(publish->handle->config->protocol, &publish->sig,
-                &ACOMM_MAP_LOCATION(item->comm),
-                            item->area,
-                            item->word_order, &info);
+        status = aModbusMapDescribe(&publish->sig,
+            &ACOMM_MAP_LOCATION(item->comm), item->area,
+            item->word_order, &info);
         if (status != A_STATUS_OK) return status;
         if (item->comm.paramIndex != ACOMM_MAP_SIG_WHOLE) {
             value = (uint8_t *)snapshot +
@@ -860,7 +815,6 @@ static aStatus_t publish_pass(aModbusMapping_t *handle,
             &ACOMM_MAP_LOCATION(item->comm);
         aCommDataQuery_t query = {target->deviceID, target->sigIndex};
         aStatus_t status;
-        aBool_t seen = A_FALSE;
         if (!apply || handle->config->comm.sig_write != NULL) {
             aModbusMapValue_t info;
             value_buffer_t value;
@@ -877,17 +831,24 @@ static aStatus_t publish_pass(aModbusMapping_t *handle,
                     });
             }
         } else {
-            for (size_t j = 0U; j < i; j++) {
-                const aModbusClientMap_t *other =
-                    publish_item(publish, j);
-                if (same_sig(target,
-                             &ACOMM_MAP_LOCATION(other->comm))) {
-                    seen = A_TRUE;
-                    break;
+            aBool_t seen = A_FALSE;
+            if (publish->map_offset != SIZE_MAX) {
+                size_t previous = handle->links[
+                    publish->map_offset + publish->indices[i]].previous;
+                seen = previous != SIZE_MAX && previous >=
+                    publish->map_offset + publish->indices[0];
+            } else {
+                /* 独立计划可借用另一张临时表，不能使用注册表的下标。 */
+                for (size_t j = 0U; j < i; j++) {
+                    if (same_sig(&item->comm,
+                                 &publish_item(publish, j)->comm)) {
+                        seen = A_TRUE;
+                        break;
+                    }
                 }
             }
             if (seen) continue;
-            publish->selected = i;
+            publish->selected = publish->indices[i];
             status = aCommDataInfo(handle->config->comm.data, &query,
                 &publish->sig);
             if (status == A_STATUS_OK) {
@@ -910,8 +871,18 @@ aStatus_t aModbusMappingDataPublish(aModbusMapping_t *handle,
 {
     publish_context_t publish = {
         .handle = handle, .items = items, .indices = indices,
-        .count = count, .data = data
+        .count = count, .data = data, .map_offset = SIZE_MAX
     };
+    uintptr_t first = (uintptr_t)handle->client.maps;
+    uintptr_t current = (uintptr_t)items;
+    if (count != 0U && current >= first && handle->client.maps != NULL) {
+        size_t bytes = current - first;
+        size_t offset = bytes / sizeof(*items);
+        if (bytes % sizeof(*items) == 0U && offset < handle->client.map_count &&
+            indices[count - 1U] < handle->client.map_count - offset) {
+            publish.map_offset = offset;
+        }
+    }
     /* 第一遍只校验，第二遍才提交；范围错误不能改写前面的 SIG。 */
     aStatus_t status = publish_pass(handle, &publish, A_FALSE);
     return status == A_STATUS_OK ?

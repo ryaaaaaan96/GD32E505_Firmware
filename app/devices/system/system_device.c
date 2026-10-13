@@ -3,9 +3,14 @@
 #include "aMemory_layout.h"
 #endif
 #include "aDev_led_instance.h"
-#if ASHELL_ENABLE
+#if ASHELL_ENABLE || APP_LOG_ENABLE
 #include "aDev_usart.h"
+#if !ADEV_USART_DYNAMIC_ENABLE
+#include "aDev_usart_instance.h"
+#endif
 #include "aOS.h"
+#endif
+#if ASHELL_ENABLE
 #include "aShell.h"
 #endif
 
@@ -42,12 +47,12 @@ aStatus_t appSystemStatusLedInit(aDevLedHandle_t **handle_out)
 }
 
 /* --------------------------------------------------------------------------
- * 系统控制台：USART0，随 Shell 功能一同裁剪。
+ * 系统控制台：USART0，由 Shell 或日志共同使用。
  * -------------------------------------------------------------------------- */
-#if ASHELL_ENABLE
+#if ASHELL_ENABLE || APP_LOG_ENABLE
 
 /* 控制台配置、缓冲区和句柄由本文件私有持有。
- * appSystemConsoleInit 完成控制台及 Shell 单例初始化。 */
+ * appSystemConsoleInit 只初始化串口和发送锁。 */
 static uint8_t rx_buffer[256U];
 static uint8_t tx_buffer[256U];
 
@@ -82,6 +87,9 @@ typedef struct {
 } consolePort_t;
 
 static consolePort_t console;
+#if !ADEV_USART_DYNAMIC_ENABLE
+static aDevUsartHandle_t console_instance;
+#endif
 
 /* 应用适配：通用流不暴露 USART 类型；接收故障先报告给 Shell 再恢复。 */
 static aSSize_t console_read(void *context, void *buffer, size_t size,
@@ -145,51 +153,46 @@ const aStream_t app_system_console_stream = {
 
 aStatus_t appSystemConsoleInit(void)
 {
-    aShellConfig_t config;
     aStatus_t status;
-    aStatus_t cleanup_status;
 
     /* 保留仍在使用或尚未清理成功的句柄，避免 Create 覆盖所有权。 */
     if (console.handle != NULL) return A_STATUS_BUSY;
-    aShellConfigStructInit(&config);
     status = aOSMutexCreate(&console.tx_mutex);
     if (status != A_STATUS_OK) return status;
-    status = aDevUsartCreate(
-        &usart_config,
-        &console.handle);
-    if (status != A_STATUS_OK) {
-        aOSMutexDestroy(&console.tx_mutex);
-        return status;
-    }
-    config.stream = app_system_console_stream;
-    config.read_timeout = A_TIMEOUT_MS(20U);
-    config.write_timeout = A_TIMEOUT_MS(20U);
-
-    status = aShellInit(&config);
-    if (status != A_STATUS_OK) {
-        cleanup_status = aDevUsartDestroy(console.handle);
-        if (cleanup_status != A_STATUS_OK) return cleanup_status;
-        console.handle = NULL;
-        aOSMutexDestroy(&console.tx_mutex);
-        return status;
-    }
-    return A_STATUS_OK;
+#if ADEV_USART_DYNAMIC_ENABLE
+    status = aDevUsartCreate(&usart_config, &console.handle);
+#else
+    status = aDevUsartInitStatic(&usart_config, &console_instance);
+    if (status == A_STATUS_OK) console.handle = &console_instance;
+#endif
+    if (status != A_STATUS_OK) aOSMutexDestroy(&console.tx_mutex);
+    return status;
 }
 
 aStatus_t appSystemConsoleDeInit(void)
 {
-    aStatus_t status;
-
     if (console.handle == NULL) return A_STATUS_NOT_READY;
-    /* 调用者已停止读写；串口仍忙时保留句柄与 Shell，允许稍后重试清理。 */
-    status = aDevUsartDestroy(console.handle);
+#if ADEV_USART_DYNAMIC_ENABLE
+    aStatus_t status = aDevUsartDestroy(console.handle);
+#else
+    aStatus_t status = aDevUsartDeInit(console.handle);
+#endif
     if (status != A_STATUS_OK) return status;
     console.handle = NULL;
     aOSMutexDestroy(&console.tx_mutex);
-    status = aShellDeInit();
-    /* Shell 初始化失败后，也允许通过此入口清理遗留串口。 */
-    return status == A_STATUS_NOT_READY ? A_STATUS_OK : status;
+    return A_STATUS_OK;
 }
+
+#if ASHELL_ENABLE
+void appSystemShellConfigInit(aShellConfig_t *config)
+{
+    if (config == NULL) return;
+    aShellConfigStructInit(config);
+    config->stream = app_system_console_stream;
+    config->read_timeout = A_TIMEOUT_MS(20U);
+    config->write_timeout = A_TIMEOUT_MS(20U);
+}
+#endif
 
 #endif
 
