@@ -1,16 +1,12 @@
-#include "aModbus_rtu_internal.h"
+#include "aComm_channel_instance.h"
 #include "aOS.h"
 #include <string.h>
 
-void aModbusRtuConfigStructInit(aModbusRtuConfig_t *config)
+void aCommChannelConfigStructInit(aCommChannelConfig_t *config)
 {
     if (config != NULL) {
-        const aModbusRtuConfig_t defaults = {
-            .role = AMODBUS_SERVER_ENABLE ? AMODBUS_ROLE_SERVER :
-                                           AMODBUS_ROLE_CLIENT,
-            .unit_id = 1U,
-            .character_bits = 10U,
-            .baud_rate = 115200U
+        const aCommChannelConfig_t defaults = {
+            .mode = ACOMM_CHANNEL_STREAM
         };
         *config = defaults;
     }
@@ -22,53 +18,47 @@ static uint64_t divide_up(uint64_t value, uint64_t divisor)
     return (value + divisor - 1U) / divisor;
 }
 
-aStatus_t aModbusRtuInstanceInit(const aModbusRtuConfig_t *config,
-                               aModbusRtuHandle_t *handle)
+static aStatus_t instance_init(const aCommChannelConfig_t *config,
+                              aCommChannel_t *handle)
 {
     uint64_t character, byte_gap, frame_gap, frequency;
-    if (config == NULL || handle == NULL || config->baud_rate == 0U ||
-        config->character_bits < 7U || config->character_bits > 16U ||
+    if (config == NULL || handle == NULL || config->stream.write == NULL) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    if (config->mode == ACOMM_CHANNEL_STREAM) {
+        if (config->stream.read == NULL || config->frame_check != NULL) {
+            return A_STATUS_INVALID_PARAM;
+        }
+        memset(handle, 0, sizeof(*handle));
+        handle->config = *config;
+        handle->ready = A_TRUE;
+        return A_STATUS_OK;
+    }
+    if (config->mode != ACOMM_CHANNEL_GAP ||
         config->io.ticks_per_second == 0U || config->io.ticks == NULL ||
         config->io.enter == NULL || config->io.exit == NULL ||
-        config->output.write == NULL ||
-        config->io.wait_transmit_complete == NULL) {
+        config->io.wait_transmit_complete == NULL ||
+        config->timing.frame_gap_us == 0U ||
+        config->timing.byte_gap_us > config->timing.frame_gap_us) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (config->role != AMODBUS_ROLE_CLIENT &&
-        config->role != AMODBUS_ROLE_SERVER) return A_STATUS_INVALID_PARAM;
-    if (config->role == AMODBUS_ROLE_SERVER &&
-        (config->unit_id == 0U || config->unit_id > 247U)) {
-        return A_STATUS_INVALID_PARAM;
-    }
-#if !AMODBUS_CLIENT_ENABLE
-    if (config->role == AMODBUS_ROLE_CLIENT) return A_STATUS_UNSUPPORTED;
-#endif
-#if !AMODBUS_SERVER_ENABLE
-    if (config->role == AMODBUS_ROLE_SERVER) return A_STATUS_UNSUPPORTED;
-#endif
     frequency = config->io.ticks_per_second;
-    character = divide_up(frequency * config->character_bits,
-                          config->baud_rate);
-    if (config->baud_rate > 19200U) {
-        byte_gap = divide_up(frequency * 750U, 1000000U);
-        frame_gap = divide_up(frequency * 1750U, 1000000U);
-    } else {
-        byte_gap = divide_up(frequency * config->character_bits * 3U,
-                             (uint64_t)config->baud_rate * 2U);
-        frame_gap = divide_up(frequency * config->character_bits * 7U,
-                              (uint64_t)config->baud_rate * 2U);
-    }
+    character = divide_up(frequency * config->timing.character_us, 1000000U);
+    byte_gap = divide_up(frequency * config->timing.byte_gap_us, 1000000U);
+    frame_gap = divide_up(frequency * config->timing.frame_gap_us, 1000000U);
     if (frame_gap + character > UINT32_MAX / 2U) {
         return A_STATUS_UNSUPPORTED;
     }
+    uint64_t idle_ms = divide_up((frame_gap + character) * 1000U,
+                                 frequency) + 1U;
+    if (idle_ms > INT32_MAX) return A_STATUS_UNSUPPORTED;
     memset(handle, 0, sizeof(*handle));
     handle->config = *config;
     handle->character_ticks = (uint32_t)character;
     handle->byte_gap = (uint32_t)byte_gap;
     handle->frame_gap = (uint32_t)frame_gap;
     /* 毫秒时基只判断长空闲，额外一毫秒覆盖量化误差。 */
-    handle->idle_ms = (uint32_t)divide_up(
-        (frame_gap + character) * 1000U, frequency) + 1U;
+    handle->idle_ms = (uint32_t)idle_ms;
     handle->last_rx_ticks = handle->last_tx_ticks =
         config->io.ticks(config->io.context);
     handle->last_rx_ms = handle->last_tx_ms = aOSGetUptimeMs();
@@ -76,14 +66,14 @@ aStatus_t aModbusRtuInstanceInit(const aModbusRtuConfig_t *config,
     return A_STATUS_OK;
 }
 
-#if AMODBUS_STATIC_ENABLE
-aStatus_t aModbusRtuInitStatic(const aModbusRtuConfig_t *config,
-                             aModbusRtuHandle_t *handle)
+#if ACOMM_STATIC_ENABLE
+aStatus_t aCommChannelInitStatic(const aCommChannelConfig_t *config,
+                             aCommChannel_t *handle)
 {
-    return aModbusRtuInstanceInit(config, handle);
+    return instance_init(config, handle);
 }
 
-aStatus_t aModbusRtuDeInitStatic(aModbusRtuHandle_t *handle)
+aStatus_t aCommChannelDeInitStatic(aCommChannel_t *handle)
 {
     if (handle == NULL || handle->dynamic) return A_STATUS_INVALID_PARAM;
     if (!handle->ready) return A_STATUS_NOT_READY;
@@ -92,18 +82,18 @@ aStatus_t aModbusRtuDeInitStatic(aModbusRtuHandle_t *handle)
 }
 #endif
 
-#if AMODBUS_DYNAMIC_ENABLE
-aStatus_t aModbusRtuCreate(const aModbusRtuConfig_t *config,
-                         aModbusRtuHandle_t **handle_out)
+#if ACOMM_DYNAMIC_ENABLE
+aStatus_t aCommChannelCreate(const aCommChannelConfig_t *config,
+                         aCommChannel_t **handle_out)
 {
-    aModbusRtuHandle_t *handle;
+    aCommChannel_t *handle;
     aStatus_t status;
     if (handle_out == NULL) return A_STATUS_INVALID_PARAM;
     *handle_out = NULL;
     if (config == NULL) return A_STATUS_INVALID_PARAM;
     handle = aOSAlloc(sizeof(*handle));
     if (handle == NULL) return A_STATUS_NO_MEMORY;
-    status = aModbusRtuInstanceInit(config, handle);
+    status = instance_init(config, handle);
     if (status != A_STATUS_OK) {
         aOSFree(handle);
         return status;
@@ -113,7 +103,7 @@ aStatus_t aModbusRtuCreate(const aModbusRtuConfig_t *config,
     return A_STATUS_OK;
 }
 
-aStatus_t aModbusRtuDestroy(aModbusRtuHandle_t *handle)
+aStatus_t aCommChannelDestroy(aCommChannel_t *handle)
 {
     if (handle == NULL) return A_STATUS_OK;
     if (!handle->dynamic) return A_STATUS_INVALID_PARAM;
@@ -122,7 +112,7 @@ aStatus_t aModbusRtuDestroy(aModbusRtuHandle_t *handle)
 }
 #endif
 
-static aBool_t elapsed(aModbusRtuHandle_t *handle, uint32_t ticks,
+static aBool_t elapsed(aCommChannel_t *handle, uint32_t ticks,
                        uint32_t ms, uint32_t limit)
 {
     if ((uint32_t)(aOSGetUptimeMs() - ms) > handle->idle_ms) return A_TRUE;
@@ -131,11 +121,11 @@ static aBool_t elapsed(aModbusRtuHandle_t *handle, uint32_t ticks,
 }
 
 /* 生产者或已排除生产者的消费任务调用；满队列丢弃新帧。 */
-static void finish_frame(aModbusRtuHandle_t *handle)
+static void finish_frame(aCommChannel_t *handle)
 {
     if (handle->building != 0U && !handle->invalid_frame) {
         handle->frames[handle->head].size = handle->building;
-        handle->head = (handle->head + 1U) % AMODBUS_RTU_FRAME_COUNT;
+        handle->head = (handle->head + 1U) % ACOMM_CHANNEL_FRAME_COUNT;
         handle->count++;
     } else if (handle->invalid_frame) {
         handle->dropped_frames++;
@@ -144,24 +134,25 @@ static void finish_frame(aModbusRtuHandle_t *handle)
     handle->invalid_frame = A_FALSE;
 }
 
-void aModbusRtuReceiveAt(aModbusRtuHandle_t *handle, uint8_t byte,
+void aCommChannelReceiveAt(aCommChannel_t *handle, uint8_t byte,
                        aStatus_t status, uint32_t rx_ticks, uint32_t rx_ms)
 {
     uint32_t delta;
-    if (handle == NULL || !handle->ready) return;
+    if (handle == NULL || !handle->ready ||
+        handle->config.mode != ACOMM_CHANNEL_GAP) return;
     delta = rx_ticks - handle->last_rx_ticks;
     /* 时间戳在字符完成时采集，比较间隔时须补上一个字符时间。 */
     if ((uint32_t)(rx_ms - handle->last_rx_ms) > handle->idle_ms ||
         delta >= handle->frame_gap + handle->character_ticks) {
         finish_frame(handle);
-    } else if (handle->building != 0U &&
+    } else if (handle->building != 0U && handle->byte_gap != 0U &&
                delta >= handle->byte_gap + handle->character_ticks) {
         handle->invalid_frame = A_TRUE;
     }
     handle->last_rx_ticks = rx_ticks;
     handle->last_rx_ms = rx_ms;
-    if (status != A_STATUS_OK || handle->count == AMODBUS_RTU_FRAME_COUNT ||
-        handle->building == AMODBUS_RTU_FRAME_SIZE) {
+    if (status != A_STATUS_OK || handle->count == ACOMM_CHANNEL_FRAME_COUNT ||
+        handle->building == ACOMM_CHANNEL_FRAME_SIZE) {
         handle->invalid_frame = A_TRUE;
     }
     if (!handle->invalid_frame) {
@@ -169,49 +160,28 @@ void aModbusRtuReceiveAt(aModbusRtuHandle_t *handle, uint8_t byte,
     }
 }
 
-void aModbusRtuReceive(void *context, uint8_t byte, aStatus_t status)
+void aCommChannelReceive(void *context, uint8_t byte, aStatus_t status)
 {
-    aModbusRtuHandle_t *handle = context;
+    aCommChannel_t *handle = context;
     uint32_t rx_ticks, rx_ms;
-    if (handle == NULL || !handle->ready) return;
+    if (handle == NULL || !handle->ready ||
+        handle->config.mode != ACOMM_CHANNEL_GAP) return;
     rx_ticks = handle->config.io.ticks(handle->config.io.context);
     rx_ms = aOSGetUptimeMs();
-    aModbusRtuReceiveAt(handle, byte, status, rx_ticks, rx_ms);
-}
-
-/* 完整 ADU 长度先于业务写入检查；CRC 和协议异常由核心处理。 */
-static aBool_t frame_length_valid(aModbusRtuHandle_t *handle)
-{
-    const uint8_t *frame = handle->frame;
-    size_t size = handle->frame_size;
-    uint8_t function;
-    if (size < 4U) return A_FALSE;
-    function = frame[1];
-    if (handle->config.role == AMODBUS_ROLE_CLIENT) {
-        if ((function & 0x80U) != 0U) return size == 5U;
-        if (function >= 1U && function <= 4U) return size == 5U + frame[2];
-        if (function == 5U || function == 6U ||
-            function == 15U || function == 16U) return size == 8U;
-    } else {
-        if (function >= 1U && function <= 6U) return size == 8U;
-        if (function == 15U || function == 16U) {
-            return size >= 9U && size == 9U + frame[6];
-        }
-    }
-    return A_TRUE;
+    aCommChannelReceiveAt(handle, byte, status, rx_ticks, rx_ms);
 }
 
 static void port_finish(void *context)
 {
-    aModbusRtuHandle_t *handle = context;
+    aCommChannel_t *handle = context;
     handle->frame_size = handle->frame_position = 0U;
     handle->frame_ready = A_FALSE;
 }
 
-static aStatus_t receive_frame(aModbusRtuHandle_t *handle, aTimeout_t timeout)
+static aStatus_t receive_frame(aCommChannel_t *handle, aTimeout_t timeout)
 {
     aTimepoint_t deadline = aTimepointCalc(timeout, aOSGetUptimeMs());
-    const aModbusRtuIo_t *io = &handle->config.io;
+    const aCommChannelIo_t *io = &handle->config.io;
     port_finish(handle);
     for (;;) {
         size_t available, tail;
@@ -229,16 +199,20 @@ static aStatus_t receive_frame(aModbusRtuHandle_t *handle, aTimeout_t timeout)
             memcpy(handle->frame, handle->frames[tail].data,
                    handle->frame_size);
             io->enter(io->context);
-            handle->tail = (tail + 1U) % AMODBUS_RTU_FRAME_COUNT;
+            handle->tail = (tail + 1U) % ACOMM_CHANNEL_FRAME_COUNT;
             handle->count--;
             io->exit(io->context);
-            if (handle->config.role != AMODBUS_ROLE_SERVER ||
-                handle->frame[0] == 0U ||
-                handle->frame[0] == handle->config.unit_id) {
-                if (!frame_length_valid(handle)) return A_STATUS_ERROR;
+            aStatus_t status = A_STATUS_OK;
+            if (handle->config.frame_check != NULL) {
+                status = handle->config.frame_check(
+                    handle->config.frame_context, handle->frame,
+                    handle->frame_size);
+            }
+            if (status == A_STATUS_OK) {
                 handle->frame_ready = A_TRUE;
                 return A_STATUS_OK;
             }
+            if (status != A_STATUS_NOT_FOUND) return status;
         }
         if (aTimepointExpired(&deadline, aOSGetUptimeMs())) {
             return A_STATUS_TIMEOUT;
@@ -247,9 +221,10 @@ static aStatus_t receive_frame(aModbusRtuHandle_t *handle, aTimeout_t timeout)
     }
 }
 
-aSSize_t aModbusRtuRead(aModbusRtuHandle_t *handle, void *data, size_t size,
-                      aTimeout_t timeout)
+static aSSize_t stream_read(void *context, void *data, size_t size,
+                           aTimeout_t timeout)
 {
+    aCommChannel_t *handle = context;
     aStatus_t status;
     size_t available;
     if (handle == NULL || (size != 0U && data == NULL) ||
@@ -258,6 +233,10 @@ aSSize_t aModbusRtuRead(aModbusRtuHandle_t *handle, void *data, size_t size,
     }
     if (!handle->ready) return aOSFailWithStatus(A_STATUS_NOT_READY);
     if (size == 0U) return 0;
+    if (handle->config.mode == ACOMM_CHANNEL_STREAM) {
+        const aStream_t *stream = &handle->config.stream;
+        return stream->read(stream->context, data, size, timeout);
+    }
     if (!handle->frame_ready) {
         status = receive_frame(handle, timeout);
         if (status == A_STATUS_TIMEOUT) return aOSFailWithTimeout(timeout);
@@ -272,10 +251,11 @@ aSSize_t aModbusRtuRead(aModbusRtuHandle_t *handle, void *data, size_t size,
     return (aSSize_t)size;
 }
 
-aSSize_t aModbusRtuWrite(aModbusRtuHandle_t *handle, const void *data,
-                       size_t size, aTimeout_t timeout)
+static aSSize_t stream_write(void *context, const void *data, size_t size,
+                            aTimeout_t timeout)
 {
-    const aModbusRtuIo_t *io;
+    aCommChannel_t *handle = context;
+    const aCommChannelIo_t *io;
     aSSize_t count;
 
     if (handle == NULL || (size != 0U && data == NULL) ||
@@ -285,10 +265,10 @@ aSSize_t aModbusRtuWrite(aModbusRtuHandle_t *handle, const void *data,
     if (!handle->ready) return aOSFailWithStatus(A_STATUS_NOT_READY);
     if (size == 0U) return 0;
     io = &handle->config.io;
-    count = handle->config.output.write(
-        handle->config.output.context, data, size, timeout);
+    count = handle->config.stream.write(
+        handle->config.stream.context, data, size, timeout);
     if (count == 0) return aOSFailWithStatus(A_STATUS_ERROR);
-    if (count > 0) {
+    if (count > 0 && handle->config.mode == ACOMM_CHANNEL_GAP) {
         handle->tx_pending = A_TRUE;
         handle->last_tx_ticks = io->ticks(io->context);
         handle->last_tx_ms = aOSGetUptimeMs();
@@ -298,9 +278,11 @@ aSSize_t aModbusRtuWrite(aModbusRtuHandle_t *handle, const void *data,
 
 static aStatus_t port_wait(void *context, aTimeout_t timeout)
 {
-    aModbusRtuHandle_t *handle = context;
-    const aModbusRtuIo_t *io = &handle->config.io;
-    aStatus_t status = io->wait_transmit_complete(io->context, timeout);
+    aCommChannel_t *handle = context;
+    const aCommChannelIo_t *io = &handle->config.io;
+    if (!aTimeoutIsValid(timeout)) return A_STATUS_INVALID_PARAM;
+    aStatus_t status = io->wait_transmit_complete != NULL ?
+        io->wait_transmit_complete(io->context, timeout) : A_STATUS_OK;
     if (status == A_STATUS_OK && handle->tx_pending) {
         handle->last_tx_ticks = io->ticks(io->context);
         handle->last_tx_ms = aOSGetUptimeMs();
@@ -311,8 +293,10 @@ static aStatus_t port_wait(void *context, aTimeout_t timeout)
 
 static aStatus_t port_prepare(void *context, aTimeout_t timeout)
 {
-    aModbusRtuHandle_t *handle = context;
-    const aModbusRtuIo_t *io = &handle->config.io;
+    aCommChannel_t *handle = context;
+    const aCommChannelIo_t *io = &handle->config.io;
+    if (!aTimeoutIsValid(timeout)) return A_STATUS_INVALID_PARAM;
+    if (handle->config.mode == ACOMM_CHANNEL_STREAM) return A_STATUS_OK;
     aTimepoint_t deadline = aTimepointCalc(timeout, aOSGetUptimeMs());
     /* 超时后串口可能仍在发送，先等线路完成再检查静默。 */
     aStatus_t status = port_wait(handle, timeout);
@@ -334,8 +318,13 @@ static aStatus_t port_prepare(void *context, aTimeout_t timeout)
 
 static aStatus_t port_discard(void *context, aTimeout_t timeout)
 {
-    aModbusRtuHandle_t *handle = context;
-    const aModbusRtuIo_t *io = &handle->config.io;
+    aCommChannel_t *handle = context;
+    const aCommChannelIo_t *io = &handle->config.io;
+    if (!aTimeoutIsValid(timeout)) return A_STATUS_INVALID_PARAM;
+    if (handle->config.mode == ACOMM_CHANNEL_STREAM) {
+        return io->discard_input != NULL ?
+            io->discard_input(io->context, timeout) : A_STATUS_UNSUPPORTED;
+    }
     aTimepoint_t deadline = aTimepointCalc(timeout, aOSGetUptimeMs());
     port_finish(handle);
     for (;;) {
@@ -357,39 +346,31 @@ static aStatus_t port_discard(void *context, aTimeout_t timeout)
     }
 }
 
-static aSSize_t stream_read(void *context, void *data, size_t size,
-                           aTimeout_t timeout)
-{
-    return aModbusRtuRead(context, data, size, timeout);
-}
-
-static aSSize_t stream_write(void *context, const void *data, size_t size,
-                            aTimeout_t timeout)
-{
-    return aModbusRtuWrite(context, data, size, timeout);
-}
-
 static aStatus_t stream_flush(void *context, aTimeout_t timeout)
 {
-    const aModbusRtuHandle_t *handle = context;
-    const aStream_t *output = &handle->config.output;
+    const aCommChannel_t *handle = context;
+    const aStream_t *output = &handle->config.stream;
     return output->flush(output->context, timeout);
 }
 
-aStatus_t aModbusRtuBindTransport(aModbusRtuHandle_t *handle,
-                               aModbusTransport_t *transport)
+aStatus_t aCommChannelBindTransport(aCommChannel_t *handle,
+    aCommTransport_t *transport)
 {
     if (handle == NULL || transport == NULL) return A_STATUS_INVALID_PARAM;
     if (!handle->ready) return A_STATUS_NOT_READY;
+    const aBool_t framed = handle->config.mode == ACOMM_CHANNEL_GAP;
     transport->stream.context = handle;
     transport->stream.read = stream_read;
     transport->stream.write = stream_write;
-    transport->stream.flush = handle->config.output.flush != NULL ?
+    transport->stream.flush = handle->config.stream.flush != NULL ?
                               stream_flush : NULL;
     transport->context = handle;
-    transport->discard_input = port_discard;
-    transport->prepare_frame = port_prepare;
-    transport->wait_transmit_complete = port_wait;
-    transport->finish = port_finish;
+    /* 缺少能力用 NULL 表示，不能让流协议误执行输入清理或帧间等待。 */
+    transport->discard_input = framed ||
+        handle->config.io.discard_input != NULL ? port_discard : NULL;
+    transport->prepare_frame = framed ? port_prepare : NULL;
+    transport->wait_transmit_complete =
+        handle->config.io.wait_transmit_complete != NULL ? port_wait : NULL;
+    transport->finish = framed ? port_finish : NULL;
     return A_STATUS_OK;
 }

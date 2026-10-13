@@ -211,7 +211,7 @@ buffer 所有权、队列 FIFO、取消和错误语义。当前已实现，详�
 
 ### 6. aModbus 模块名与当前功能范围
 
-现状：[`func/aModbus/aModbus.c`](func/aModbus/aModbus.c) 当前提供 CRC16 计算和 RTU 帧 CRC 校验，没有实现 RTU 收发、主从状态机或完整协议栈。
+现状：[`func/aModbus/src/aModbus.c`](func/aModbus/src/aModbus.c) 当前提供 CRC16 计算和 RTU 帧 CRC 校验，没有实现 RTU 收发、主从状态机或完整协议栈。
 
 影响：模块名容易被理解为完整 Modbus 功能，但实际是基础帧工具。若当前范围有意保持精简，这不一定是代码缺陷，主要是模块定位与命名/说明需要一致。
 

@@ -31,14 +31,15 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |
 | DMA 地址/对齐检查、IRQ/查询交错与 USART DMA 适配 | `python3 tests/dma/run.py` |
 | USART、RX 缓冲丢弃、RS485、FIFO 与 IRQ | `python3 tests/usart/run.py` |
+| aBus 通知、范围多播、并发完成与静态状态 | `python3 tests/bus_events/run.py` |
 | aBus 定义、绑定、锁与分配 | `python3 tests/bus/run.py` |
 | SIG 应用与 Shell 类型解析 | `python3 tests/bus/test_app_sig.py`、`python3 tests/bus/test_shell_types.py` |
 | aMemory 注册、分区与访问 | `python3 tests/memory/run.py` |
 | Flash25Q / 真实 SFUD 核心 | `python3 tests/flash25q/run.py` |
 | Flash 测试命令 | `python3 tests/flash25q/test_command.py` |
 | 数据库与完整 Flash 适配链 | `python3 tests/database/run.py`、`python3 tests/database/test_flash_chain.py` |
-| Modbus 协议、aBus 映射与通用 RTU 多实例/时序 | `python3 tests/modbus/run.py` |
-| aPoll 周期作业、事件与临时请求 | `python3 tests/poll/run.py` |
+| Modbus 协议、aBus 映射与RTU 规则注册、多实例/时序 | `python3 tests/modbus/run.py` |
+| aComm 调度、事件、请求与通用通道 | `python3 tests/comm/run.py` |
 | 协议统一入口、启动顺序与功能关闭 | `python3 tests/protocol_tasks/run.py` |
 | Modbus 板级端口、主从、任务调度与生命周期 | `python3 tests/modbus_demo/run.py` |
 | Shell EOF/半行清理、日志、共享控制台发送互斥及部分写入 | `python3 tests/shell/run.py`、`python3 tests/log/run.py` |
@@ -153,22 +154,27 @@ IDU/FAN 各 50 项。主机测试模拟介质与串口，不替代板上的串�
 [产品协议说明](../app/protocol/README.md)。
 
 
-## aPoll 与预生成采集计划
+## aComm 与预生成采集计划
 
 ```bash
-python3 tests/poll/run.py
+python3 tests/comm/run.py
 python3 tests/modbus/run.py
 python3 tests/modbus_demo/run.py
 python3 tests/modbus/build_matrix.py
 ```
 
-aPoll 验证静动态分配、周期回绕、错误推进、通知先于等待、回调期间重投、
+aComm 验证静动态分配、周期回绕、有限重试、忙不消耗次数、状态重置、
+通知先于等待、回调期间重投、
 超过 32 个事件、多生产者合并、队列满及三类工作公平性。
 Modbus 验证预生成 RTU 帧和 TCP 分组、四种读取区域、CRC/异常/超时、
 发布 BUSY 与入口 BUSY 的推进区别，以及计划与即时请求交替执行。
 RTU 分帧覆盖即时输入、带采集时间的延迟/分块/多帧批量交付、帧内超时、
 采集错误、帧间静默、多实例，以及采集计数器和毫秒时基的 32 位回绕。
 Demo 验证主从、六帧采集、事件提前唤醒、临时请求和资源失败清理。
+构建矩阵检查纯协议栈不依赖 aBus/aComm，aComm 全模块不依赖协议栈或总线，
+并验证 aComm 与 aModbus 独立选择静态/动态内存的组合。
+通道独立测试不链接任何协议，覆盖任意一字节帧、过滤、容量和队列溢出，
+以及 STREAM 部分读写、flush、EOF。
 构建通过不代表板上时序已验证；主站可通过 `protocol refresh` 检查事件触发。
 
 字节流回归同时验证 read/write/flush 的实例上下文，RTU 同一组回调服务两个

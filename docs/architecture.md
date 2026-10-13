@@ -21,7 +21,7 @@
 
 ```text
 app：资源配置、初始化、任务、传输/介质适配
- ├─ func：aBus、aMemory、aDataBase、aModbus、aPoll、aShell、aLog
+ ├─ func：aBus、aMemory、aDataBase、aModbus、aComm、aShell、aLog
  ├─ device：aDevUsart、Flash25Q、LED
  │    ├─ aDrv -> 私有 GD32 vendor -> aCore
  │    └─ aOS -> FreeRTOS -> aCore
@@ -135,26 +135,23 @@ FlashDB 的项目适配直接调用 aMemory，并提供 KV 索引扩展；本地
 差异另在模块 patches 中记录。当前不使用 FAL；
 应用设备层提供具体介质回调，数据库不设置 backend 目录。
 
-采集/转发类通信协议默认依赖 aBus，业务类型、长度和范围规则由 aBus 持有。
-aBus_table.h 单独提供只读定义，CMake 的 aBusTable 目标仅依赖 aLib。
-aDataBase 借用该契约，无需启用 aBus 的 RAM 实例、锁或分配接口；
-aModbus 需要读写运行值，因此仍依赖完整 aBus。
-aModbus 在模块内部提供地址段、SIG 映射及编码转换，不设置独立 backend 目录。
-主站采集项和从站离散映射显式声明协议 quantity，模块校验其与 aBus 目标匹配；
-协议数量使用寄存器或位为单位，本地业务长度仍以字节表达。
-协议实例借用 aBus 和传输，应用管理任务、设备、采样周期与重连策略；
-主站从远端采集后发布 aBus，从站根据地址映射读写 aBus。
-详见 [aModbus](../func/aModbus/README.md)。
+aBus 持有业务类型、长度和范围；aBus_table.h 单独提供只读定义，aBusTable
+目标仅依赖 aLib。aDataBase 借用该契约，不要求创建 aBus 的 RAM 实例。
+aModbus 收紧为纯协议栈，只认识协议地址、缓冲区、传输和同步地址回调。
+aComm 的通用映射持有业务映射、快照、计划和订阅，通过公开 API
+调用端点回调。具体 aModbus/aBus 端点由应用创建并注册，通用映射不引用协议模块。
+协议 quantity 表示寄存器数或位数，本地业务长度以字节表达；映射数量、
+权限和数量匹配由 aComm 映射校验，协议编码及布局规则由协议端点提供。详见 [映射适配](../func/aComm/README.md)。
 
 当前板级[产品协议](../app/protocol/README.md)使用 USART2 和 PA15 手动 DE，
-默认 RTU 从站 1，可通过应用宏切换为主站。应用协议配置位于
+当前配置为 RTU 主站，目标站号 1，可通过应用宏切换主从。应用协议配置位于
 app/protocol 根目录，测点清单位于 sig/IDU_test.inc 和 sig/FAN_test.inc，
 由 X-Macro 生成索引、固定 Key 常量和只读描述，点表无需跨文件 extern。
 STRUCT 字段同样生成名称和描述；主从配置文件直接定义从站离散映射、
 地址段与主站采集数组。字段映射引用字段枚举；整组映射用 WHOLE 引用 SIG，
 要求参数按内存偏移连续覆盖全部结构体，字段长度为偶数，地址为起点加 offset/2。
-整组布局由应用显式维护，修改字段偏移会改变协议地址；编解码与访问校验由
-aModbus 承担。默认路径按 SIG 取快照/更新，自定义部分写按完整字段回调。
+整组布局由应用显式维护，修改字段偏移会改变协议地址；编解码与布局校验由
+Modbus 端点承担，aComm 负责地址路由和数据端点读写。默认路径按 SIG 取快照/更新，自定义部分写按完整字段回调。
 从站回调段 ranges 与离散映射 maps 在配置中平级，未命中回调段才查映射。
 两表分别有序且完整地址范围互不重叠；回调失败直接返回，不触发兜底访问。
 SIG 的多用途定义保留 X-Macro，协议数组使用普通 C 初始化，不再单独维护映射清单。
@@ -164,11 +161,14 @@ protocol.c 按链路配置任务资源，初始化协议并创建任务；主从
 只读采集项、地址映射、地址段业务回调及通信策略，不携带任务栈容量或优先级。
 protocol_tables.c 提供数据定义、可选字段长度检查、RAM 存储计划和持久化选择，不包含
 FlashDB 私有索引布局或 aMemory 分区尺寸。
-func/aModbus 通过 aStream 收发，通用 RTU 实例负责分帧、时序与事务收尾；
+func/aModbus 通过注入的流回调收发，aComm 通道负责缓冲、分帧与静默等待；
 app/devices/rs485/rs485_device.c 只持有串口，提供 ISR、DWT 和线路完成操作，
-不依赖 aModbus。app/protocol/protocol.c 统一持有协议和 RTU 实例，
+不依赖 aModbus。app/protocol/protocol.c 统一持有协议、映射映射实例和 aComm 通道实例，
 根据主从配置装配资源并创建通信任务，不设置通用任务注册框架。
-通用 RTU 通过回调使用时基、同步及收发，不依赖设备或具体芯片。
+aComm 通道通过回调使用时基、同步及收发，不依赖具体协议、设备或芯片。
+应用提供最终微秒时间，aComm 初始化时转换为计数，运行期执行间隔判断和等待；
+aModbus 只提供可选默认值，不接触硬件计数频率。
+RTU 帧长度和站号检查由 aModbus 提供回调，在应用装配时注册到通道。
 aModbus 库不引入 aDevUsart 和 aDrv 依赖，RTU/TCP 均由应用选择端口。
 protocol 通过初始化参数借用 system 的私有 aBus handle，不向业务公开全局 handle。
 当前 IDU、FAN 各有 50 个 TEST，均覆盖六种数据类型。协议按 SIG 获取快照或
@@ -264,9 +264,14 @@ Python/XML 生成校验尚未实现。平台迁移及尚未完成的硬件验收
 
 ## 通信调度边界
 
-aPoll 管周期作业、合并事件、临时请求和等待通知；aModbus 管地址分组、
-固定 RTU 帧缓存、事务收发与 aBus 发布，两个模块互不依赖。
+aComm 通用调度管理周期作业、有限重试、合并事件、临时请求和等待通知。
+aComm 映射管理地址分组、计划、业务转换与 aBus 交换。
+aModbus 核心管固定请求编码、响应解析、协议校验并提供 RTU 默认微秒值。
+可选端点实现 aComm 契约；核心仍可独立使用，不依赖 aBus。
+aComm 整个模块只依赖 aOS/aLib，通道模式为 STREAM/GAP，不设置具体协议枚举。
+通用调度和映射不引用具体协议，通过公共端点函数表调用具体实现。
 app/protocol 组合配置、适配回调并创建通信任务；system 在总线初始化及
 参数恢复之后调用 protocolInit。一个串口的所有主站请求由同一任务串行执行。
-从站继续运行 ServerProcess，不强制包装为周期作业。
-详细契约见 [aPoll](../func/aPoll/README.md) 和 [产品协议](../app/protocol/README.md)。
+本 Demo 从站注册连续作业回调调用 ServerProcess，主从任务复用 Process/Wait。
+纯 aModbus 仍可由应用直接调用，不要求创建 aComm。
+详细契约见 [aComm](../func/aComm/README.md) 和 [产品协议](../app/protocol/README.md)。

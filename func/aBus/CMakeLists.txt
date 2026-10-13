@@ -24,8 +24,9 @@ endforeach()
 if(NOT ABUS_STATIC_ENABLE AND NOT ABUS_DYNAMIC_ENABLE)
     message(FATAL_ERROR "aBus requires STATIC or DYNAMIC allocation enabled")
 endif()
-add_library(aBus STATIC src/aBus.c)
+add_library(aBus STATIC src/aBus.c src/aBus_event.c)
 target_compile_definitions(aBus PUBLIC
+    ABUS_EVENT_ENABLE=$<BOOL:${ABUS_EVENT_ENABLE}>
     ABUS_STATIC_ENABLE=$<BOOL:${ABUS_STATIC_ENABLE}>
     ABUS_DYNAMIC_ENABLE=$<BOOL:${ABUS_DYNAMIC_ENABLE}>
 )
@@ -45,4 +46,10 @@ elseif(ABUS_LOCK_GRANULARITY STREQUAL "SIG")
     target_compile_definitions(aBus PUBLIC ABUS_LOCK_MODE=2)
 else()
     target_compile_definitions(aBus PUBLIC ABUS_LOCK_MODE=1)
+endif()
+
+if(ACOMM_ENABLE)
+    target_sources(aBus PRIVATE src/aBus_endpoint.c)
+    target_include_directories(aBus PUBLIC
+        "${CMAKE_CURRENT_SOURCE_DIR}/../aComm/include")
 endif()

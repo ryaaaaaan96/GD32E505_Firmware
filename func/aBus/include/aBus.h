@@ -7,6 +7,7 @@
 #define ABUS_H
 
 #include "aBus_table.h"
+#include "aBus_event.h"
 
 #define ABUS_LOCK_NONE 0
 #define ABUS_LOCK_BUS 1

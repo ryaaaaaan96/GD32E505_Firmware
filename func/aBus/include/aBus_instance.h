@@ -10,7 +10,17 @@
 #include "aOS.h"
 #endif
 
+#if ABUS_EVENT_ENABLE
 typedef struct {
+    aBusSubscriber_t *subscribers;
+} aBusParamState_t;
+#endif
+
+typedef struct {
+#if ABUS_EVENT_ENABLE
+    aBusSubscriber_t *subscribers;
+    aBusParamState_t *params;
+#endif
     void *data; /**< 完整快照，只通过 Set/Get 访问。 */
 #if ABUS_LOCK_MODE == ABUS_LOCK_SIG
     aOSMutex_t mutex;
@@ -23,6 +33,13 @@ struct aBusHandle {
     size_t table_count;
     size_t sig_count; /**< 全部表的 SIG 总数。 */
     aBusSigState_t *sigs;
+#if ABUS_EVENT_ENABLE
+    aBusParamState_t *params;
+    size_t param_capacity;
+    size_t subscriber_count;
+    aAtomicUint_t event_users;
+    aAtomicBool_t notification_failed;
+#endif
 #if ABUS_STATIC_ENABLE
     size_t capacity; /**< 全部表的静态条目数组容量，仅初始化时使用。 */
 #endif
@@ -40,6 +57,7 @@ struct aBusHandle {
 #if ABUS_STATIC_ENABLE
 /** @brief 初始化未运行实例；capacity 是 SIG 状态数组容量。
  * 数据地址由 ABUS_RAM_BIND_EXPORT 收集，不需要应用提供总数据池。
+ * 事件开启且存在 Param 时，随后设置 params/param_capacity，容量为字段总数。
  */
 static inline void aBusInstanceStructInit(aBusHandle_t *handle,
                                          aBusSigState_t *sigs,

@@ -88,7 +88,27 @@ ABUS_RAM_BIND_EXPORT(test_binding,
 
 /* 容量随产品点表变化，静态存储留在这里；初始化和句柄生命周期由 system 管理。 */
 static aBusSigState_t bus_states[IDU_SIG_COUNT + FAN_SIG_COUNT];
+#if ABUS_EVENT_ENABLE
+/* 从同一字段清单计算状态容量，静态模式不依赖堆。 */
+enum { BUS_PARAM_COUNT = 0
+#define ABUS_BOUND_SIG(...)
+#define ABUS_SIG(...)
+#define ABUS_PARAM(name, ...) + 1
+#define ABUS_PARAMS(group, ...) __VA_ARGS__
+#include "sig/IDU_test.inc"
+#include "sig/FAN_test.inc"
+#undef ABUS_PARAMS
+#undef ABUS_PARAM
+#undef ABUS_SIG
+#undef ABUS_BOUND_SIG
+};
+static aBusParamState_t bus_params[BUS_PARAM_COUNT];
+#endif
 static aBusHandle_t bus_instance = {
+#if ABUS_EVENT_ENABLE
+    .params = bus_params,
+    .param_capacity = BUS_PARAM_COUNT,
+#endif
     .sigs = bus_states,
     .capacity = IDU_SIG_COUNT + FAN_SIG_COUNT
 };

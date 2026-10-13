@@ -16,7 +16,7 @@ int test_command(int argc, char **argv) { return fn(argc, argv); }
 ''')
     executable = str(tmp / "shell-types")
     command = [
-        "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+        "cc", "-std=c11", "-DABUS_EVENT_ENABLE=0", "-Wall", "-Wextra", "-Werror",
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
         "-DABUS_ENABLE=1", "-Iapp", "-Iapp/protocol/inc", "-Iapp/task/test",
         "-Iapp/devices/system", "-Idevice/aDev_LED", "-Iplatform/aDrv/include",

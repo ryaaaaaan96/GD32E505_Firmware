@@ -6,7 +6,7 @@
 #define ABUS_TABLE_H
 
 #include "aLib.h"
-#include "aDataType.h"
+#include "aDataLayout.h"
 
 /** @brief 只控制读写时使用锁；不影响创建，NONE 模式忽略。 */
 #define ABUS_SIG_FLAG_LOCK (1U << 0)
@@ -25,18 +25,10 @@ static inline const char *aBusSigFlagName(uint16_t flag)
 }
 
 /** @brief 可选整数范围；联合体成员由所属 SIG/Param 的 type 决定。 */
-typedef struct {
-    aDataValue_t min;
-    aDataValue_t max;
-} aBusRange_t;
+typedef aDataRange_t aBusRange_t;
 
 /** @brief STRUCT 字段描述；允许未登记字段，不支持嵌套 STRUCT。 */
-typedef struct {
-    size_t offset; /**< 相对 SIG 起点，建议使用 offsetof。 */
-    size_t size; /**< 必须大于零；标量须与类型大小一致。 */
-    aDataType_t type;
-    const aBusRange_t *range; /**< NULL 不限范围；RAW 必须为 NULL。 */
-} aBusParam_t;
+typedef aDataField_t aBusParam_t;
 
 /** @brief 只读 SIG 定义；每组当前值是一段完整的 RAM 快照。 */
 typedef struct {

@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-bus-") as directory:
         executable = str(Path(directory) / f"bus-{mode}-{checks}-{ndebug}-{static}-{dynamic}")
         obj = executable + ".o"
         flags = [
-            "cc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Wpedantic",
+            "cc", "-std=c11", "-DABUS_EVENT_ENABLE=0", "-O2", "-Wall", "-Wextra", "-Wpedantic",
             "-Werror", "-pthread", "-ffunction-sections", "-fdata-sections", f"-DABUS_LOCK_MODE={mode}",
             f"-DABUS_DEF_CHECK_ENABLE={checks}",
             f"-DABUS_TEST_NDEBUG={ndebug}",
@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-bus-") as directory:
 with tempfile.TemporaryDirectory(prefix="aclass-bus-empty-") as directory:
     executable = str(Path(directory) / "empty")
     command = [
-        "cc", "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+        "cc", "-std=c11", "-DABUS_EVENT_ENABLE=0", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
         "-DABUS_LOCK_MODE=0", "-DABUS_STATIC_ENABLE=0",
         "-DABUS_DYNAMIC_ENABLE=1", "-Ifunc/aBus/include",
         "-Iplatform/aOS/public", "-Iplatform/aLib/include",

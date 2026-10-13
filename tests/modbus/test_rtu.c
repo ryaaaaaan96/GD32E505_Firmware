@@ -1,5 +1,6 @@
 /* 不链接 aDrv/aDev，验证通用分帧、多实例、低波特率及生命周期。 */
-#include "aModbus_rtu_instance.h"
+#include "aComm_channel_instance.h"
+#include "aModbus.h"
 #include "aOS.h"
 #include <assert.h>
 #include <pthread.h>
@@ -13,6 +14,7 @@ void testFailAllocation(aBool_t fail);
 static uint64_t now_us;
 typedef struct {
     pthread_mutex_t mutex;
+    aModbusRtuFilter_t filter;
     unsigned clears, writes, waits, flushes;
 } link_t;
 
@@ -66,27 +68,47 @@ static void clear_error(void *context)
     link_t *link = context;
     link->clears++;
 }
-static aModbusRtuConfig_t configuration(link_t *link)
+static aStatus_t configure_timing(aCommChannelConfig_t *config,
+    uint32_t baud, uint8_t bits)
 {
-    aModbusRtuConfig_t config;
-    aModbusRtuConfigStructInit(&config);
+    aModbusRtuTiming_t timing;
+    aStatus_t status = aModbusRtuTimingDefaults(baud, bits, &timing);
+    if (status == A_STATUS_OK) {
+        config->timing = (aCommTiming_t){
+            .character_us = timing.character_us,
+            .byte_gap_us = timing.byte_gap_us,
+            .frame_gap_us = timing.frame_gap_us
+        };
+    }
+    return status;
+}
+
+static aCommChannelConfig_t configuration(link_t *link)
+{
+    aCommChannelConfig_t config;
+    aCommChannelConfigStructInit(&config);
+    config.mode = ACOMM_CHANNEL_GAP;
+    link->filter = (aModbusRtuFilter_t){AMODBUS_ROLE_SERVER, 1U};
+    config.frame_check = aModbusRtuFrameCheck;
+    config.frame_context = &link->filter;
     config.io.context = link;
     config.io.ticks_per_second = 1000000U;
     config.io.ticks = ticks;
     config.io.enter = enter;
     config.io.exit = leave;
-    config.output.context = link;
-    config.output.write = write_bytes;
+    config.stream.context = link;
+    config.stream.write = write_bytes;
     config.io.wait_transmit_complete = wait_transmit;
     config.io.clear_error = clear_error;
+    assert(configure_timing(&config, 115200U, 10U) == A_STATUS_OK);
     return config;
 }
-static void feed(aModbusRtuHandle_t *handle, const uint8_t *data, size_t size)
+static void feed(aCommChannel_t *handle, const uint8_t *data, size_t size)
 {
-    const aModbusRtuIo_t *io = &handle->config.io;
+    const aCommChannelIo_t *io = &handle->config.io;
     io->enter(io->context);
     for (size_t i = 0U; i < size; i++) {
-        aModbusRtuReceive(handle, data[i], A_STATUS_OK);
+        aCommChannelReceive(handle, data[i], A_STATUS_OK);
     }
     io->exit(io->context);
 }
@@ -95,21 +117,21 @@ static void multi_instance(void)
 {
     link_t first = {.mutex = PTHREAD_MUTEX_INITIALIZER};
     link_t second = {.mutex = PTHREAD_MUTEX_INITIALIZER};
-    aModbusRtuConfig_t config = configuration(&first);
-    aModbusRtuHandle_t storage, *other;
-    aModbusTransport_t one, two;
+    aCommChannelConfig_t config = configuration(&first);
+    aCommChannel_t storage, *other;
+    aCommTransport_t one, two;
     uint8_t data[20];
     const uint8_t request[] = {1, 3, 0, 0, 0, 1, 0, 0};
     const uint8_t response[] = {2, 3, 2, 0, 9, 0, 0};
     unsigned baseline = testAllocations();
 
-    config.output.flush = flush_bytes;
-    assert(aModbusRtuInitStatic(&config, &storage) == A_STATUS_OK);
+    config.stream.flush = flush_bytes;
+    assert(aCommChannelInitStatic(&config, &storage) == A_STATUS_OK);
     config = configuration(&second);
-    config.role = AMODBUS_ROLE_CLIENT;
-    assert(aModbusRtuCreate(&config, &other) == A_STATUS_OK);
-    assert(aModbusRtuBindTransport(&storage, &one) == A_STATUS_OK);
-    assert(aModbusRtuBindTransport(other, &two) == A_STATUS_OK);
+    second.filter.role = AMODBUS_ROLE_CLIENT;
+    assert(aCommChannelCreate(&config, &other) == A_STATUS_OK);
+    assert(aCommChannelBindTransport(&storage, &one) == A_STATUS_OK);
+    assert(aCommChannelBindTransport(other, &two) == A_STATUS_OK);
     assert(one.context != two.context && one.finish != NULL);
     assert(one.stream.context == &storage && two.stream.context == other);
     assert(one.stream.read == two.stream.read);
@@ -165,11 +187,11 @@ static void multi_instance(void)
                             A_TIMEOUT_MS(5U)) == 8);
     assert(first.writes == 1U && second.writes == 1U);
     assert(testAllocations() == baseline + 1U);
-    assert(aModbusRtuDestroy(&storage) == A_STATUS_INVALID_PARAM);
-    assert(aModbusRtuDeInitStatic(other) == A_STATUS_INVALID_PARAM);
-    assert(aModbusRtuDeInitStatic(&storage) == A_STATUS_OK);
-    assert(aModbusRtuBindTransport(&storage, &one) == A_STATUS_NOT_READY);
-    assert(aModbusRtuDestroy(other) == A_STATUS_OK);
+    assert(aCommChannelDestroy(&storage) == A_STATUS_INVALID_PARAM);
+    assert(aCommChannelDeInitStatic(other) == A_STATUS_INVALID_PARAM);
+    assert(aCommChannelDeInitStatic(&storage) == A_STATUS_OK);
+    assert(aCommChannelBindTransport(&storage, &one) == A_STATUS_NOT_READY);
+    assert(aCommChannelDestroy(other) == A_STATUS_OK);
     assert(testAllocations() == baseline);
     assert(pthread_mutex_destroy(&first.mutex) == 0);
     assert(pthread_mutex_destroy(&second.mutex) == 0);
@@ -179,16 +201,15 @@ static void timing(uint32_t baud, uint8_t bits, uint32_t gap,
                    uint32_t quiet)
 {
     link_t link = {.mutex = PTHREAD_MUTEX_INITIALIZER};
-    aModbusRtuConfig_t config = configuration(&link);
-    aModbusRtuHandle_t handle;
-    aModbusTransport_t transport;
+    aCommChannelConfig_t config = configuration(&link);
+    aCommChannel_t handle;
+    aCommTransport_t transport;
     uint8_t data[8];
     const uint8_t request[] = {7, 3, 0, 0, 0, 1, 0, 0};
-    config.baud_rate = baud;
-    config.character_bits = bits;
-    config.unit_id = 7U;
-    assert(aModbusRtuInitStatic(&config, &handle) == A_STATUS_OK);
-    assert(aModbusRtuBindTransport(&handle, &transport) == A_STATUS_OK);
+    assert(configure_timing(&config, baud, bits) == A_STATUS_OK);
+    link.filter.unit_id = 7U;
+    assert(aCommChannelInitStatic(&config, &handle) == A_STATUS_OK);
+    assert(aCommChannelBindTransport(&handle, &transport) == A_STATUS_OK);
     advance(quiet);
     feed(&handle, request, 4U);
     advance(gap);
@@ -206,41 +227,42 @@ static void timing(uint32_t baud, uint8_t bits, uint32_t gap,
     assert(transport.stream.read(transport.stream.context, data, sizeof(data),
                           A_TIMEOUT_MS(1U)) == -1);
     assert(handle.dropped_frames == 1U);
-    assert(aModbusRtuDeInitStatic(&handle) == A_STATUS_OK);
+    assert(aCommChannelDeInitStatic(&handle) == A_STATUS_OK);
     assert(pthread_mutex_destroy(&link.mutex) == 0);
 }
 
 static void failures(void)
 {
     link_t link = {.mutex = PTHREAD_MUTEX_INITIALIZER};
-    aModbusRtuConfig_t config = configuration(&link);
-    aModbusRtuHandle_t handle, *created = (void *)1;
-    assert(aModbusRtuCreate(NULL, &created) == A_STATUS_INVALID_PARAM);
+    aCommChannelConfig_t config = configuration(&link);
+    aCommChannel_t handle, *created = (void *)1;
+    assert(aCommChannelCreate(NULL, &created) == A_STATUS_INVALID_PARAM);
     assert(created == NULL);
-    config.baud_rate = 0U;
-    assert(aModbusRtuInitStatic(&config, &handle) == A_STATUS_INVALID_PARAM);
+    config.timing.frame_gap_us = 0U;
+    assert(aCommChannelInitStatic(&config, &handle) == A_STATUS_INVALID_PARAM);
     config = configuration(&link);
     config.io.ticks = NULL;
-    assert(aModbusRtuInitStatic(&config, &handle) == A_STATUS_INVALID_PARAM);
+    assert(aCommChannelInitStatic(&config, &handle) == A_STATUS_INVALID_PARAM);
     config = configuration(&link);
-    config.baud_rate = 1U;
     config.io.ticks_per_second = UINT32_MAX;
-    assert(aModbusRtuInitStatic(&config, &handle) == A_STATUS_UNSUPPORTED);
+    assert(configure_timing(&config, 1U, 10U) == A_STATUS_OK);
+    assert(aCommChannelInitStatic(&config, &handle) == A_STATUS_UNSUPPORTED);
+    assert(configure_timing(&config, 0U, 10U) == A_STATUS_INVALID_PARAM);
     config = configuration(&link);
     testFailAllocation(A_TRUE);
-    assert(aModbusRtuCreate(&config, &created) == A_STATUS_NO_MEMORY);
+    assert(aCommChannelCreate(&config, &created) == A_STATUS_NO_MEMORY);
     assert(created == NULL);
     testFailAllocation(A_FALSE);
     assert(pthread_mutex_destroy(&link.mutex) == 0);
 }
 
 /* 调用者持有生产者保护；时间代表采集记录，不推进交付时钟。 */
-static void feed_at(aModbusRtuHandle_t *handle, const uint8_t *data,
+static void feed_at(aCommChannel_t *handle, const uint8_t *data,
                     size_t size, uint64_t first_us)
 {
     for (size_t i = 0U; i < size; i++) {
         uint64_t captured = first_us + i * 100U;
-        aModbusRtuReceiveAt(handle, data[i], A_STATUS_OK,
+        aCommChannelReceiveAt(handle, data[i], A_STATUS_OK,
                            (uint32_t)captured,
                            (uint32_t)(captured / 1000U));
     }
@@ -249,9 +271,9 @@ static void feed_at(aModbusRtuHandle_t *handle, const uint8_t *data,
 static void captured_timing(uint64_t start_us)
 {
     link_t link = {.mutex = PTHREAD_MUTEX_INITIALIZER};
-    aModbusRtuConfig_t config = configuration(&link);
-    aModbusRtuHandle_t handle;
-    aModbusTransport_t transport;
+    aCommChannelConfig_t config = configuration(&link);
+    aCommChannel_t handle;
+    aCommTransport_t transport;
     const uint8_t request[] = {1, 3, 0, 0, 0, 1, 0, 0};
     const uint8_t next[] = {1, 3, 0, 1, 0, 1, 0, 0};
     uint8_t data[8];
@@ -260,8 +282,8 @@ static void captured_timing(uint64_t start_us)
 
     now_us = start_us;
     advance(0U);
-    assert(aModbusRtuInitStatic(&config, &handle) == A_STATUS_OK);
-    assert(aModbusRtuBindTransport(&handle, &transport) == A_STATUS_OK);
+    assert(aCommChannelInitStatic(&config, &handle) == A_STATUS_OK);
+    assert(aCommChannelBindTransport(&handle, &transport) == A_STATUS_OK);
     quiet = handle.frame_gap + handle.character_ticks;
 
     /* 同帧分块补送时交付间隔很大；同批内两帧靠采集时间区分。 */
@@ -298,7 +320,7 @@ static void captured_timing(uint64_t start_us)
         middle = first + 300U + handle.byte_gap + handle.character_ticks;
         if (error != 0U) {
             middle = first + 400U;
-            aModbusRtuReceiveAt(&handle, 0U, A_STATUS_ERROR,
+            aCommChannelReceiveAt(&handle, 0U, A_STATUS_ERROR,
                                (uint32_t)middle,
                                (uint32_t)(middle / 1000U));
         }
@@ -331,12 +353,46 @@ static void captured_timing(uint64_t start_us)
             transport.stream.context, data, sizeof(data),
             A_TIMEOUT_NO_WAIT) == 8);
     assert(memcmp(data, request, sizeof(data)) == 0);
-    assert(aModbusRtuDeInitStatic(&handle) == A_STATUS_OK);
+    assert(aCommChannelDeInitStatic(&handle) == A_STATUS_OK);
     assert(pthread_mutex_destroy(&link.mutex) == 0);
+}
+
+static void timing_defaults(void)
+{
+    static const struct {
+        uint32_t baud;
+        uint8_t bits;
+        uint32_t character_us, byte_gap_us, frame_gap_us;
+    } cases[] = {
+        {115200U, 10U, 87U, 750U, 1750U},
+        {19201U, 11U, 573U, 750U, 1750U},
+        {19200U, 11U, 573U, 860U, 2006U},
+        {9600U, 11U, 1146U, 1719U, 4011U},
+        {1200U, 10U, 8334U, 12500U, 29167U},
+        {1U, 16U, 16000000U, 24000000U, 56000000U},
+        {UINT32_MAX, 7U, 1U, 750U, 1750U},
+    };
+    aModbusRtuTiming_t timing;
+    for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        assert(aModbusRtuTimingDefaults(cases[i].baud, cases[i].bits,
+            &timing) == A_STATUS_OK);
+        assert(timing.character_us == cases[i].character_us);
+        assert(timing.byte_gap_us == cases[i].byte_gap_us);
+        assert(timing.frame_gap_us == cases[i].frame_gap_us);
+    }
+    assert(aModbusRtuTimingDefaults(0U, 10U, &timing) ==
+           A_STATUS_INVALID_PARAM);
+    assert(aModbusRtuTimingDefaults(115200U, 6U, &timing) ==
+           A_STATUS_INVALID_PARAM);
+    assert(aModbusRtuTimingDefaults(115200U, 17U, &timing) ==
+           A_STATUS_INVALID_PARAM);
+    assert(aModbusRtuTimingDefaults(115200U, 10U, NULL) ==
+           A_STATUS_INVALID_PARAM);
 }
 
 int main(void)
 {
+    timing_defaults();
     failures();
     multi_instance();
     timing(9600U, 11U, 2500U, 6000U);
@@ -348,6 +404,6 @@ int main(void)
     captured_timing((uint64_t)UINT32_MAX - 3400U);
     captured_timing((uint64_t)UINT32_MAX * 1000U - 3400U);
     assert(testAllocations() == 0U);
-    puts("Generic RTU multi-instance/captured timing/wrap/lifecycle passed");
+    puts("Registered RTU multi-instance/captured timing/wrap/lifecycle passed");
     return 0;
 }

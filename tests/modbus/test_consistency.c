@@ -2,7 +2,15 @@
 #define main original_modbus_main
 #include "test_modbus.c"
 #undef main
-#include "aModbus_internal.h"
+
+static fixtureEndpoints_t preflight;
+static aCommMappingConfig_t preflightConnection(const fixtureConfig_t *config)
+{
+    aModbusEndpointInit(&preflight.protocol, NULL);
+    assert(aBusEndpointInit(&preflight.data, config->bus) == A_STATUS_OK);
+    return fixtureConnection(config, &preflight);
+}
+#include "aComm_mapping_internal.h"
 
 static aBool_t inject_update;
 static unsigned unlocks;
@@ -26,11 +34,11 @@ aStatus_t __wrap_aOSMutexUnlock(aOSMutex_t mutex)
 /* 模拟远端值与本地副本不同，确认合并帧解码后只提交一次 Motor。 */
 static motor_t remote_motor = {4500U, 45};
 static aStatus_t remote_read(void *context,
-    const aModbusSigReadRequest_t *request)
+    const aCommMappingSigReadRequest_t *request)
 {
     (void)context;
     assert(request->target.sigIndex == MOTOR);
-    if (request->target.paramIndex == AMODBUS_SIG_WHOLE) {
+    if (request->target.paramIndex == ACOMM_MAP_SIG_WHOLE) {
         assert(request->size == sizeof(remote_motor));
         memcpy(request->data, &remote_motor, sizeof(remote_motor));
         return A_STATUS_OK;
@@ -40,27 +48,31 @@ static aStatus_t remote_read(void *context,
     return A_STATUS_OK;
 }
 
-static void batch_tests(void)
+static void plan_tests(void)
 {
-    static const aModbusBusMap_t maps[] = {
+    static const aCommMappingServerMap_t maps[] = {
         {.area = AMODBUS_AREA_HOLDING_REGISTERS,
-         .address = 0U, .quantity = 2U, .flags = AMODBUS_ACCESS_READ,
-         .target = {1U, MOTOR, 0U}},
+         .address = 0U, .quantity = 2U, .flags = ACOMM_MAP_ACCESS_READ,
+         .target = {.deviceID = 1U,
+                   .sigIndex = MOTOR,
+                   .paramIndex = 0U}},
         {.area = AMODBUS_AREA_HOLDING_REGISTERS,
-         .address = 2U, .quantity = 2U, .flags = AMODBUS_ACCESS_READ,
-         .target = {1U, MOTOR, 1U}}
+         .address = 2U, .quantity = 2U, .flags = ACOMM_MAP_ACCESS_READ,
+         .target = {.deviceID = 1U,
+                   .sigIndex = MOTOR,
+                   .paramIndex = 1U}}
     };
     link_t link = {.type = AMODBUS_TRANSPORT_RTU};
     endpoint_t server_port = {&link, A_TRUE}, client_port = {&link, A_FALSE};
-    aModbusConfig_t server = configuration(&server_port, AMODBUS_ROLE_SERVER);
-    aModbusConfig_t client = configuration(&client_port, AMODBUS_ROLE_CLIENT);
-    aModbusHandle_t server_storage, client_storage, *handle;
-    aModbusPoll_t items[2];
+    fixtureConfig_t server = configuration(&server_port, AMODBUS_ROLE_SERVER);
+    fixtureConfig_t client = configuration(&client_port, AMODBUS_ROLE_CLIENT);
+    aCommMapping_t server_storage, client_storage, *handle;
+    aCommMappingClientMap_t items[2];
     aModbusResult_t result;
     size_t completed;
-    aModbusClientBatchRequest_t batch = {
-        .items = items, .count = 2U, .completed = &completed,
-        .unit_id = 1U, .timeout = A_TIMEOUT_MS(1000U), .result = &result
+    aCommPlanConfig_t plan_config = {
+        .items = items, .count = 2U,
+        .unit_id = 1U, .timeout = A_TIMEOUT_MS(1000U)
     };
 
     server.ranges = NULL;
@@ -71,9 +83,13 @@ static void batch_tests(void)
     link.server = open_instance(&server, &server_storage);
     handle = open_instance(&client, &client_storage);
     for (size_t i = 0U; i < 2U; i++) {
-        items[i] = (aModbusPoll_t){
+        items[i] = (aCommMappingClientMap_t){
+            .access = ACOMM_MAP_ACCESS_READ,
+            .poll_time_ms = ACOMM_POLL_ONCE,
             .area = AMODBUS_AREA_HOLDING_REGISTERS,
-            .target = {1U, MOTOR, i},
+            .target = {.deviceID = 1U,
+                   .sigIndex = MOTOR,
+                   .paramIndex = i},
             .address = (uint16_t)(i * 2U), .quantity = 2U, .flags = 0U
         };
     }
@@ -84,71 +100,83 @@ static void batch_tests(void)
         const motor_t previous = motor;
         for (size_t i = 0U; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
             items[0].quantity = invalid[i];
-            assert(aModbusClientPollCheck(&client, &items[0], 1U) ==
+            assert(aCommMappingClientMapCheck(handle->config, &items[0], 1U) ==
                    A_STATUS_INVALID_PARAM);
-            assert(aModbusClientReadBatch(handle, &batch) ==
+            assert(execute_first_plan(
+                    handle, &plan_config, &completed, &result) ==
                    A_STATUS_INVALID_PARAM);
-            assert(completed == 1U && link.writes[0] == writes);
+            assert(completed == 0U && link.writes[0] == writes);
         }
         items[0].quantity = 2U;
         items[1].quantity = 1U;
-        assert(aModbusClientReadBatch(handle, &batch) ==
+        assert(execute_first_plan(handle, &plan_config, &completed, &result) ==
                A_STATUS_INVALID_PARAM);
-        assert(completed == 2U && link.writes[0] == writes);
+        assert(completed == 0U && link.writes[0] == writes);
         assert(motor.speed == previous.speed &&
                motor.temperature == previous.temperature);
         items[1].quantity = 2U;
     }
     unlocks = 0U;
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_OK);
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) == A_STATUS_OK);
     assert(completed == 2U && link.request[5] == 4U);
     assert(unlocks == 1U && motor.speed == 4500U && motor.temperature == 45);
     assert(result.exception == 0U);
     remote_motor = (motor_t){6001U, 46};
     unlocks = 0U;
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_INVALID_PARAM);
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) == A_STATUS_INVALID_PARAM);
     assert(completed == 2U && unlocks == 0U);
     assert(motor.speed == 4500U && motor.temperature == 45);
     remote_motor.speed = 1234U;
     /* 空洞、区域和显式断帧标记必须停止当前批次。 */
     items[1].address = 3U;
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_OK);
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) == A_STATUS_OK);
     assert(completed == 1U && link.request[5] == 2U);
     items[1].address = 2U;
-    items[1].flags = AMODBUS_POLL_FLAG_BREAK_BEFORE;
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_OK);
+    items[1].flags = ACOMM_MAP_FLAG_BREAK_BEFORE;
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) == A_STATUS_OK);
     assert(completed == 1U && link.request[5] == 2U);
     /* 下一次从带标记的首项开始读取，不能发空帧或反复停在同一项。 */
-    batch.items = &items[1];
-    batch.count = 1U;
+    plan_config.items = &items[1];
+    plan_config.count = 1U;
     remote_motor.temperature = 47;
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_OK);
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) == A_STATUS_OK);
     assert(completed == 1U && motor.temperature == 47);
-    batch.items = items;
-    batch.count = 2U;
+    plan_config.items = items;
+    plan_config.count = 2U;
     items[1].flags = 0U;
     items[1].area = AMODBUS_AREA_INPUT_REGISTERS;
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_OK);
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) == A_STATUS_OK);
     assert(completed == 1U);
     items[1].area = items[0].area;
     items[0].flags = 2U; /* 未定义的标志不能被当成自动合并。 */
-    assert(aModbusClientPollCheck(&client, &items[0], 1U) ==
+    assert(aCommMappingClientMapCheck(handle->config, &items[0], 1U) ==
            A_STATUS_INVALID_PARAM);
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_INVALID_PARAM);
-    items[0].flags = AMODBUS_POLL_FLAG_BREAK_BEFORE;
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_OK);
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) == A_STATUS_INVALID_PARAM);
+    items[0].flags = ACOMM_MAP_FLAG_BREAK_BEFORE;
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) == A_STATUS_OK);
     assert(completed == 2U && link.request[5] == 4U);
     items[0].flags = 0U;
-    batch.unit_id = 0U; /* 读取禁止使用 RTU 广播。 */
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_INVALID_PARAM);
-    batch.unit_id = 1U;
-    batch.timeout.type = (aTimeoutType_t)-1;
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_INVALID_PARAM);
+    plan_config.unit_id = 0U; /* 读取禁止使用 RTU 广播。 */
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) == A_STATUS_INVALID_PARAM);
+    plan_config.unit_id = 1U;
+    plan_config.timeout.type = (aTimeoutType_t)-1;
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) == A_STATUS_INVALID_PARAM);
     assert(completed == 0U);
-    batch.timeout = A_TIMEOUT_MS(500U);
+    plan_config.timeout = A_TIMEOUT_MS(500U);
     items[0].address = 4U;
     items[1].address = 6U;
-    assert(aModbusClientReadBatch(handle, &batch) != A_STATUS_OK);
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, &result) != A_STATUS_OK);
     assert(completed == 2U && result.exception == 2U);
     close_instance(handle);
     close_instance(link.server);
@@ -156,31 +184,35 @@ static void batch_tests(void)
 
 static void whole_tests(void)
 {
-    const aModbusBusMap_t map = MAP(0U, 4U, MOTOR);
+    const aCommMappingServerMap_t map = MAP(0U, 4U, MOTOR);
     link_t link = {.type = AMODBUS_TRANSPORT_RTU};
     endpoint_t server_port = {&link, A_TRUE}, client_port = {&link, A_FALSE};
-    aModbusConfig_t server = configuration(&server_port, AMODBUS_ROLE_SERVER);
-    aModbusConfig_t client = configuration(&client_port, AMODBUS_ROLE_CLIENT);
-    aModbusHandle_t server_storage, client_storage, *handle;
+    fixtureConfig_t server = configuration(&server_port, AMODBUS_ROLE_SERVER);
+    fixtureConfig_t client = configuration(&client_port, AMODBUS_ROLE_CLIENT);
+    aCommMapping_t server_storage, client_storage, *handle;
     uint16_t registers[4] = {0U, 1234U, 0U, 15U};
-    aModbusAddressReadRequest_t read = {
+    aCommAddressReadRequest_t read = {
         .area = AMODBUS_AREA_HOLDING_REGISTERS, .quantity = 4U,
         .data = registers, .size = sizeof(registers),
         .timeout = A_TIMEOUT_MS(100U)
     };
-    aModbusAddressWriteRequest_t write = {
+    aCommAddressWriteRequest_t write = {
         .area = AMODBUS_AREA_HOLDING_REGISTERS, .quantity = 4U,
         .data = registers, .size = sizeof(registers),
         .timeout = A_TIMEOUT_MS(100U)
     };
-    const aModbusPoll_t item = {
+    const aCommMappingClientMap_t item = {
+        .access = ACOMM_MAP_ACCESS_READ,
+            .poll_time_ms = ACOMM_POLL_ONCE,
         .area = AMODBUS_AREA_HOLDING_REGISTERS,
         .address = 0U, .quantity = 4U, .flags = 0U,
-        .target = {1U, MOTOR, AMODBUS_SIG_WHOLE}
+        .target = {.deviceID = 1U,
+                   .sigIndex = MOTOR,
+                   .paramIndex = ACOMM_MAP_SIG_WHOLE}
     };
     size_t completed;
-    const aModbusClientBatchRequest_t batch = {
-        .items = &item, .count = 1U, .completed = &completed,
+    const aCommPlanConfig_t plan_config = {
+        .items = &item, .count = 1U,
         .unit_id = 1U, .timeout = A_TIMEOUT_MS(1000U)
     };
     server.maps = &map;
@@ -190,17 +222,17 @@ static void whole_tests(void)
     handle = open_instance(&server, &server_storage);
     handle->deadline = aTimepointCalc(read.timeout, aOSGetUptimeMs());
     unlocks = 0U;
-    assert(aModbusBusWrite(handle, &write) == A_STATUS_OK);
+    assert(aCommMappingDataWrite(handle, &write) == A_STATUS_OK);
     assert(unlocks == 1U && motor.speed == 1234U && motor.temperature == 15);
     inject_update = A_TRUE;
-    assert(aModbusBusRead(handle, &read) == A_STATUS_OK);
+    assert(aCommMappingDataRead(handle, &read) == A_STATUS_OK);
     assert(registers[1] == 1234U && registers[3] == 15U);
     assert(motor.speed == 4000U && motor.temperature == 35);
     /* 整组内只更新一个完整字段，其他字段保持更新后的值。 */
     write.quantity = 2U;
     registers[1] = 2222U;
     unlocks = 0U;
-    assert(aModbusBusWrite(handle, &write) == A_STATUS_OK);
+    assert(aCommMappingDataWrite(handle, &write) == A_STATUS_OK);
     assert(unlocks == 1U && motor.speed == 2222U && motor.temperature == 35);
     close_instance(handle);
 
@@ -209,12 +241,14 @@ static void whole_tests(void)
     link.server = open_instance(&server, &server_storage);
     handle = open_instance(&client, &client_storage);
     unlocks = 0U;
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_OK);
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, NULL) == A_STATUS_OK);
     assert(completed == 1U && unlocks == 1U);
     assert(motor.speed == 4500U && motor.temperature == 45);
     remote_motor = (motor_t){6001U, 99};
     unlocks = 0U;
-    assert(aModbusClientReadBatch(handle, &batch) == A_STATUS_INVALID_PARAM);
+    assert(execute_first_plan(
+            handle, &plan_config, &completed, NULL) == A_STATUS_INVALID_PARAM);
     assert(unlocks == 0U && motor.speed == 4500U && motor.temperature == 45);
     close_instance(handle);
     close_instance(link.server);
@@ -222,35 +256,43 @@ static void whole_tests(void)
 
 int main(void)
 {
-    static const aModbusBusMap_t maps[] = {
+    static const aCommMappingServerMap_t maps[] = {
         {.area = AMODBUS_AREA_HOLDING_REGISTERS,
          .address = 0U, .quantity = 2U,
-         .flags = READ_WRITE, .target = {1U, MOTOR, 0U}},
+         .flags = READ_WRITE, .target = {.deviceID = 1U,
+                   .sigIndex = MOTOR,
+                   .paramIndex = 0U}},
         MAP(2U, 1U, WORD),
         {.area = AMODBUS_AREA_HOLDING_REGISTERS,
          .address = 3U, .quantity = 2U,
-         .flags = READ_WRITE, .target = {1U, MOTOR, 1U}}
+         .flags = READ_WRITE, .target = {.deviceID = 1U,
+                   .sigIndex = MOTOR,
+                   .paramIndex = 1U}}
     };
     link_t link = {.type = AMODBUS_TRANSPORT_RTU};
     endpoint_t endpoint = {&link, A_TRUE};
-    aModbusConfig_t config = configuration(&endpoint, AMODBUS_ROLE_SERVER);
-    aModbusHandle_t storage, *handle;
+    fixtureConfig_t config = configuration(&endpoint, AMODBUS_ROLE_SERVER);
+    aCommMapping_t storage, *handle;
     uint16_t registers[5];
-    aModbusAddressReadRequest_t read = {
+    aCommAddressReadRequest_t read = {
         .area = AMODBUS_AREA_HOLDING_REGISTERS, .quantity = 5U,
         .data = registers, .size = sizeof(registers),
         .timeout = A_TIMEOUT_MS(100U)
     };
-    aModbusAddressWriteRequest_t write = {
+    aCommAddressWriteRequest_t write = {
         .area = AMODBUS_AREA_HOLDING_REGISTERS, .quantity = 5U,
         .data = registers, .size = sizeof(registers),
         .timeout = A_TIMEOUT_MS(100U)
     };
-    aModbusClientSigRequest_t poll;
-    aModbusPoll_t length_check = {
+    aCommMappingClientSigRequest_t poll;
+    aCommMappingClientMap_t length_check = {
+        .access = ACOMM_MAP_ACCESS_READ,
+            .poll_time_ms = ACOMM_POLL_ONCE,
         .area = AMODBUS_AREA_HOLDING_REGISTERS,
         .address = 0U, .quantity = 3U, .flags = 0U,
-        .target = {1U, RAW, AMODBUS_SIG_WHOLE}
+        .target = {.deviceID = 1U,
+                   .sigIndex = RAW,
+                   .paramIndex = ACOMM_MAP_SIG_WHOLE}
     };
 
     aBusInstanceStructInit(&bus, states, SIG_COUNT + 1U);
@@ -262,46 +304,55 @@ int main(void)
     handle = open_instance(&config, &storage);
     handle->deadline = aTimepointCalc(read.timeout, aOSGetUptimeMs());
     inject_update = A_TRUE;
-    assert(aModbusBusRead(handle, &read) == A_STATUS_OK);
+    assert(aCommMappingDataRead(handle, &read) == A_STATUS_OK);
     assert(registers[1] == 3000U && registers[4] == 25U);
     assert(motor.speed == 4000U && motor.temperature == 35);
     registers[0] = 0U; registers[1] = 5000U;
     registers[2] = 123U; registers[3] = 0U; registers[4] = 40U;
     unlocks = 0U;
-    assert(aModbusBusWrite(handle, &write) == A_STATUS_OK);
+    assert(aCommMappingDataWrite(handle, &write) == A_STATUS_OK);
     assert(motor.speed == 5000U && motor.temperature == 40);
     assert(unlocks == 2U); /* 两个 SIG，各提交一次；Motor 的字段不连续。 */
     registers[1] = 6001U;
-    assert(aModbusBusWrite(handle, &write) == A_STATUS_INVALID_PARAM);
+    assert(aCommMappingDataWrite(handle, &write) == A_STATUS_INVALID_PARAM);
     assert(motor.speed == 5000U && motor.temperature == 40);
     close_instance(handle);
 
-    config.role = AMODBUS_ROLE_CLIENT;
+    aCommMappingConfig_t connection = preflightConnection(&config);
     /* RAW[5] 需要三个寄存器，U8 位目标只占一位，长度单位不能混用。 */
-    assert(aModbusClientPollCheck(&config, &length_check, 1U) ==
+    assert(aCommMappingClientMapCheck(&connection, &length_check, 1U) ==
            A_STATUS_OK);
     length_check.quantity = 5U;
-    assert(aModbusClientPollCheck(&config, &length_check, 1U) ==
+    assert(aCommMappingClientMapCheck(&connection, &length_check, 1U) ==
            A_STATUS_INVALID_PARAM);
     length_check.area = AMODBUS_AREA_COILS;
     length_check.target.sigIndex = 0U;
     length_check.quantity = 1U;
-    assert(aModbusClientPollCheck(&config, &length_check, 1U) ==
+    assert(aCommMappingClientMapCheck(&connection, &length_check, 1U) ==
            A_STATUS_OK);
     length_check.quantity = 8U;
-    assert(aModbusClientPollCheck(&config, &length_check, 1U) ==
+    assert(aCommMappingClientMapCheck(&connection, &length_check, 1U) ==
            A_STATUS_INVALID_PARAM);
-    aModbusClientSigRequestStructInit(&poll);
-    poll.target = (aModbusSigTarget_t){1U, MOTOR, 0U};
-    assert(aModbusClientSigCheck(&config, &poll, A_FALSE) == A_STATUS_OK);
+    aCommMappingClientSigRequestStructInit(&poll);
+    poll.area = AMODBUS_AREA_HOLDING_REGISTERS;
+    poll.target = (aCommMappingSigTarget_t){1U, MOTOR, 0U};
+    assert(aCommMappingClientSigCheck(&connection, &poll, A_FALSE) == A_STATUS_OK);
     poll.target.deviceID = 99U;
-    assert(aModbusClientSigCheck(&config, &poll, A_FALSE) ==
+    assert(aCommMappingClientSigCheck(&connection, &poll, A_FALSE) ==
            A_STATUS_NOT_FOUND);
     poll.target.deviceID = 1U;
     poll.unit_id = 0U;
-    assert(aModbusClientSigCheck(&config, &poll, A_FALSE) ==
+    aModbusHandle_t protocol = {0};
+    const aModbusClientConfig_t core = {.modbus = {
+        .transport_type = config.transport_type,
+        .transport = config.transport, .byte_timeout = config.byte_timeout
+    }};
+    assert(aModbusClientInitStatic(&core, &protocol) == A_STATUS_OK);
+    preflight.protocol.protocol = &protocol;
+    assert(aCommMappingClientSigCheck(&connection, &poll, A_FALSE) ==
            A_STATUS_INVALID_PARAM);
-    batch_tests();
+    assert(aModbusDeInitStatic(&protocol) == A_STATUS_OK);
+    plan_tests();
     whole_tests();
     assert(aBusDeInitStatic(&bus) == A_STATUS_OK);
     assert(testAllocations() == 0U);

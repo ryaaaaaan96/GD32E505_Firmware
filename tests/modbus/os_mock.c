@@ -9,11 +9,22 @@ static uint32_t uptime;
 static _Thread_local aErrno_t last_errno;
 static unsigned allocations;
 static aBool_t fail_alloc;
+static aBool_t fail_unlock;
+
+aOSFaultRecord_t g_aOSFaultRecord;
+
+void aOSRecordFault(aOSFaultCode_t code, aStatus_t status, const char *context)
+{
+    g_aOSFaultRecord.status = status;
+    g_aOSFaultRecord.context = context;
+    g_aOSFaultRecord.code = code;
+}
 
 uint32_t aOSGetUptimeMs(void) { return uptime; }
 void testAdvanceTime(uint32_t milliseconds) { uptime += milliseconds; }
 void testSetTime(uint32_t milliseconds) { uptime = milliseconds; }
 void testFailAllocation(aBool_t fail) { fail_alloc = fail; }
+void testFailMutexUnlock(aBool_t fail) { fail_unlock = fail; }
 unsigned testAllocations(void) { return allocations; }
 aErrno_t aOSGetErrno(void) { return last_errno; }
 aSSize_t aOSFailWithStatus(aStatus_t status)
@@ -76,6 +87,13 @@ aStatus_t aOSMutexLock(aOSMutex_t mutex, aTimeout_t timeout)
 
 aStatus_t aOSMutexUnlock(aOSMutex_t mutex)
 {
-    assert(pthread_mutex_unlock(mutex) == 0);
-    return A_STATUS_OK;
+    aStatus_t status = A_STATUS_INVALID_PARAM;
+    if (mutex != NULL) {
+        assert(pthread_mutex_unlock(mutex) == 0);
+        status = fail_unlock ? A_STATUS_ERROR : A_STATUS_OK;
+    }
+    if (status != A_STATUS_OK) {
+        aOSRecordFault(AOS_FAULT_MUTEX_UNLOCK, status, "aOSMutexUnlock");
+    }
+    return status;
 }

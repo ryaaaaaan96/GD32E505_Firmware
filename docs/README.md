@@ -23,6 +23,12 @@
 | [Flash25Q / SPI 存储链路](spi_flash_design.md) | SFUD、总线与锁、超时，以及未实现的 QSPI 路径 |
 | [验证指南](testing.md) | 主机测试、构建矩阵与上板验证的边界 |
 
+## 总线与协议设计
+
+| 文档 | 范围与状态 |
+| --- | --- |
+| [aBus 发布订阅与关联标记](abus_protocol_events_design.md) | 已实现首版；非阻塞分发、请求完成、协议关联、分组轮询和有限重试 |
+
 ## 模块说明
 
 | 层级 | 入口 |
@@ -31,7 +37,8 @@
 | 硬件与 OS | [aDrv](../platform/aDrv/README.md)、[aOS](../platform/aOS/README.md) |
 | 设备 | [device](../device/README.md)、[USART](../device/aDev_usart/README.md)、[Flash25Q](../device/aDev_Flash25q/README.md) |
 | 数据与存储 | [aBus](../func/aBus/README.md)、[aMemory](../func/aMemory/README.md)、[aDataBase](../func/aDataBase/README.md) |
-| 调度与事件 | [aPoll](../func/aPoll/README.md) |
+| 通信调度、通道与事件 | [aComm](../func/aComm/README.md) |
+| Modbus 与 aBus 装配 | [aComm 映射](../func/aComm/README.md) |
 | 协议与交互 | [aModbus](../func/aModbus/README.md)、[aShell](../func/aShell/README.md)、[aLog](../func/aLog/README.md) |
 
 公共头文件维护完整签名和参数契约；模块 README 维护接入示例、功能限制和

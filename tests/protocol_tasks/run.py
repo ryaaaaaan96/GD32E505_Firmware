@@ -10,7 +10,7 @@ flags = [
     "cc", "-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
     "-fsanitize=undefined", "-fno-sanitize-recover=all",
     "-Iplatform/aLib/include", "-Iplatform/aOS/public",
-    "-Ifunc/aBus/include", "-Ifunc/aModbus", "-Ifunc/aDataBase",
+    "-Ifunc/aBus/include", "-Ifunc/aModbus/include", "-Ifunc/aDataBase",
     "-Ifunc/aMemory", "-Iapp", "-Iapp/protocol",
     "-Iapp/protocol/inc", "-Iapp/task/test", "-Iapp/task/system",
 ]

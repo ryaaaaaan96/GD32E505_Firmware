@@ -2,7 +2,7 @@
 #define main original_modbus_main
 #include "test_modbus.c"
 #undef main
-#include "aModbus_internal.h"
+#include "aComm_mapping_internal.h"
 
 typedef struct {
     uint16_t values[2];
@@ -12,7 +12,7 @@ typedef struct {
 } rangeContext_t;
 
 static aStatus_t range_read(void *context,
-    const aModbusAddressReadRequest_t *request)
+    const aCommAddressReadRequest_t *request)
 {
     rangeContext_t *state = context;
     size_t offset = request->address - 10U;
@@ -26,7 +26,7 @@ static aStatus_t range_read(void *context,
 }
 
 static aStatus_t range_write(void *context,
-    const aModbusAddressWriteRequest_t *request)
+    const aCommAddressWriteRequest_t *request)
 {
     rangeContext_t *state = context;
     size_t offset = request->address - 10U;
@@ -39,23 +39,27 @@ static aStatus_t range_write(void *context,
     return A_STATUS_OK;
 }
 
-static void invalid_lengths(const aModbusConfig_t *base)
+static void invalid_lengths(const fixtureConfig_t *base)
 {
-    const aModbusBusMap_t valid[] = {
+    const aCommMappingServerMap_t valid[] = {
         MAP(0U, 1U, WORD),
         MAP(0U, 2U, COUNTER),
         MAP(0U, 2U, SIGNED),
         MAP(0U, 3U, RAW), /* RAW[5] 是三个寄存器，不是五个。 */
         {.area = AMODBUS_AREA_COILS,
          .address = 0U, .quantity = 1U, .flags = READ_WRITE,
-         .target = {1U, 0U, AMODBUS_SIG_WHOLE}},
+         .target = {.deviceID = 1U,
+                   .sigIndex = 0U,
+                   .paramIndex = ACOMM_MAP_SIG_WHOLE}},
         {.area = AMODBUS_AREA_HOLDING_REGISTERS,
          .address = 0U, .quantity = 2U, .flags = READ_WRITE,
-         .target = {1U, MOTOR, 0U}}
+         .target = {.deviceID = 1U,
+                   .sigIndex = MOTOR,
+                   .paramIndex = 0U}}
     };
-    aModbusConfig_t config = *base;
-    aModbusBusMap_t map;
-    aModbusHandle_t storage;
+    fixtureConfig_t config = *base;
+    aCommMappingServerMap_t map;
+    aCommMapping_t storage;
     link_t *link = ((endpoint_t *)config.transport.context)->link;
     unsigned allocations = testAllocations();
     unsigned prepared = link->prepared;
@@ -79,19 +83,20 @@ static void invalid_lengths(const aModbusConfig_t *base)
         assert(invalid_config(&config) == A_STATUS_INVALID_PARAM);
     }
     /* 初始化辅助函数要求调用者填写长度，不提供隐式的一个寄存器。 */
-    aModbusBusMapStructInit(&map);
-    map.target = (aModbusSigTarget_t){1U, WORD, AMODBUS_SIG_WHOLE};
+    aCommMappingServerMapStructInit(&map);
+    map.target = (aCommTargetConfig_t){.deviceID = 1U, .sigIndex = WORD,
+        .paramIndex = ACOMM_MAP_SIG_WHOLE};
     assert(map.quantity == 0U);
     assert(invalid_config(&config) == A_STATUS_INVALID_PARAM);
     assert(testAllocations() == allocations);
     assert(link->prepared == prepared);
 }
 
-static void invalid_routes(const aModbusConfig_t *base)
+static void invalid_routes(const fixtureConfig_t *base)
 {
-    aModbusConfig_t config = *base;
-    aModbusBusMap_t bad_maps[2] = {base->maps[0], base->maps[1]};
-    aModbusAddressRange_t bad_ranges[2] = {base->ranges[0], base->ranges[0]};
+    fixtureConfig_t config = *base;
+    aCommMappingServerMap_t bad_maps[2] = {base->maps[0], base->maps[1]};
+    aCommMappingAddressRange_t bad_ranges[2] = {base->ranges[0], base->ranges[0]};
 
     config.ranges = NULL;
     assert(invalid_config(&config) == A_STATUS_INVALID_PARAM);
@@ -158,27 +163,29 @@ static void invalid_routes(const aModbusConfig_t *base)
 int main(void)
 {
     rangeContext_t context = {.values = {100U, 200U}};
-    const aModbusAddressRange_t callbacks[] = {
+    const aCommMappingAddressRange_t callbacks[] = {
         {.area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 10U,
          .quantity = 2U, .flags = READ_WRITE,
          .read = range_read, .write = range_write, .context = &context}
     };
-    const aModbusBusMap_t targets[] = {
+    const aCommMappingServerMap_t targets[] = {
         MAP(8U, 2U, COUNTER), MAP(12U, 1U, WORD),
         {.area = AMODBUS_AREA_INPUT_REGISTERS, .address = 8U,
-         .quantity = 2U, .flags = AMODBUS_ACCESS_READ,
-         .target = {1U, COUNTER, AMODBUS_SIG_WHOLE}}
+         .quantity = 2U, .flags = ACOMM_MAP_ACCESS_READ,
+         .target = {.deviceID = 1U,
+                   .sigIndex = COUNTER,
+                   .paramIndex = ACOMM_MAP_SIG_WHOLE}}
     };
     link_t link = {.type = AMODBUS_TRANSPORT_RTU};
     endpoint_t endpoint = {&link, A_TRUE};
-    aModbusHandle_t storage, *handle;
-    aModbusConfig_t config = configuration(&endpoint, AMODBUS_ROLE_SERVER);
+    aCommMapping_t storage, *handle;
+    fixtureConfig_t config = configuration(&endpoint, AMODBUS_ROLE_SERVER);
     uint16_t values[6];
-    aModbusAddressReadRequest_t read = {
+    aCommAddressReadRequest_t read = {
         .area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 8U, .quantity = 5U,
         .data = values, .size = sizeof(values), .timeout = A_TIMEOUT_MS(100U)
     };
-    aModbusAddressWriteRequest_t write = {
+    aCommAddressWriteRequest_t write = {
         .area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 8U, .quantity = 5U,
         .data = values, .size = sizeof(values), .timeout = A_TIMEOUT_MS(100U)
     };
@@ -199,13 +206,13 @@ int main(void)
     handle->deadline = aTimepointCalc(read.timeout, aOSGetUptimeMs());
 
     /* 一次请求经过映射、回调、映射，回调只接收自己负责的部分。 */
-    assert(aModbusBusRead(handle, &read) == A_STATUS_OK);
+    assert(aCommMappingDataRead(handle, &read) == A_STATUS_OK);
     assert(memcmp(values, (uint16_t[]){0x1234, 0x5678, 100, 200, 123},
                   5U * sizeof(uint16_t)) == 0);
     assert(context.reads == 1U && sig_reads == 2U);
     memcpy(values, (uint16_t[]){0x1111, 0x2222, 333, 444, 555},
            5U * sizeof(uint16_t));
-    assert(aModbusBusWrite(handle, &write) == A_STATUS_OK);
+    assert(aCommMappingDataWrite(handle, &write) == A_STATUS_OK);
     assert(counter == 0x11112222U && word == 555U);
     assert(context.writes == 1U && sig_writes == 2U);
     assert(context.values[0] == 333U && context.values[1] == 444U);
@@ -215,8 +222,8 @@ int main(void)
     reads = context.reads; writes = context.writes;
     sig_reads = sig_writes = 0U;
     memset(values, 0xA5, sizeof(values));
-    assert(aModbusBusRead(handle, &read) == A_STATUS_NOT_FOUND);
-    assert(aModbusBusWrite(handle, &write) == A_STATUS_NOT_FOUND);
+    assert(aCommMappingDataRead(handle, &read) == A_STATUS_NOT_FOUND);
+    assert(aCommMappingDataWrite(handle, &write) == A_STATUS_NOT_FOUND);
     assert(context.reads == reads && context.writes == writes);
     assert(sig_reads == 0U && sig_writes == 0U && values[0] == 0xA5A5U);
 
@@ -228,36 +235,36 @@ int main(void)
     };
     for (size_t i = 0U; i < sizeof(failures) / sizeof(failures[0]); i++) {
         context.result = failures[i];
-        assert(aModbusBusRead(handle, &read) == failures[i]);
+        assert(aCommMappingDataRead(handle, &read) == failures[i]);
         values[2] = 321U;
-        assert(aModbusBusWrite(handle, &write) == failures[i]);
+        assert(aCommMappingDataWrite(handle, &write) == failures[i]);
         assert(sig_reads == 0U && sig_writes == 0U && word == 555U);
     }
     context.result = A_STATUS_OK;
     read.address = 11U;
     read.quantity = 1U;
-    assert(aModbusBusRead(handle, &read) == A_STATUS_OK && values[0] == 444U);
+    assert(aCommMappingDataRead(handle, &read) == A_STATUS_OK && values[0] == 444U);
     read.area = AMODBUS_AREA_INPUT_REGISTERS;
     read.address = 8U;
     read.quantity = 2U;
-    assert(aModbusBusRead(handle, &read) == A_STATUS_OK);
+    assert(aCommMappingDataRead(handle, &read) == A_STATUS_OK);
     assert(values[0] == 0x1111U && values[1] == 0x2222U);
     close_instance(handle);
 
     /* 同一地址段只读时，写入在调用业务前被拒绝。 */
-    aModbusAddressRange_t readonly = callbacks[0];
-    readonly.flags = AMODBUS_ACCESS_READ;
+    aCommMappingAddressRange_t readonly = callbacks[0];
+    readonly.flags = ACOMM_MAP_ACCESS_READ;
     readonly.write = NULL;
     config.ranges = &readonly;
     handle = open_instance(&config, &storage);
     writes = context.writes;
     write.quantity = 1U;
-    assert(aModbusBusWrite(handle, &write) == A_STATUS_NOT_FOUND);
+    assert(aCommMappingDataWrite(handle, &write) == A_STATUS_NOT_FOUND);
     assert(context.writes == writes);
     close_instance(handle);
 
     /* 最后一个寄存器可独立映射；不强制存在任何地址段。 */
-    aModbusBusMap_t last = MAP(UINT16_MAX, 1U, WORD);
+    aCommMappingServerMap_t last = MAP(UINT16_MAX, 1U, WORD);
     config.ranges = NULL;
     config.range_count = 0U;
     config.maps = &last;
@@ -267,7 +274,7 @@ int main(void)
     read.area = AMODBUS_AREA_HOLDING_REGISTERS;
     read.address = UINT16_MAX;
     read.quantity = 1U;
-    assert(aModbusBusRead(handle, &read) == A_STATUS_OK && values[0] == word);
+    assert(aCommMappingDataRead(handle, &read) == A_STATUS_OK && values[0] == word);
     close_instance(handle);
     assert(aBusDeInitStatic(&bus) == A_STATUS_OK);
     assert(testAllocations() == 0U);

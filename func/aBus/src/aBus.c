@@ -234,6 +234,26 @@ static aStatus_t resources_prepare(aBusHandle_t *handle,
     unsigned char *next;
 #endif
 
+#if ABUS_EVENT_ENABLE
+    size_t param_total = 0U;
+    for (size_t t = 0U; t < count; t++) {
+        for (size_t i = 0U; i < tables[t].sig_count; i++) {
+            size_t n = tables[t].sigs[i].param_count;
+            if (n > SIZE_MAX - param_total) return A_STATUS_INVALID_PARAM;
+            param_total += n;
+        }
+    }
+    if (param_total > handle->param_capacity ||
+        (param_total != 0U && handle->params == NULL)) {
+        return A_STATUS_INVALID_PARAM;
+    }
+    aAtomicInit(&handle->event_users, 0U);
+    aAtomicInit(&handle->notification_failed, A_FALSE);
+    handle->subscriber_count = 0U;
+    for (size_t i = 0U; i < param_total; i++) {
+        handle->params[i].subscribers = NULL;
+    }
+#endif
     handle->sig_count = total;
     for (size_t i = 0; i < total; i++) {
         const aBusSigState_t empty = {.data = NULL};
@@ -287,12 +307,21 @@ static aStatus_t resources_prepare(aBusHandle_t *handle,
 #if ABUS_DYNAMIC_ENABLE
     next = handle->allocation;
 #endif
+#if ABUS_EVENT_ENABLE
+    size_t param_offset = 0U;
+#endif
     /* 资源全部就绪后，合并数据地址分配与默认值写入这一遍遍历。 */
     for (size_t t = 0U, offset = 0U; t < count; t++) {
         const aBusTable_t *table = &tables[t];
         for (size_t i = 0U; i < table->sig_count; i++) {
             const aBusSig_t *sig = &table->sigs[i];
             aBusSigState_t *entry = &handle->sigs[offset + i];
+#if ABUS_EVENT_ENABLE
+            if (sig->param_count != 0U) {
+                entry->params = handle->params + param_offset;
+                param_offset += sig->param_count;
+            }
+#endif
 
 #if ABUS_DYNAMIC_ENABLE
             if (entry->data == NULL) {
@@ -344,6 +373,10 @@ aStatus_t aBusDeInitStatic(aBusHandle_t *handle)
 #if ABUS_DYNAMIC_ENABLE
     if (handle->dynamic_storage) return A_STATUS_INVALID_PARAM;
 #endif
+#if ABUS_EVENT_ENABLE
+    if (handle->tables != NULL && (handle->subscriber_count != 0U ||
+        aAtomicLoad(&handle->event_users) != 0U)) return A_STATUS_BUSY;
+#endif
     resources_release(handle);
     return A_STATUS_OK;
 }
@@ -369,11 +402,30 @@ aStatus_t aBusCreate(uint16_t instanceID,
     if (total > (SIZE_MAX - offset) / sizeof(aBusSigState_t)) {
         return A_STATUS_INVALID_PARAM;
     }
-    handle = aOSAlloc(offset + total * sizeof(aBusSigState_t));
+    size_t bytes = offset + total * sizeof(aBusSigState_t);
+#if ABUS_EVENT_ENABLE
+    size_t param_count = 0U;
+    size_t param_offset = bytes;
+    for (size_t t = 0U; t < table_count; t++) {
+        for (size_t i = 0U; i < tables[t].sig_count; i++) {
+            size_t n = tables[t].sigs[i].param_count;
+            if (n > (SIZE_MAX - bytes) / sizeof(aBusParamState_t)) {
+                return A_STATUS_INVALID_PARAM;
+            }
+            bytes += n * sizeof(aBusParamState_t);
+            param_count += n;
+        }
+    }
+#endif
+    handle = aOSAlloc(bytes);
     if (handle == NULL) return A_STATUS_NO_MEMORY;
     {
         const aBusHandle_t initial = {
             .instanceID = instanceID,
+#if ABUS_EVENT_ENABLE
+            .params = (void *)((unsigned char *)handle + param_offset),
+            .param_capacity = param_count,
+#endif
             .sigs = (aBusSigState_t *)((unsigned char *)handle + offset),
 #if ABUS_STATIC_ENABLE
             .dynamic_storage = A_TRUE,
@@ -395,6 +447,10 @@ aStatus_t aBusDestroy(aBusHandle_t *handle)
     if (handle == NULL) return A_STATUS_OK;
 #if ABUS_STATIC_ENABLE
     if (!handle->dynamic_storage) return A_STATUS_INVALID_PARAM;
+#endif
+#if ABUS_EVENT_ENABLE
+    if (handle->subscriber_count != 0U ||
+        aAtomicLoad(&handle->event_users) != 0U) return A_STATUS_BUSY;
 #endif
     resources_release(handle);
     aOSFree(handle);
@@ -468,6 +524,27 @@ aStatus_t aBusGetSigInfo(aBusHandle_t *handle,
     return A_STATUS_OK;
 }
 
+/* 自动通知在数据锁外执行；通知故障不回滚已提交的数据。 */
+static void updated(aBusHandle_t *handle, uint16_t deviceID,
+    size_t sigIndex, size_t paramIndex)
+{
+#if ABUS_EVENT_ENABLE
+    if (handle->subscriber_count == 0U) return;
+    const aBusPublishRequest_t request = {
+        .target = {deviceID, sigIndex, paramIndex},
+        .event = ABUS_EVENT_UPDATED
+    };
+    if (aBusPublish(handle, &request, NULL) != A_STATUS_OK) {
+        aAtomicStore(&handle->notification_failed, A_TRUE);
+    }
+#else
+    (void)handle;
+    (void)deviceID;
+    (void)sigIndex;
+    (void)paramIndex;
+#endif
+}
+
 aStatus_t aBusUpdateSig(aBusHandle_t *handle,
     const aBusUpdateRequest_t *request)
 {
@@ -523,6 +600,10 @@ aStatus_t aBusUpdateSig(aBusHandle_t *handle,
         if (status == A_STATUS_OK) status = unlocked;
     }
 #endif
+    if (status == A_STATUS_OK) {
+        updated(handle, request->target.deviceID, request->target.sigIndex,
+                ABUS_SIG_WHOLE);
+    }
     return status;
 }
 
@@ -567,8 +648,12 @@ aStatus_t aBusSetByIndex(aBusHandle_t *handle,
 #endif
     memcpy(entry->data, request->src, request->size);
 #if ABUS_LOCK_MODE != ABUS_LOCK_NONE
-    if (mutex != NULL) return aOSMutexUnlock(mutex);
+    if (mutex != NULL) {
+        status = aOSMutexUnlock(mutex);
+        if (status != A_STATUS_OK) return status;
+    }
 #endif
+    updated(handle, request->deviceID, index, ABUS_SIG_WHOLE);
     return A_STATUS_OK;
 }
 
@@ -790,6 +875,10 @@ aStatus_t aBusSetParam(aBusHandle_t *handle,
         if (status == A_STATUS_OK) status = unlock_status;
     }
 #endif
+    if (status == A_STATUS_OK) {
+        updated(handle, request->deviceID, request->sigIndex,
+                request->paramIndex);
+    }
     return status;
 }
 

@@ -9,19 +9,19 @@ set(ADRV_USART_DMA_ENABLE ON)
 set(ADRV_MODULE_DMA_ENABLE ON)
 
 if(DEFINED CASE)
-    if(CASE STREQUAL "poll_static")
-        set(APOLL_DYNAMIC_ENABLE OFF)
-    elseif(CASE STREQUAL "poll_dynamic")
-        set(APOLL_STATIC_ENABLE OFF)
-    elseif(CASE STREQUAL "poll_off")
-        set(APOLL_ENABLE OFF)
-        set(APOLL_STATIC_ENABLE OFF)
-        set(APOLL_DYNAMIC_ENABLE OFF)
-    elseif(CASE STREQUAL "poll_no_allocation")
-        set(APOLL_STATIC_ENABLE OFF)
-        set(APOLL_DYNAMIC_ENABLE OFF)
-    elseif(CASE STREQUAL "poll_invalid_bool")
-        set(APOLL_ENABLE typo)
+    if(CASE STREQUAL "comm_static")
+        set(ACOMM_DYNAMIC_ENABLE OFF)
+    elseif(CASE STREQUAL "comm_dynamic")
+        set(ACOMM_STATIC_ENABLE OFF)
+    elseif(CASE STREQUAL "comm_off")
+        set(ACOMM_ENABLE OFF)
+        set(ACOMM_STATIC_ENABLE OFF)
+        set(ACOMM_DYNAMIC_ENABLE OFF)
+    elseif(CASE STREQUAL "comm_no_allocation")
+        set(ACOMM_STATIC_ENABLE OFF)
+        set(ACOMM_DYNAMIC_ENABLE OFF)
+    elseif(CASE STREQUAL "comm_invalid_bool")
+        set(ACOMM_ENABLE typo)
     elseif(CASE STREQUAL "led_static")
         set(ADEV_LED_DYNAMIC_ENABLE OFF)
     elseif(CASE STREQUAL "led_dynamic")
@@ -66,7 +66,13 @@ if(DEFINED CASE)
     elseif(CASE STREQUAL "bus_off")
         set(ABUS_ENABLE OFF)
         set(AMODBUS_ENABLE OFF)
-    elseif(CASE STREQUAL "modbus_missing_bus")
+    elseif(CASE STREQUAL "modbus_without_bus")
+        set(ABUS_ENABLE OFF)
+    elseif(CASE STREQUAL "comm_missing_modbus")
+        set(AMODBUS_ENABLE OFF)
+    elseif(CASE STREQUAL "comm_missing_scheduler")
+        set(ACOMM_ENABLE OFF)
+    elseif(CASE STREQUAL "comm_missing_bus")
         set(AMODBUS_ENABLE ON)
         set(ABUS_ENABLE OFF)
     elseif(CASE STREQUAL "modbus_no_allocation")
@@ -160,8 +166,8 @@ if(DEFINED CASE)
     return()
 endif()
 
-foreach(case poll_static poll_dynamic poll_off poll_no_allocation
-        poll_invalid_bool default bus_static bus_dynamic bus_no_allocation bus_check_off bus_check_invalid bus_none bus_sig bus_off bus_invalid_lock
+foreach(case comm_static comm_dynamic comm_off comm_no_allocation
+        comm_invalid_bool default bus_static bus_dynamic bus_no_allocation bus_check_off bus_check_invalid bus_none bus_sig bus_off bus_invalid_lock
         led_static led_dynamic led_both led_no_allocation led_invalid_bool
         log_off log_invalid_level log_small_buffer log_large_buffer
         log_invalid_bool log_independent
@@ -170,15 +176,17 @@ foreach(case poll_static poll_dynamic poll_off poll_no_allocation
         async_without_direct direct_without_dma missing_device missing_gpio invalid_bool
         database_custom database_missing_memory memory_invalid_capacity
         memory_invalid_bool memory_off
-        modbus_missing_bus modbus_no_allocation modbus_no_role
+        modbus_without_bus comm_missing_bus comm_missing_modbus
+        comm_missing_scheduler modbus_no_allocation modbus_no_role
         modbus_invalid_bool modbus_client_static modbus_server_dynamic)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" "-DCASE=${case}" -P "${CMAKE_CURRENT_LIST_FILE}"
         RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
     )
-    if(case MATCHES "^poll_(static|dynamic|off)$" OR
+    if(case MATCHES "^comm_(static|dynamic|off)$" OR
+       case MATCHES "^comm_missing_(modbus|scheduler|bus)$" OR
        case MATCHES "^led_(static|dynamic|both)$" OR
-       case MATCHES "^(default|bus_static|bus_dynamic|bus_check_off|bus_none|bus_sig|bus_off|minimal|polling|independent_app|database_custom|memory_off|dma_without_async|async_without_direct|direct_without_dma|log_off|log_independent|modbus_client_static|modbus_server_dynamic)$")
+       case MATCHES "^(default|bus_static|bus_dynamic|bus_check_off|bus_none|bus_sig|bus_off|minimal|polling|independent_app|database_custom|memory_off|dma_without_async|async_without_direct|direct_without_dma|log_off|log_independent|modbus_client_static|modbus_server_dynamic|modbus_without_bus)$")
         if(NOT result EQUAL 0)
             message(FATAL_ERROR "${case} should succeed: ${error}")
         endif()
@@ -186,13 +194,17 @@ foreach(case poll_static poll_dynamic poll_off poll_no_allocation
         if(result EQUAL 0)
             message(FATAL_ERROR "${case} should fail")
         endif()
-        if(case STREQUAL "poll_no_allocation")
-            set(expected "aPoll requires STATIC or DYNAMIC")
+        if(case STREQUAL "comm_no_allocation")
+            set(expected "aComm requires STATIC or DYNAMIC")
         elseif(case STREQUAL "led_no_allocation")
             set(expected "LED requires STATIC or DYNAMIC")
         elseif(case STREQUAL "bus_no_allocation")
             set(expected "aBus requires STATIC or DYNAMIC")
-        elseif(case STREQUAL "modbus_missing_bus")
+        elseif(case STREQUAL "comm_missing_modbus")
+            set(expected "AMODBUS_ENABLE")
+        elseif(case STREQUAL "comm_missing_scheduler")
+            set(expected "ACOMM_ENABLE")
+        elseif(case STREQUAL "comm_missing_bus")
             set(expected "ABUS_ENABLE")
         elseif(case STREQUAL "modbus_no_allocation")
             set(expected "aModbus requires STATIC or DYNAMIC")

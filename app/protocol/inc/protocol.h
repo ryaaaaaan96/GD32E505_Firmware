@@ -53,7 +53,12 @@ aStatus_t protocolInit(aBusHandle_t *bus);
 aStatus_t protocolRefresh(void);
 
 #if APP_MODBUS_ENABLE
-#include "aModbus.h"
+#include "aModbus_client.h"
+#if ABUS_EVENT_ENABLE
+/* 按总线目标投递；不含地址、站号、字序，数据借用至 RequestDone。 */
+aStatus_t protocolRequest(const aBusRequestConfig_t *config,
+    aBusRequest_t *request, aBusDispatchResult_t *result);
+#endif
 /* 临时请求和数据借用至完成回调结束；回调在通信任务内执行。
  * response 仅回调期间有效；原 access.result 不使用，统一经 complete 返回。
  */

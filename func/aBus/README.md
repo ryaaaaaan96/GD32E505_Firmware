@@ -1,5 +1,9 @@
 # aBus 板内 RAM 数据总线
 
+事件 API 由 `aBus.h` 引入 `aBus_event.h`。完整的跨模块边界和请求生命周期见
+[发布订阅设计](../../docs/abus_protocol_events_design.md)。
+`ABUS_EVENT_ENABLE` 控制编译，默认开启。
+
 ## 数据模型
 
 `aBus_table.h` 提供只读定义，独立于运行库配置和链接段收集；仅借用点表的
@@ -20,7 +24,8 @@ sigKey。初始化后挂载集合固定，暂不支持运行时增删表。
       └─ aBusParam_t[]（可选）              └─ data → 完整 SIG 快照
 ```
 
-RAM 状态按表顺序展开为一个数组，表内定义和运行状态按 SIG 下标对应，不为每个参数创建运行对象。
+RAM 状态按表顺序展开为一个数组，定义与状态按 SIG 下标对应。
+事件开启时，SIG 与已声明 Param 各有链表头；Param 状态不重复保存值。
 aDataValue_t 只表达范围上下限，不保存运行值。
 初始化的容量统计、地址分配与默认值写入按表顺序推进，避免每个 SIG
 重新从首表查找定义；这些遍历为 O(SIG 总数 + 表数)，不新增索引 RAM。
@@ -171,14 +176,22 @@ BUS 模式整个 handle 共用一把锁，SIG 模式为全部表中的每个 SIG
 元数据块。内存申请次数不随 SIG 数量增长，读写期间不申请内存。
 数据池按字节切分，内部使用 memcpy，不要求各 SIG 起点类型对齐。
 
-静态创建层包含 aBus_instance.h，只需提供 handle 和 SIG 状态数组：
+静态创建层包含 aBus_instance.h，提供 handle、SIG 及可选 Param 状态数组：
 
 ```c
 static aBusHandle_t instance;
 static aBusSigState_t states[2];
+#if ABUS_EVENT_ENABLE
+/* 所有挂载 SIG 的 param_count 之和；本例 Motor 有两个字段。 */
+static aBusParamState_t params[2];
+#endif
 aStatus_t status;
 
 aBusInstanceStructInit(&instance, states, 2);
+#if ABUS_EVENT_ENABLE
+instance.params = params;
+instance.param_capacity = 2U;
+#endif
 status = aBusInitStatic(1U, &table, 1U, &instance);
 ```
 
@@ -298,7 +311,7 @@ sigKey 简单线性查找，同表唯一性由应用保证，不进行嵌套重�
 ## 扩展边界
 
 只支持整组连续变量绑定，不支持字段分散绑定、运行中重新绑定或保留绑定原值。
-不实现事件、版本、有效标志、持久化或转发。
+不自动实现版本、有效标志、持久化或远端转发。事件本身不携带历史值。
 
 ## 验证
 
@@ -414,3 +427,35 @@ aBusUpdateSig 使用请求中的调用者工作区，读取完整 SIG 快照，�
 锁策略仍遵循 ABUS_LOCK_MODE 和 ABUS_SIG_FLAG_LOCK。回调在持锁期间运行，
 只做有界内存操作，不调用 I/O、不阻塞、不重入总线。此接口只对一个 SIG
 提供一致修改，跨 SIG 不提供事务；无锁和直接绑定变量访问由应用同步。
+
+## 非阻塞事件与请求
+
+成功 Set/SetParam/SetKey/Update 在释放数据锁后自动发布一次 UPDATED。
+通知失败不回滚提交，用 `aBusNotificationFailed` 取出并清除故障标记。
+直接修改外部绑定变量不自动通知，需要应用显式 Publish。
+
+`aBusSubscribe` 挂载应用持有的节点；真实事件需要回调，MARK_ONLY 只供反查。
+Subscribe 的零掩码是参数错误；协议配置零掩码则跳过登记。
+`aBusAssociationGet/Find` 枚举或要求唯一关联，不遍历未登记的协议配置。
+
+`aBusPublish` 发布普通通知，`aBusRequest` 投递 READ/WRITE 请求。
+按字节交集通知整组及字段；默认多播，可按 owner 筛选。无人处理直接丢弃，
+接收统计为零；队列满返回 BUSY，但其他接收者可能已经接收。
+
+请求预先提供 `aBusRequest_t` 与 `aBusDelivery_t[]`，消费者完成时调用
+`aBusComplete`。只有 `aBusRequestDone` 为真才复用请求及数据；分发期间的
+提前完成不会提前释放请求。每个已接收节点完成一次，结果不合并。
+
+发布/接收/完成回调只登记工作，不等待锁、I/O、完成或队列空间，不申请堆。
+提供者只能尝试入队，必要时合并 pending 标记。仅任务上下文，不支持热插拔。
+销毁前停止调用者、排空请求并解除节点；仍有关联或借用时返回 BUSY。
+主机验证：`python3 tests/bus_events/run.py`。
+
+
+## 可选通信端点
+
+启用 ACOMM_ENABLE 时编译 aBus_endpoint.c。应用用 aBusEndpointInit 借用已就绪
+的总线，再将首成员 base 交给 aComm 映射。总线核心不调用通信管理或协议栈。
+端点提供 SIG/字段读写、元信息、快照更新与可选事件，不额外创建锁或分配内存。
+同步与范围校验沿用总线原有接口；销毁映射不会销毁总线。
+静态订阅的 native 存储使用 aBusEndpointSubscription_t，生命周期覆盖映射。

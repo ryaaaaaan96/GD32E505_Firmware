@@ -1,5 +1,5 @@
-if(APOLL_ENABLE)
-    add_subdirectory(aPoll)
+if(ACOMM_ENABLE)
+    add_subdirectory(aComm)
 endif()
 
 # 只读点表契约始终可用，运行库由 ABUS_ENABLE 独立裁剪。

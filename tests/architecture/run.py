@@ -32,14 +32,18 @@ for folder in ("app", "device", "func", "platform/aLib"):
             for header in re.findall(r'#\s*include\s*[<"]([^>"]+)[>"]',
                                      text):
                 assert Path(header).name not in app_headers, (path, header)
-        if path.is_relative_to(root / "func/aPoll"):
+        if path.is_relative_to(root / "func/aComm"):
             assert not re.search(
                 r'#\s*include\s*[<"](?:aBus|aModbus|aDrv|aDev)', text), path
+            assert not re.search(r'\b(?:AMODBUS_\w*|aModbus\w*|'
+                                 r'ABUS_\w*|aBus\w*)\b', text), path
         if path.is_relative_to(root / "device/aDev_usart"):
             assert not re.search(r'\b(?:interrupt_priority|irq_priority|'
                                  r'aOSValidateIsrPriority)\b', text), path
         if path.is_relative_to(root / "func/aModbus"):
-            assert not re.search(r'#\s*include\s*[<"]aPoll', text), path
+            assert not re.search(r'#\s*include\s*[<"]aBus', text), path
+            if path.name not in ("aModbus_endpoint.c", "aModbus_endpoint.h"):
+                assert not re.search(r'#\s*include\s*[<"]aComm', text), path
             assert not re.search(r'#\s*include\s*[<"](?:aDrv|aDev)',
                                  text), path
         if path.is_relative_to(root / "app/devices/rs485"):
@@ -47,7 +51,7 @@ for folder in ("app", "device", "func", "platform/aLib"):
                                  r'IDU_modbus|FAN_modbus|protocol)',
                                  text), path
         if path.name in ("FAN_modbus_master.c", "IDU_modbus_slave.c"):
-            assert not re.search(r'\b(?:aOSCreateTask|aModbusCreate|'
+            assert not re.search(r'\b(?:aOSCreateTask|aModbus(?:Client|Server)Create|'
                                  r'rs485PortOpen)\s*\(', text), path
             assert not re.search(r'\.(?:task|stack_bytes|priority)\s*=',
                                  text), path
@@ -61,7 +65,7 @@ for folder in ("app", "device", "func", "platform/aLib"):
         if folder == "platform/aLib":
             assert not re.search(
                 r'#\s*include\s*[<"](?:aOS|aDrv|aDev|aBus|aMemory|'
-                r'aDataBase|aShell|aLog|aModbus|aPoll)', text), path
+                r'aDataBase|aShell|aLog|aModbus|aComm)', text), path
         else:
             # 编译器原子类型、内存序及操作统一通过 aLib 适配。
             assert not re.search(r'#\s*include\s*<stdatomic\.h>|\b_Atomic\b|'
@@ -78,13 +82,17 @@ includes = ["platform/aLib/include", "platform/aOS/public",
             "platform/aDrv/include", "device/aDev_usart/include",
             "device/aDev_Flash25q", "func/aBus/include", "func/aMemory",
             "func/aDataBase", "func/aShell/include", "func/aLog",
-            "func/aModbus", "func/aPoll", "app/protocol/inc"]
-headers = ("aLayout.h", "aCrc.h", "aAtomic.h", "aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
+            "func/aModbus/include", "func/aComm/include",
+            "app/protocol/inc"]
+headers = ("aDataLayout.h", "aComm_endpoint.h",
+           "aBus_endpoint.h", "aModbus_endpoint.h", "aLayout.h", "aCrc.h", "aAtomic.h", "aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
            "aDrv_dma.h", "aDrv_dma_memory.h",
            "aDev_led.h", "aDev_led_instance.h",
-           "aBus.h", "aMemory.h", "aDataBase.h", "aShell.h", "aLog.h",
-           "aPoll.h", "aPoll_instance.h", "aModbus.h", "aModbus_rtu.h",
-           "aModbus_rtu_instance.h",
+           "aBus.h", "aBus_event.h", "aModbus_client.h",
+           "aModbus_server.h", "aMemory.h", "aDataBase.h", "aShell.h", "aLog.h",
+           "aComm.h", "aComm_instance.h", "aComm_mapping.h",
+           "aComm_mapping_instance.h", "aModbus.h",
+           "aComm_channel.h", "aComm_channel_instance.h",
            "protocol.h", "IDU_sig_table.h", "FAN_sig_table.h")
 command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
            "-fsyntax-only", *["-I" + path for path in includes],

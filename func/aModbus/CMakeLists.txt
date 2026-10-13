@@ -1,12 +1,12 @@
 # 官方源码保持不变，直接继承项目参数，不加载上游工程 CMake。
 add_library(aModbus STATIC
-    aModbus.c
-    aModbus_bus.c
-    aModbus_rtu.c
+    src/aModbus.c
+    src/aModbus_client.c
+    src/aModbus_server.c
     nanoMODBUS/nanomodbus.c
 )
 target_include_directories(aModbus PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
 )
 # 仅静态实例布局需要向调用方传播上游头与裁剪宏。
 set(nanomodbus_visibility PRIVATE)
@@ -15,7 +15,7 @@ if(AMODBUS_STATIC_ENABLE)
 endif()
 target_include_directories(aModbus ${nanomodbus_visibility}
     "${CMAKE_CURRENT_SOURCE_DIR}/nanoMODBUS")
-target_link_libraries(aModbus PUBLIC aBus aOS
+target_link_libraries(aModbus PUBLIC aOS
     PRIVATE aclass_project_options)
 foreach(feature STATIC DYNAMIC CLIENT SERVER)
     target_compile_definitions(aModbus PUBLIC
@@ -37,3 +37,9 @@ target_compile_definitions(aModbus ${nanomodbus_visibility}
     NMBS_SERVER_READ_WRITE_REGISTERS_DISABLED
     NMBS_SERVER_READ_DEVICE_IDENTIFICATION_DISABLED
 )
+
+# 可选端点实现只依赖公共契约；核心在关闭 aComm 后仍可独立构建。
+if(ACOMM_ENABLE)
+    target_sources(aModbus PRIVATE src/aModbus_endpoint.c)
+    target_link_libraries(aModbus PUBLIC aComm)
+endif()

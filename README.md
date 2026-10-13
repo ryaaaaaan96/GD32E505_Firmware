@@ -17,15 +17,17 @@ app 包含 Shell、SPI Flash、KV/TSDB、SIG、日志及 Modbus 测试；日志�
 Shell 共享控制台串口，由应用发送入口统一加锁，测试命令见
 [系统任务与日志调试](app/task/system/README.md)。QSPI 默认关闭，
 RS485 已启用，详见 [USART / RS485 设计](docs/usart_design.md)。
-Modbus 库提供 RTU/TCP 主从站及 aBus 映射；板级 Demo 使用 USART2 PC10/PC11、
-PA15 手动 DE，115200 8N1，默认从站 1。主从切换与点表关系见
-[产品协议](app/protocol/README.md)，协议接口见 [aModbus](func/aModbus/README.md)。
+Modbus 库提供 RTU/TCP 主从站，通过 aComm 公共端点与映射连接 aBus；板级 Demo 使用 USART2 PC10/PC11、
+PA15 手动 DE，115200 8N1，默认主站，目标站号 1。主从切换与点表关系见
+[产品协议](app/protocol/README.md)，协议接口见 [aModbus](func/aModbus/README.md)，
+通信调度与通道见 [aComm](func/aComm/README.md)，
+测点映射见 [aComm 映射](func/aComm/README.md)。
 
 ## 分层
 
 ```text
 app                 main()、项目配置、显式初始化和测试
-├── func            aMemory、aDataBase、aLog、aModbus、aShell 等功能
+├── func            aMemory、aDataBase、aLog、aModbus、aComm、aShell 等功能
 ├── device          USART、RS485、Flash25Q 等硬件无关设备语义
 └── platform
     ├── aLib        布尔/状态/超时/错误类型、编译器属性和公共定义

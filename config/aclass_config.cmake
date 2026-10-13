@@ -2,10 +2,11 @@
 # 缺少依赖时 cmake/aclass_resolve.cmake 给出配置错误。
 
 # func
-set(APOLL_ENABLE ON)
-set(APOLL_STATIC_ENABLE ON)
-set(APOLL_DYNAMIC_ENABLE ON)
+set(ACOMM_ENABLE ON)
+set(ACOMM_STATIC_ENABLE ON)
+set(ACOMM_DYNAMIC_ENABLE ON)
 set(ABUS_ENABLE ON)
+set(ABUS_EVENT_ENABLE ON)
 set(ABUS_STATIC_ENABLE ON)
 set(ABUS_DYNAMIC_ENABLE ON)
 # Static definition validation; runtime value ranges are always checked.
@@ -27,7 +28,7 @@ set(ADATABASE_ENABLE ON)
 set(ADATABASE_STATIC_ENABLE ON)
 set(ADATABASE_DYNAMIC_ENABLE ON)
 set(AMODBUS_ENABLE ON)
-# 协议核心依赖 aBus；USART 适配为可选目标，设备参数、映射和任务归应用。
+# 启用 aComm 后提供可选端点接口，映射和计划由 aComm 管理。
 set(AMODBUS_STATIC_ENABLE ON)
 set(AMODBUS_DYNAMIC_ENABLE ON)
 set(AMODBUS_CLIENT_ENABLE ON)

@@ -27,7 +27,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-system-") as directory:
                 "app/devices/system",
                 "app/protocol/inc", "app/task/test", "func/aShell/include",
                 "func/aMemory", "func/aDataBase", "func/aLog",
-                "func/aBus/include", "func/aModbus", "func/aDataBase/config",
+                "func/aBus/include", "func/aModbus/include", "func/aDataBase/config",
                 "func/aDataBase/FlashDB/inc", "config")
     command = [
         "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",

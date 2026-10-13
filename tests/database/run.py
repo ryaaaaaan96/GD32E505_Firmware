@@ -36,7 +36,7 @@ int test_shell_print(const char *format, ...);
 ''')
     for static, dynamic in ((1, 0), (0, 1), (1, 1)):
         objects = []
-        command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Wpedantic",
+        command = ["cc", "-std=c11", "-DABUS_EVENT_ENABLE=0", "-Wall", "-Wextra", "-Wpedantic",
                    "-Werror", "-fsanitize=undefined",
                    "-fno-sanitize-recover=all",
                    f"-DADATABASE_STATIC_ENABLE={static}",

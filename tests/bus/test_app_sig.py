@@ -119,7 +119,7 @@ int main(void) {
 ''')
     for dynamic in (0,1):
         for mode in (0,1,2):
-            cmd=['cc','-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-Iapp/devices/system','-Idevice/aDev_LED','-Iplatform/aDrv/include','-std=c11','-Wall','-Wextra','-Werror','-pthread','-DABUS_ENABLE=1','-DAPP_MODBUS_ENABLE=0','-Iapp',f'-DABUS_DYNAMIC_ENABLE={dynamic}','-DABUS_STATIC_ENABLE=1',f'-DABUS_LOCK_MODE={mode}',f'-I{tmp}','-Iapp/protocol/inc','-Iapp/task/test','-Iapp/task/system','-Ifunc/aBus/include','-Iplatform/aOS/public','-Iplatform/aLib/include',str(p/'test.c'),'app/protocol/protocol.c','app/task/system/command_data_bus.c','app/protocol/protocol_tables.c','app/task/test/test_task.c','func/aBus/src/aBus.c','-Wl,-T,func/aBus/port/gcc/aBus_sections_host.ld','-o',str(p/'test')]
+            cmd=['cc','-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-Iapp/devices/system','-Idevice/aDev_LED','-Iplatform/aDrv/include','-std=c11','-Wall','-Wextra','-Werror','-pthread','-DABUS_ENABLE=1','-DAPP_MODBUS_ENABLE=0','-Iapp',f'-DABUS_DYNAMIC_ENABLE={dynamic}','-DABUS_STATIC_ENABLE=1',f'-DABUS_LOCK_MODE={mode}',f'-I{tmp}','-Iapp/protocol/inc','-Iapp/task/test','-Iapp/task/system','-Ifunc/aBus/include','-Iplatform/aOS/public','-Iplatform/aLib/include',str(p/'test.c'),'app/protocol/protocol.c','app/task/system/command_data_bus.c','app/protocol/protocol_tables.c','app/task/test/test_task.c','func/aBus/src/aBus.c','func/aBus/src/aBus_event.c','-Wl,-T,func/aBus/port/gcc/aBus_sections_host.ld','-o',str(p/'test')]
             subprocess.run(cmd,check=True)
             subprocess.run([str(p/'test')],check=True,stdout=subprocess.DEVNULL)
             print(f'PASS dynamic={dynamic} lock={mode}')

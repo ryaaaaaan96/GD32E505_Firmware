@@ -2,8 +2,10 @@
 
 本目录负责产品点表、协议映射、持久化选择和通信任务装配。
 `system` 创建并私有持有 aBus 与数据库，恢复参数后调用 `protocolInit(bus)`。
-`devices` 只提供串口设备；aModbus 负责协议、类型转换及总线读写；aPoll 负责周期、事件和请求队列。
-两者不创建任务，也不相互依赖。
+`devices` 只提供串口设备；aModbus 负责纯协议事务；aComm 负责周期、重试、
+事件队列、流式收发、静默分帧及数据映射；协议端点负责类型编码，
+数据端点负责总线读写。
+模块都不创建任务；protocol.c 分别创建并装配协议、映射映射实例和调度器。
 
 | 内容 | 位置 |
 | --- | --- |
@@ -16,6 +18,22 @@
 | 链路实例、端口装配、任务资源及创建 | `protocol.c` |
 | 后续 JSON 输入预留 | `config/` |
 
+协议任务仅负责调度：主站通过 PlanGroupCount/Get 注册作业，调用
+`aCommPlanExecute` 并传入 request.execution；重试次数在通用作业中配置。
+从站注册 serverExecute 回调，调用 `aModbusServerProcess`，同步地址回调进入
+aComm 映射。
+分组及数据工作项由 aComm 提供，协议编码仍归 aModbus；应用只配置和连接。
+aComm 通道通过 aModbusBindChannel 绑定完整传输；
+aModbusRtuFrameCheck 作为完整帧检查回调注册。
+主从产品配置中的 `timing` 直接给出最终微秒值，protocol.c 原样传入通道，
+aComm 在初始化时按端口时基转换为计数；运行期判断间隔并执行等待。
+
+当前 115200、8N1 配置为 `character_us=87`、`byte_gap_us=750`、
+`frame_gap_us=1750`。间隔默认宏由 aModbus 提供，产品可以直接改为其他值。
+改变波特率或字符格式时，须同步检查主从产品的 timing；
+可选用 `aModbusRtuTimingDefaults` 得到新默认值。通道不会自动覆盖用户配置，
+`byte_gap_us=0` 明确表示关闭帧内间隔检查，不表示使用默认值。
+
 ## 配置与运行资源的边界
 
 - `FAN_modbus_master.c` 描述 **IDU 作为主站访问 FAN**：直接定义远端采集数组，
@@ -26,10 +44,17 @@
   选择清单。纯静态模式下，随点表规模变化的 aBus 存储也在这里预留；
   创建总线、持有活动句柄及恢复数据仍由 system 完成。
 
-两个 Modbus 配置文件提供内部 `const protocolModbusConfig_t`，组合协议的
-service 与调度的 schedule。类型在 protocol_internal.h，配置不包含任务栈
-或优先级。protocol.c 装配端口、协议、采集计划和 aPoll，再创建任务。
-从站沿用阻塞式 ServerProcess；主站任务循环执行 aPollProcess/aPollWait。
+主站提供 `const protocolClientConfig_t`，分别保存 protocol（纯协议配置）、client（映射配置）与采集节奏；从站提供
+`const protocolServerConfig_t`，分别保存 protocol（纯协议配置）、server（映射配置）与处理预算。类型位于
+protocol_internal.h，配置不包含任务栈、优先级或运行数组。protocol.c
+装配端口、aComm 通道和主从实例；主站另建采集计划，随后注册 aComm 作业并创建任务。
+当前从站仅为 TEST_001 登记 MARK_ONLY 关系，不额外订阅变化事件。
+本 Demo 主从都使用 aComm 映射与显式端点，任务统一执行
+aCommProcess/aCommWait。从站注册一个连续执行的作业，不创建采集计划和临时队列；
+ServerProcess 仍为同步事务，等待期间同一消费者不能执行其他作业。
+静态资源只在 protocol.c 预留，动态作业数组按实际周期组数申请。
+应用通过 submit 回调将请求直接投递到四槽队列，映射实例借用协议与队列。
+纯 aModbus 从站也可使用其他地址回调，不要求启用 aComm 或 aBus。
 
 `protocolPersistenceConfigInit` 只向数据库配置填入只读点表和持久化清单。
 `system_init.c` 的数据库段持有 KV/TSDB 实例及静态索引 RAM，并结合
@@ -82,11 +107,13 @@ IDU TEST_001 在 test_task.c 绑定，FAN TEST_001 在 protocol_tables.c 绑定�
 SIG 保留 X-Macro 清单，用同一份定义生成索引、Key、描述及静态存储。
 协议映射直接使用普通 C 数组，不再维护 mapping 目录或映射展开宏：
 
-- `FAN_modbus_master.c` 的 `polls[]` 定义区域、地址、长度、目标、字序和断帧标志；
-  数组顺序决定轮询顺序，`poll_count` 通过 `sizeof` 推导。
-  站号、事务超时和采集周期在设备服务配置中统一设置。
-- `IDU_modbus_slave.c` 的 `maps[]` 定义区域、地址、长度、权限、目标和字序；
-  `ranges[]` 单独定义地址段回调，两者在 aModbusConfig_t 中平级配置。
+- `FAN_modbus_master.c` 的 `client_maps[]` 使用 `aCommMappingClientMap_t`，
+  定义区域、地址、长度、目标、字序和断帧标志；临时访问与自动采集共用此表。
+  同周期项保持数组顺序，`client_map_count` 通过 `sizeof` 推导。
+  站号、事务超时在 client 配置，retry_count 在产品采集配置；周期逐项填写。
+- `IDU_modbus_slave.c` 的 `maps[]` 使用 `aCommMappingServerMap_t`，
+  定义区域、地址、长度、权限、目标和字序；
+  `ranges[]` 单独定义地址段回调，两者在 aCommMappingServerConfig_t 中平级配置。
 - 两张表分别按区域、地址排序。同一区域内，段与段、映射与映射、段与映射
   均不能重叠；离散映射允许空洞，不需要外围段。数量通过数组 `sizeof` 推导。
 - 段和映射的 `quantity` 都是寄存器数或位数，必须显式填写。
@@ -141,7 +168,7 @@ IDU TEST_007 为 16 字节，通过一条 WHOLE 映射覆盖地址 266～273：
 
 C 结构体头使用 aLib 断言固定布局；protocolBusConfigInit 返回 aStatus_t，
 在发布配置前主动检查 STRUCT 的字段长度总和，system 检查成功后才创建总线。
-完整连续性和寄存器长度由 aModbus 检查，用户可选检查不替代协议校验。
+完整连续性和业务映射长度由 aComm 映射检查，用户可选检查不替代协议校验。
 
 本次 IDU TEST_007 从 12 字节改为 16 字节：U8 字段改为 U16，RAW[3] 改为
 RAW[4]，增加显式保留字段。旧版本保存的 deviceID=1、sigKey=2007 记录会因
@@ -153,23 +180,25 @@ RAW[4]，增加显式保留字段。旧版本保存的 deviceID=1、sigKey=2007 
 
 ### 主站采集 30 个 FAN 测点
 
-FAN_modbus_master.c 选择 TEST_001～030，TEST_031～050 不采集。
-两个组合 SIG 按整组配置，合计 30 个 SIG、30 个采集项，覆盖 U8、U16、
+FAN_modbus_master.c 配置全部 50 项，TEST_001～030 周期为 1000 ms，
+TEST_031～050 周期为零，仅供临时访问。
+两个组合 SIG 按整组配置，自动轮询部分合计 30 个 SIG、30 个采集项，覆盖 U8、U16、
 U32、S32、RAW 和 STRUCT。同一帧中的同一 SIG 字段一次提交到 aBus。
 
 Demo 的远端地址沿用上述从站 FAN 映射，便于两块 IDU 固件切换主从联调；
 这不是实际 FAN 产品的寄存器规范。接真实子板须调整地址、类型和字序。
 远端地址不能从本地 sigIndex 推导；本地索引连续不代表远端地址连续。
 
-应用选择采集点及其地址，aModbus 自动合并同区域的连续项。它不排序、
-不跨空洞、不建立动态分组表；每项读取长度由 quantity 显式配置。
+应用选择采集点及其地址，aComm 映射初始化时按周期分组，合并
+同区域的连续项。组内保留原表顺序，不跨空洞；长度由 quantity 显式配置。
 达到读取上限 125 个寄存器或 2000 位时结束本帧，后续调用继续剩余项。
 不同类型和字序仍可同帧读取，再按各自配置解码。
 
 quantity 表示寄存器数或位数，不是字节数；禁止省略或填写零。
 U8/U16 寄存器目标填 1，U32/S32 填 2，RAW[8] 填 4；
 组合类型按所选字段填写，位区域的 U8 目标填 1。
-初始化在打开串口前检查配置长度与 aBus 目标匹配，调用批量读取时再次检查；
+初始化在打开串口前检查配置长度与 aBus 目标匹配；固定计划复用校验结果，
+即时事务仍检查当前请求，
 不匹配返回 INVALID_PARAM，不会自动修改长度或隐式截断/扩展数据。
 修改 aBus 类型后需重新核对远端协议，自动分组使用已校验的 quantity。
 
@@ -178,7 +207,7 @@ U8/U16 寄存器目标填 1，U32/S32 填 2，RAW[8] 填 4；
 
 ```c
 /* TEST_020 从地址 88 开始；即使紧接上一项，也另起一帧。 */
-.flags = AMODBUS_POLL_FLAG_BREAK_BEFORE,
+.flags = ACOMM_MAP_FLAG_BREAK_BEFORE,
 ```
 
 标志表示“在当前项之前断帧”，不会创建空帧；当前项作为下一帧首项时
@@ -200,23 +229,24 @@ Demo 在 TEST_020 上设置断帧标志，每轮发送 6 帧 FC03，地址为零
 变为 5 帧。地址 33、37 和各段间空洞始终不读取。
 真实设备若要求更小的包或特殊边界，可在相应采集项上设置断帧标志。
 
-设备统一配置三个不同用途的时间：
+配置三个不同用途的时间：
 
 - `request_timeout`：每帧事务超时，当前 500 ms，包含通信及发布等待。
-- `poll_time_ms`：整轮采集起点之间的最小间隔，当前 1000 ms。
+- `poll_time_ms`：逐项配置，同周期项分组，整轮起点最小间隔当前 1000 ms。
 - `interval_ms / error_delay_ms`：两次事务之间的让出时间，成功 1 ms、
   失败至少 5 ms；它们不是逐点采集周期。
 
-站号使用 service.modbus.unit_id；各采集项不重复配置站号和超时。
-六帧全部超时时，一轮约 3 s 加帧间等待，采集周期不保证超时情况下的频率。
-失败也推进列表，下轮再次尝试；通信失败保留该组旧值。
+站号使用 client.unit_id；各采集项不重复配置站号和超时。
+当前 retry_count=2，每帧超时最多尝试三次；六帧全部超时约 9 s 加帧间等待，
+不能保证 1 s 完成一轮。次数耗尽推进其他帧，下轮重置；通信失败保留旧值。
 每个 SIG 独立发布，整轮不提供原子快照。
 主站模式下，本地 Shell 改写这些采集值会被后续成功采集覆盖，不代表已下发。
 
 ### 周期、事件与临时请求
 
-FAN 固定采集计划在初始化时生成，缓存六帧 RTU 请求及 CRC。aPoll 的一步
+FAN 固定采集计划在初始化时生成，缓存六帧 RTU 请求及 CRC。aComm 的一步
 对应一帧，protocol 不再维护 poll_index、轮次时间和周期等待计算。
+计划只保存启用映射的下标，直接引用 FAN 的只读点表，不在 RAM 复制映射。
 从站没有周期计划，继续处理接收到的请求。板级串口职责保持不变。
 
 主站 Shell 命令：
@@ -225,8 +255,7 @@ FAN 固定采集计划在初始化时生成，缓存六帧 RTU 请求及 CRC。a
 protocol refresh
 ```
 
-只调用 protocolRefresh 投递合并事件，回调在通信任务中通过 aPollJobTrigger
-请求提前采集。当前轮次不会被打断，成功/失败后的等待及 RTU 静默仍然生效。
+protocolRefresh 非阻塞设置各组的触发标记，请求提前采集。当前轮次不会被打断，成功/失败后的等待及 RTU 静默仍然生效。
 重复投递合并，从站返回 UNSUPPORTED。该命令不会直接从 Shell 操作串口。
 
 带参数的临时读写调用 protocolModbusSubmit。使用
@@ -267,14 +296,16 @@ access.result 不使用，状态和协议异常统一通过 complete 返回。
 
 `app_config.h` 的 `APP_MODBUS_MASTER_ENABLE` 仍选择当前唯一物理链路的角色。
 从站使用上述映射；主站按上节配置采集 30 个 FAN SIG。
-增减轮询项直接修改 FAN_modbus_master.c 的 polls 数组，初始化先校验全部目标，
-失败时不打开串口。同一区域内地址连续且未要求断帧的项由 aModbus 合并为一帧。
-整轮最小周期 1000 ms，帧间让出 1 ms，失败让出至少 5 ms；失败也推进列表。
+增减轮询项直接修改 FAN_modbus_master.c 的 client_maps 数组，初始化先校验全部目标，
+失败时不打开串口。同一区域内地址连续且未要求断帧的项由 aComm 映射合并为一次请求。
+整轮最小周期 1000 ms，帧间让出 1 ms，失败让出至少 5 ms；可恢复读取失败
+额外重试两次，耗尽后推进列表。
 若通信耗时已超周期，不额外等待一整秒。
 
 protocol.c 按链路保存独立实例和轮询状态。后续多端口可注册多个链路，
 当前仅装配一条 USART2，不同时启动主从。aStream.context 区分端口实例，
-RTU 的帧流由 aModbusRtuBindTransport 统一绑定，新增链路复用同一组回调。
+帧流由 aComm 通道提供，经 aModbusBindChannel 转交给协议栈；
+新增链路注册自己的 context，复用同一组收发及协议检查回调。
 重复 protocolInit 返回 BUSY，不提供运行期重启。
 
 ## 持久化与启动
@@ -337,9 +368,9 @@ IDU_modbus_slave.c；protocol.c 在 APP_MODBUS_ENABLE 内按主从角色声明�
 
 ```c
 #if APP_MODBUS_MASTER_ENABLE
-extern const protocolModbusConfig_t FAN_modbus_master_config;
+extern const protocolClientConfig_t FAN_modbus_master_config;
 #else
-extern const protocolModbusConfig_t IDU_modbus_slave_config;
+extern const protocolServerConfig_t IDU_modbus_slave_config;
 #endif
 ```
 
@@ -385,3 +416,15 @@ system 通过 protocol.h 取得点表配置并向 protocolInit 传入总线；�
   声明 jiffies 与 jiffies_64；可写计时状态仍有独立的读取和同步要求。
 - 仓库中的 [nr_micro_shell.h](../../func/aShell/nr_micro_shell/inc/nr_micro_shell.h)
   通过 extern 引用 cmd_table 和 cmd_table_size。
+
+### 按 SIG 的异步测试
+
+主站且 ABUS_EVENT_ENABLE 开启时，test 任务每 5 秒调用 protocolRequest，
+目标仅填写 FAN_SIG_DEVICE_ID、FAN_SIG_TEST_003、ABUS_SIG_WHOLE。
+请求值 101～200 循环，后台从 target 的订阅映射取得地址 34、数量 2、字序和超时。
+原有显式地址 protocolModbusSubmit 仍可用于未登记的临时操作。
+
+任务持有静态请求、写值和一项凭据数组；Done 后才复用，完成回调只记结果。
+当前仅有一名接收者，若增加重叠订阅，需要同步增加凭据容量并汇总各自结果。
+收到写应答不直接覆盖本地采集副本，下一轮读取确认；`sig set` 仍只改本地值。
+未轮询项也可用相同方式 READ/WRITE。TEST_001 为协议只读，其余测试项读写。

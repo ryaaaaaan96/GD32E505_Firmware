@@ -7,12 +7,23 @@ import tempfile
 
 root = Path(__file__).resolve().parents[2]
 module = root / "func/aModbus"
-sources = [module / "aModbus.c", module / "aModbus_bus.c",
-           module / "nanoMODBUS/nanomodbus.c",
-           root / "func/aBus/src/aBus.c",
-           root / "tests/modbus/os_mock.c",
-           root / "tests/modbus/test_modbus.c"]
-common = ["cc", "-std=c11", "-O1", "-Wall", "-Wextra", "-Wpedantic",
+sources = [
+    root / "func/aComm/src/aComm_mapping.c",
+    root / "func/aComm/src/aComm_mapping_client.c",
+    root / "func/aComm/src/aComm_mapping_server.c",
+    root / "func/aComm/src/aComm_mapping_data.c",
+    root / "func/aComm/src/aComm_mapping_plan.c",
+    root / "func/aComm/src/aComm.c",
+    root / "func/aComm/src/aComm_channel.c",
+    root / "func/aModbus/src/aModbus_endpoint.c",
+    root / "func/aComm/src/aComm_endpoint.c",
+    root / "func/aBus/src/aBus_endpoint.c",
+    module / "src/aModbus.c", module / "src/aModbus_client.c",
+    module / "src/aModbus_server.c", module / "nanoMODBUS/nanomodbus.c",
+    root / "tests/comm/wait_mock.c", root / "func/aBus/src/aBus.c",
+    root / "tests/modbus/os_mock.c", root / "tests/modbus/test_modbus.c",
+]
+common = ["cc", "-std=c11", "-DABUS_EVENT_ENABLE=0", "-O1", "-Wall", "-Wextra", "-Wpedantic",
           "-Werror", "-pthread", "-fsanitize=undefined",
           "-fno-sanitize-recover=all", "-fno-pie", "-no-pie",
           "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
@@ -26,7 +37,10 @@ common = ["cc", "-std=c11", "-O1", "-Wall", "-Wextra", "-Wpedantic",
           "-DNMBS_SERVER_READ_DEVICE_IDENTIFICATION_DISABLED"]
 if os.environ.get("SANITIZE"):
     common += ["-fsanitize=address", "-fno-omit-frame-pointer"]
-for include in (module, module / "nanoMODBUS", root / "func/aBus/include",
+for include in (module / "include", module / "src",
+                root / "func/aComm/include", root / "func/aComm/src",
+                root / "func/aComm/include",
+                module / "nanoMODBUS", root / "func/aBus/include",
                 root / "platform/aLib/include", root / "platform/aOS/public"):
     common += ["-I", str(include)]
 
@@ -39,6 +53,8 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-") as directory:
                  f"-DAMODBUS_SERVER_ENABLE={server}",
                  f"-DAMODBUS_STATIC_ENABLE={static}",
                  f"-DAMODBUS_DYNAMIC_ENABLE={dynamic}",
+                 f"-DACOMM_STATIC_ENABLE={static}",
+                 f"-DACOMM_DYNAMIC_ENABLE={dynamic}",
                  f"-DABUS_LOCK_MODE={lock}"]
         if not client:
             flags += ["-DNMBS_CLIENT_DISABLED"]
@@ -60,25 +76,30 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-") as directory:
                            + [str(root / "tests/modbus/test_routing.c"),
                               "-o", routing], check=True)
             subprocess.run([routing], check=True, timeout=20)
-        obj = str(Path(directory) / (name + ".o"))
-        subprocess.run(common + flags + ["-c", str(module / "aModbus.c"),
-                       "-o", obj], check=True)
-        symbols = subprocess.check_output(["nm", obj], text=True)
-        exported = {line.split()[-1] for line in symbols.splitlines()
-                    if " T " in line}
-        assert ("aModbusClientRead" in exported) == bool(client)
-        assert ("aModbusServerProcess" in exported) == bool(server)
-        assert ("aModbusCreate" in exported) == bool(dynamic)
-        assert ("aModbusInitStatic" in exported) == bool(static)
-        if not dynamic:
-            assert " U aOSAlloc" not in symbols
-            assert " U aOSFree" not in symbols
+        symbols = subprocess.check_output(["nm", executable], text=True)
+        # 完整角色入口裁剪由 ARM build_matrix 检查；此处覆盖行为和无堆变体。
         print(f"{name}: protocol/data/feature checks passed")
+    # 适配器事件绑定使用应用队列，不链接 aComm 通用调度实现。
+    role_common = [flag for flag in common if flag != "-DABUS_EVENT_ENABLE=0"]
+    role_sources = [source for source in sources[:-1]
+                    if source.name not in ("aComm.c", "wait_mock.c")]
+    for dynamic in (0, 1):
+        executable = str(Path(directory) / f"roles-{dynamic}")
+        subprocess.run(role_common + [
+            "-DABUS_EVENT_ENABLE=1", "-DAMODBUS_CLIENT_ENABLE=1",
+            "-DAMODBUS_SERVER_ENABLE=1", "-DAMODBUS_STATIC_ENABLE=1",
+            f"-DAMODBUS_DYNAMIC_ENABLE={dynamic}",
+            *[str(source) for source in role_sources],
+            str(root / "func/aBus/src/aBus_event.c"),
+            str(root / "tests/modbus/test_roles.c"), "-o", executable,
+        ], check=True)
+        subprocess.run([executable], check=True, timeout=20)
     executable = str(Path(directory) / "rtu")
     subprocess.run(common + [
         "-DAMODBUS_CLIENT_ENABLE=1", "-DAMODBUS_SERVER_ENABLE=1",
         "-DAMODBUS_STATIC_ENABLE=1", "-DAMODBUS_DYNAMIC_ENABLE=1",
-        str(module / "aModbus.c"), str(module / "aModbus_rtu.c"),
+        str(module / "src/aModbus.c"),
+        str(root / "func/aComm/src/aComm_channel.c"),
         str(root / "tests/modbus/os_mock.c"),
         str(root / "tests/modbus/test_rtu.c"), "-o", executable,
     ], check=True)

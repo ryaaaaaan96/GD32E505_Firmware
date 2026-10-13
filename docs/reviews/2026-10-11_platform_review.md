@@ -253,8 +253,8 @@ USART ASan/UBSan、DMA、控制台联测、Modbus 和架构检查通过，驱动
 验证：Modbus 及板级 Demo 主机回归在 ASan/UBSan 下通过，架构与公共头
 检查通过。尚未进行完整固件构建或板上时序验证。
 
-位置：[aModbus_rtu.h](../../func/aModbus/aModbus_rtu.h)、
-[aModbus_rtu.c](../../func/aModbus/aModbus_rtu.c)。
+位置：[aComm_channel.h](../../func/aComm/include/aComm_channel.h)、
+[aComm_channel.c](../../func/aComm/src/aComm_channel.c)。
 
 ## 8. aStream 实例上下文与 EOF（中高，已修复）
 
@@ -281,7 +281,7 @@ Debug 及 7 组 Release 裁剪构建通过，尚未进行板上验证。
 须改为错误码。Linux 具体设备及连接管理仍留给后端和应用，不在本项新增。
 
 位置：[aStream.h](../../platform/aLib/include/aStream.h)、
-[aShell.c](../../func/aShell/src/aShell.c)、[aModbus_rtu.c](../../func/aModbus/aModbus_rtu.c)。
+[aShell.c](../../func/aShell/src/aShell.c)、[aComm_channel.c](../../func/aComm/src/aComm_channel.c)。
 
 ## 9. 任务退出等待（中，接口已预留）
 
@@ -335,7 +335,7 @@ ASan/UBSan、公共头/架构检查、Debug 固件及 14 组裁剪构建通过�
 
 ## 12. 静态实例不等于无堆运行（中，保留限制）
 
-USART 静态初始化仍可能动态创建等待对象；aPoll 静态初始化会创建等待对象
+USART 静态初始化仍可能动态创建等待对象；aComm 静态初始化会创建等待对象
 和互斥锁；当前 aOS 构建依赖 FreeRTOS 动态分配能力。
 
 决定：保持当前设计，本项作为 TODO 中的已知限制，不改造静态 OS 资源。
@@ -343,7 +343,7 @@ USART 静态初始化仍可能动态创建等待对象；aPoll 静态初始化�
 产品要求确定性内存或零堆，再单独规划等待对象、锁、任务等资源的静态存储。
 
 位置：[aDev_usart.c](../../device/aDev_usart/src/aDev_usart.c)、
-[aPoll.c](../../func/aPoll/aPoll.c)、[aOS 构建](../../platform/aOS/CMakeLists.txt)。
+[aComm.c](../../func/aComm/src/aComm.c)、[aOS 构建](../../platform/aOS/CMakeLists.txt)。
 
 ## 13. 链接段注册机制（中，保持设计）
 
