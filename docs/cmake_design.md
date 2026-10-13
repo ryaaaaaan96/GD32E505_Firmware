@@ -78,7 +78,7 @@ TX/RX 模式和 IDLE 在初始化时选择。主要依赖如下：
 | device RS485 | driver GPIO、USART interrupt |
 | driver USART DMA | driver USART、通用 DMA 驱动 |
 | aDataBase | aMemory；只读点表契约由 aBusTable 提供，无需启用 aBus 运行库 |
-| aModbus | aBus，以及至少一种实例分配接口和主/从角色 |
+| aModbus | aComm，以及至少一种实例分配接口和主/从角色 |
 | 本产品数据库演示 | aDataBase、Flash25Q；应用通过 aMemory 注册介质和分区 |
 | 本产品 Modbus 演示 | aModbus 相应角色、USART 中断收发和 RS485 能力 |
 

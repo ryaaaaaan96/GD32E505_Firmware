@@ -4,19 +4,17 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
-
 root = Path(__file__).resolve().parents[2]
 module = root / "func/aModbus"
 sources = [
-    root / "func/aComm/src/aComm_mapping.c",
-    root / "func/aComm/src/aComm_mapping_client.c",
-    root / "func/aComm/src/aComm_mapping_server.c",
-    root / "func/aComm/src/aComm_mapping_data.c",
-    root / "func/aComm/src/aComm_mapping_plan.c",
+    root / "func/aModbus/src/aModbus_mapping.c",
+    root / "func/aModbus/src/aModbus_mapping_data.c",
+    root / "func/aComm/src/aComm_table.c",
     root / "func/aComm/src/aComm.c",
     root / "func/aComm/src/aComm_channel.c",
     root / "func/aModbus/src/aModbus_endpoint.c",
     root / "func/aComm/src/aComm_endpoint.c",
+    root / "func/aComm/src/aComm_binding.c",
     root / "func/aBus/src/aBus_endpoint.c",
     module / "src/aModbus.c", module / "src/aModbus_client.c",
     module / "src/aModbus_server.c", module / "nanoMODBUS/nanomodbus.c",
@@ -43,7 +41,6 @@ for include in (module / "include", module / "src",
                 module / "nanoMODBUS", root / "func/aBus/include",
                 root / "platform/aLib/include", root / "platform/aOS/public"):
     common += ["-I", str(include)]
-
 profiles = ((1, 1, 1, 1, 0), (1, 1, 1, 0, 1), (1, 1, 0, 1, 2),
             (1, 0, 1, 0, 0), (0, 1, 0, 1, 1))
 with tempfile.TemporaryDirectory(prefix="aclass-modbus-") as directory:
@@ -104,7 +101,15 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-") as directory:
         str(root / "tests/modbus/test_rtu.c"), "-o", executable,
     ], check=True)
     subprocess.run([executable], check=True, timeout=20)
-
+    for static, dynamic in ((1, 0), (0, 1)):
+        executable = str(Path(directory) / f"mapping-{static}-{dynamic}")
+        subprocess.run(common + [
+            f"-DACOMM_STATIC_ENABLE={static}",
+            f"-DACOMM_DYNAMIC_ENABLE={dynamic}",
+            *[str(p) for p in sources[:-1]],
+            str(root / "tests/modbus/test_mapping.c"), "-o", executable,
+        ], check=True)
+        subprocess.run([executable], check=True, timeout=20)
     for lock in (1, 2):
         executable = str(Path(directory) / f"consistency-{lock}")
         subprocess.run(common + [

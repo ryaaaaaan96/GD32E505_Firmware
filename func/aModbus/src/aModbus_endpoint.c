@@ -1,5 +1,10 @@
+#include "aModbus_mapping_internal.h"
 #include "aModbus_endpoint.h"
+#include "aModbus_instance.h"
+
 #include <string.h>
+
+static aCommEndpoint_t validation_endpoint;
 
 static aBool_t area_valid(uint16_t area)
 {
@@ -14,7 +19,7 @@ static aBool_t area_writable(uint16_t area)
 
 static aStatus_t value_info(const aCommDataInfo_t *sig,
     const aCommTarget_t *target, uint16_t area,
-    uint8_t order, aCommValueInfo_t *info)
+    uint8_t order, aModbusMapValue_t *info)
 {
     info->params = NULL;
     info->param_count = 0U;
@@ -79,7 +84,7 @@ static aStatus_t value_info(const aCommDataInfo_t *sig,
 /* 严格整组布局：每项占完整寄存器，按偏移连续覆盖全部 RAM 字节。
  * 从站初始化及主站请求预检查执行；定义在实例使用期间不可修改。
  */
-static aStatus_t structure_check(const aCommValueInfo_t *info)
+static aStatus_t structure_check(const aModbusMapValue_t *info)
 {
     size_t end = 0U;
     if (info->type != ALIB_DATA_STRUCT) return A_STATUS_OK;
@@ -102,9 +107,9 @@ static aStatus_t structure_check(const aCommValueInfo_t *info)
     return end == info->size ? A_STATUS_OK : A_STATUS_INVALID_PARAM;
 }
 
-static aCommValueInfo_t param_info(const aDataField_t *param)
+static aModbusMapValue_t param_info(const aDataField_t *param)
 {
-    const aCommValueInfo_t info = {
+    const aModbusMapValue_t info = {
         .type = param->type, .size = param->size, .range = param->range,
         .quantity = (uint16_t)(param->size / 2U)
     };
@@ -118,7 +123,7 @@ static uint8_t param_order(const aDataField_t *param,
            order : AMODBUS_WORD_HIGH_FIRST;
 }
 
-static aStatus_t value_check(const aCommValueInfo_t *info,
+static aStatus_t value_check(const aModbusMapValue_t *info,
                              const void *data)
 {
     aDataValue_t value = {0};
@@ -151,7 +156,7 @@ static aStatus_t value_check(const aCommValueInfo_t *info,
     return A_STATUS_INVALID_PARAM;
 }
 
-static aStatus_t value_decode(const aCommValueInfo_t *info,
+static aStatus_t value_decode(const aModbusMapValue_t *info,
     uint16_t area, uint8_t order,
     const void *protocol, void *value)
 {
@@ -183,7 +188,7 @@ static aStatus_t value_decode(const aCommValueInfo_t *info,
     return value_check(info, value);
 }
 
-static aStatus_t value_encode(const aCommValueInfo_t *info,
+static aStatus_t value_encode(const aModbusMapValue_t *info,
     uint16_t area, uint8_t order,
     const void *value, void *protocol)
 {
@@ -212,7 +217,7 @@ static aStatus_t value_encode(const aCommValueInfo_t *info,
     return A_STATUS_OK;
 }
 /* 只复制所请求的寄存器；标量/RAW 写入必须完整，读取可截取半个标量。 */
-static aStatus_t scalar_register_copy(const aCommValueInfo_t *info,
+static aStatus_t scalar_register_copy(const aModbusMapValue_t *info,
     uint8_t order, size_t first, size_t count,
     void *value, uint16_t *registers, aBool_t write)
 {
@@ -235,7 +240,7 @@ static aStatus_t scalar_register_copy(const aCommValueInfo_t *info,
 /* 整组使用 offset / 2 定位，只编解码本次请求涉及的字段。
  * 不展开运行时点表；value 为整组工作区，保留未涉及的字段。
  */
-static aStatus_t register_copy(const aCommValueInfo_t *info,
+static aStatus_t register_copy(const aModbusMapValue_t *info,
     uint8_t order, size_t first, size_t count,
     void *value, uint16_t *registers, aBool_t write)
 {
@@ -249,7 +254,7 @@ static aStatus_t register_copy(const aCommValueInfo_t *info,
         size_t start = param->offset / 2U;
         size_t finish = start + param->size / 2U;
         size_t at, until;
-        aCommValueInfo_t field;
+        aModbusMapValue_t field;
         aStatus_t status;
         if (start >= end) break;
         if (finish <= first) continue;
@@ -264,7 +269,7 @@ static aStatus_t register_copy(const aCommValueInfo_t *info,
     return A_STATUS_OK;
 }
 
-static aStatus_t copy_value(const aCommValueInfo_t *info, uint16_t area,
+static aStatus_t copy_value(const aModbusMapValue_t *info, uint16_t area,
     uint8_t order, size_t first, size_t count, void *value, void *wire,
     aBool_t write)
 {
@@ -277,12 +282,12 @@ static aStatus_t copy_value(const aCommValueInfo_t *info, uint16_t area,
 }
 
 static aStatus_t area_info(aCommEndpoint_t *base, uint16_t area,
-    aCommAreaInfo_t *info)
+    aModbusMapArea_t *info)
 {
     (void)base;
     if (!area_valid(area)) return A_STATUS_INVALID_PARAM;
     aBool_t bits = aModbusAreaIsBits(area);
-    *info = (aCommAreaInfo_t){
+    *info = (aModbusMapArea_t){
         .unit_bits = bits ? 1U : 16U,
         .read_limit = bits ? AMODBUS_MAX_BITS : AMODBUS_MAX_REGISTERS,
         .write_limit = bits ? 1968U : 123U,
@@ -292,13 +297,13 @@ static aStatus_t area_info(aCommEndpoint_t *base, uint16_t area,
 }
 
 static aStatus_t access_check(aCommEndpoint_t *base,
-    const aCommAddress_t *address, const void *data, size_t size,
+    const aModbusMapAddress_t *address, const void *data, size_t size,
     aBool_t write)
 {
-    aModbusEndpoint_t *endpoint = (aModbusEndpoint_t *)base;
     aModbusInfo_t info = {.transport_type = AMODBUS_TRANSPORT_RTU};
-    if (endpoint->protocol != NULL) {
-        aStatus_t status = aModbusGetInfo(endpoint->protocol, &info);
+    if (base != &validation_endpoint) {
+        aModbusHandle_t *handle = (aModbusHandle_t *)base;
+        aStatus_t status = aModbusGetInfo(handle, &info);
         if (status != A_STATUS_OK) return status;
     }
     if (info.transport_type == AMODBUS_TRANSPORT_RTU &&
@@ -311,9 +316,10 @@ static aStatus_t access_check(aCommEndpoint_t *base,
 
 static aStatus_t ready(aCommEndpoint_t *base)
 {
-    aModbusEndpoint_t *endpoint = (aModbusEndpoint_t *)base;
     aModbusInfo_t info;
-    aStatus_t status = aModbusGetInfo(endpoint->protocol, &info);
+    if (base == &validation_endpoint) return A_STATUS_NOT_READY;
+    aModbusHandle_t *handle = (aModbusHandle_t *)base;
+    aStatus_t status = aModbusGetInfo(handle, &info);
     if (status != A_STATUS_OK) return status;
     return info.role == AMODBUS_ROLE_CLIENT ? A_STATUS_OK :
            A_STATUS_UNSUPPORTED;
@@ -331,8 +337,9 @@ static aStatus_t read_value(aCommEndpoint_t *base,
     const aCommReadAccess_t *request)
 {
 #if AMODBUS_CLIENT_ENABLE
-    aModbusEndpoint_t *endpoint = (aModbusEndpoint_t *)base;
-    const aCommAddress_t *address = request->target;
+    if (base == &validation_endpoint) return A_STATUS_NOT_READY;
+    aModbusHandle_t *handle = (aModbusHandle_t *)base;
+    const aModbusMapAddress_t *address = request->target;
     aModbusResult_t result = {0};
     const aModbusClientReadRequest_t read = {
         .unit_id = address->unit_id,
@@ -340,7 +347,7 @@ static aStatus_t read_value(aCommEndpoint_t *base,
             address->quantity, request->data, request->size, request->timeout},
         .result = &result
     };
-    aStatus_t status = aModbusClientRead(endpoint->protocol, &read);
+    aStatus_t status = aModbusClientRead(handle, &read);
     result_copy(request->result, &result);
     return status;
 #else
@@ -353,8 +360,9 @@ static aStatus_t write_value(aCommEndpoint_t *base,
     const aCommWriteAccess_t *request)
 {
 #if AMODBUS_CLIENT_ENABLE
-    aModbusEndpoint_t *endpoint = (aModbusEndpoint_t *)base;
-    const aCommAddress_t *address = request->target;
+    if (base == &validation_endpoint) return A_STATUS_NOT_READY;
+    aModbusHandle_t *handle = (aModbusHandle_t *)base;
+    const aModbusMapAddress_t *address = request->target;
     aModbusResult_t result = {0};
     const aModbusClientWriteRequest_t write = {
         .unit_id = address->unit_id,
@@ -362,7 +370,7 @@ static aStatus_t write_value(aCommEndpoint_t *base,
             address->quantity, request->data, request->size, request->timeout},
         .result = &result
     };
-    aStatus_t status = aModbusClientWrite(endpoint->protocol, &write);
+    aStatus_t status = aModbusClientWrite(handle, &write);
     result_copy(request->result, &result);
     return status;
 #else
@@ -371,8 +379,8 @@ static aStatus_t write_value(aCommEndpoint_t *base,
 #endif
 }
 
-static aStatus_t prepare(aCommEndpoint_t *base, const aCommAddress_t *address,
-    aCommPrepared_t *prepared)
+static aStatus_t prepare(aCommEndpoint_t *base,
+    const aModbusMapAddress_t *address, aCommPrepared_t *prepared)
 {
 #if AMODBUS_CLIENT_ENABLE
     (void)base;
@@ -385,7 +393,6 @@ static aStatus_t prepare(aCommEndpoint_t *base, const aCommAddress_t *address,
     if (status == A_STATUS_OK) {
         memcpy(prepared->data, &frame, sizeof(frame));
         prepared->size = sizeof(frame);
-        prepared->address = *address;
     }
     return status;
 #else
@@ -398,7 +405,8 @@ static aStatus_t read_prepared(aCommEndpoint_t *base,
     const aCommPrepared_t *prepared, const aCommReadAccess_t *request)
 {
 #if AMODBUS_CLIENT_ENABLE
-    aModbusEndpoint_t *endpoint = (aModbusEndpoint_t *)base;
+    if (base == &validation_endpoint) return A_STATUS_NOT_READY;
+    aModbusHandle_t *handle = (aModbusHandle_t *)base;
     aModbusPreparedRead_t frame;
     aModbusResult_t result = {0};
     if (prepared->size != sizeof(frame)) return A_STATUS_INVALID_PARAM;
@@ -406,7 +414,7 @@ static aStatus_t read_prepared(aCommEndpoint_t *base,
     const aModbusPreparedReadRequest_t read = {
         &frame, request->data, request->size, request->timeout, &result
     };
-    aStatus_t status = aModbusClientReadPrepared(endpoint->protocol, &read);
+    aStatus_t status = aModbusClientReadPrepared(handle, &read);
     result_copy(request->result, &result);
     return status;
 #else
@@ -429,10 +437,10 @@ static aStatus_t slice(const aCommDataInfo_t *info, size_t index,
     return A_STATUS_OK;
 }
 
-static aBool_t merge(aCommEndpoint_t *base, const aCommAddress_t *first,
-    const aCommAddress_t *next)
+static aBool_t merge(aCommEndpoint_t *base, const aModbusMapAddress_t *first,
+    const aModbusMapAddress_t *next)
 {
-    aCommAreaInfo_t area;
+    aModbusMapArea_t area;
     if (area_info(base, first->area, &area) != A_STATUS_OK) return A_FALSE;
     return first->unit_id == next->unit_id && first->area == next->area &&
         (uint32_t)first->address + first->quantity == next->address &&
@@ -440,7 +448,7 @@ static aBool_t merge(aCommEndpoint_t *base, const aCommAddress_t *first,
         next->quantity <= area.read_limit - first->quantity;
 }
 
-static const aCommAddressOps_t address_ops = {
+static const aModbusAddressOps_t address_ops = {
     .ready = ready, .area = area_info, .check = access_check,
     .describe = value_info, .layout = structure_check, .copy = copy_value,
     .slice = slice, .merge = merge,
@@ -448,38 +456,20 @@ static const aCommAddressOps_t address_ops = {
     .provider_type = 1U
 };
 static const aCommEndpointOps_t endpoint_ops = {
-    .read = read_value, .write = write_value, .address = &address_ops
+    .read = read_value, .write = write_value, .extension = &address_ops
 };
-_Static_assert(offsetof(aModbusEndpoint_t, base) == 0U,
-               "endpoint base must be first");
-void aModbusEndpointInit(aModbusEndpoint_t *endpoint,
-    aModbusHandle_t *protocol)
+static aCommEndpoint_t validation_endpoint = {.ops = &endpoint_ops};
+_Static_assert(offsetof(aModbusHandle_t, comm) == 0U,
+               "common endpoint must be first");
+aCommEndpoint_t *aModbusCommEndpoint(aModbusHandle_t *handle)
 {
-    if (endpoint != NULL) *endpoint = (aModbusEndpoint_t){
-        .base.ops = &endpoint_ops, .protocol = protocol
-    };
+    if (handle == NULL) return &validation_endpoint;
+    return &handle->comm;
 }
-
-aStatus_t aModbusEndpointServerRead(void *context,
-    const aModbusAddressReadRequest_t *request)
+/* 仅在实例初始化时写入，运行中查询端点不修改状态。 */
+void aModbusEndpointInit(aModbusHandle_t *handle)
 {
-    aModbusEndpoint_t *endpoint = context;
-    if (endpoint == NULL || request == NULL) return A_STATUS_INVALID_PARAM;
-    if (endpoint->read == NULL) return A_STATUS_UNSUPPORTED;
-    const aCommAddressReadRequest_t read = {request->area, request->address,
-        request->quantity, request->data, request->size, request->timeout};
-    return endpoint->read(endpoint->context, &read);
-}
-
-aStatus_t aModbusEndpointServerWrite(void *context,
-    const aModbusAddressWriteRequest_t *request)
-{
-    aModbusEndpoint_t *endpoint = context;
-    if (endpoint == NULL || request == NULL) return A_STATUS_INVALID_PARAM;
-    if (endpoint->write == NULL) return A_STATUS_UNSUPPORTED;
-    const aCommAddressWriteRequest_t write = {request->area, request->address,
-        request->quantity, request->data, request->size, request->timeout};
-    return endpoint->write(endpoint->context, &write);
+    handle->comm.ops = &endpoint_ops;
 }
 
 aStatus_t aModbusBindChannel(aCommChannel_t *channel,

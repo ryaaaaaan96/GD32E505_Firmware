@@ -30,7 +30,7 @@ app：资源配置、初始化、任务、传输/介质适配
 
 这表示职责与主要依赖方向，不要求每条调用都经过全部层级。
 例如 aShell 使用注入的 aStream，aDataBase 使用 aMemory，aModbus 使用
-aBus 和传输回调；它们不直接选择本产品的 USART 或 Flash 实例。
+aComm 提供的数据端点和通道回调；它们不直接选择本产品的 USART 或 Flash 实例。
 
 禁止 aCore 反向依赖 aDrv。app、func、device、aOS、aLib 和 `aDrv/include` 不得
 包含 GD32 厂商头文件。
@@ -137,11 +137,19 @@ FlashDB 的项目适配直接调用 aMemory，并提供 KV 索引扩展；本地
 
 aBus 持有业务类型、长度和范围；aBus_table.h 单独提供只读定义，aBusTable
 目标仅依赖 aLib。aDataBase 借用该契约，不要求创建 aBus 的 RAM 实例。
-aModbus 收紧为纯协议栈，只认识协议地址、缓冲区、传输和同步地址回调。
-aComm 的通用映射持有业务映射、快照、计划和订阅，通过公开 API
-调用端点回调。具体 aModbus/aBus 端点由应用创建并注册，通用映射不引用协议模块。
-协议 quantity 表示寄存器数或位数，本地业务长度以字节表达；映射数量、
-权限和数量匹配由 aComm 映射校验，协议编码及布局规则由协议端点提供。详见 [映射适配](../func/aComm/README.md)。
+aModbus 依赖 aComm，提供协议事务、Modbus 地址映射与通信表回调。
+具体协议表项以 `aCommEntry_t comm` 为首成员，周期、权限、数据目标及
+事件掩码平铺在公共成员内；寄存器区域、地址、数量和字序由 Modbus 定义。
+aComm 借用具体数组及回调，通过回调取表项、判断合并和执行事务，
+统一管理计划、周期、重试和队列，不引用协议模块或 aBus。
+主从都通过 aCommConfig_t.protocol 注册不透明配置、数组及初始化/处理/释放回调。
+生命周期回调表由应用产品文件定义，aModbus 提供可注册的实现函数；
+Modbus 自己解释角色和地址类型；公共 flags 合并读写权限与断帧标志。
+数据端点由应用注册，协议端点嵌入 aModbus 实例。
+协议 quantity 表示寄存器数或位数，本地业务长度以字节表达；
+公共访问权限、快照工作区、订阅槽和完成发布由 aComm 绑定处理；
+协议数量匹配、寄存器转换与地址路由由 Modbus 映射处理。详见
+[Modbus 映射](../func/aModbus/README.md)和[aComm 表注册](../func/aComm/README.md)。
 
 当前板级[产品协议](../app/protocol/README.md)使用 USART2 和 PA15 手动 DE，
 当前配置为 RTU 主站，目标站号 1，可通过应用宏切换主从。应用协议配置位于
@@ -151,7 +159,8 @@ STRUCT 字段同样生成名称和描述；主从配置文件直接定义从站�
 地址段与主站采集数组。字段映射引用字段枚举；整组映射用 WHOLE 引用 SIG，
 要求参数按内存偏移连续覆盖全部结构体，字段长度为偶数，地址为起点加 offset/2。
 整组布局由应用显式维护，修改字段偏移会改变协议地址；编解码与布局校验由
-Modbus 端点承担，aComm 负责地址路由和数据端点读写。默认路径按 SIG 取快照/更新，自定义部分写按完整字段回调。
+Modbus 端点承担，Modbus 映射负责地址路由，通过 aComm 绑定访问数据端点。
+默认路径按 SIG 取快照/更新，自定义部分写按完整字段回调。
 从站回调段 ranges 与离散映射 maps 在配置中平级，未命中回调段才查映射。
 两表分别有序且完整地址范围互不重叠；回调失败直接返回，不触发兜底访问。
 SIG 的多用途定义保留 X-Macro，协议数组使用普通 C 初始化，不再单独维护映射清单。
@@ -163,8 +172,9 @@ protocol_tables.c 提供数据定义、可选字段长度检查、RAM 存储计�
 FlashDB 私有索引布局或 aMemory 分区尺寸。
 func/aModbus 通过注入的流回调收发，aComm 通道负责缓冲、分帧与静默等待；
 app/devices/rs485/rs485_device.c 只持有串口，提供 ISR、DWT 和线路完成操作，
-不依赖 aModbus。app/protocol/protocol.c 统一持有协议、映射映射实例和 aComm 通道实例，
-根据主从配置装配资源并创建通信任务，不设置通用任务注册框架。
+不依赖 aModbus。app/protocol/protocol.c 统一持有协议、映射和 aComm 通道实例，
+提供数据端点和通道，通过 aComm 注册回调初始化并释放主从资源，
+应用只编排端口和任务，不设置通用任务注册框架。
 aComm 通道通过回调使用时基、同步及收发，不依赖具体协议、设备或芯片。
 应用提供最终微秒时间，aComm 初始化时转换为计数，运行期执行间隔判断和等待；
 aModbus 只提供可选默认值，不接触硬件计数频率。
@@ -265,13 +275,20 @@ Python/XML 生成校验尚未实现。平台迁移及尚未完成的硬件验收
 ## 通信调度边界
 
 aComm 通用调度管理周期作业、有限重试、合并事件、临时请求和等待通知。
-aComm 映射管理地址分组、计划、业务转换与 aBus 交换。
-aModbus 核心管固定请求编码、响应解析、协议校验并提供 RTU 默认微秒值。
-可选端点实现 aComm 契约；核心仍可独立使用，不依赖 aBus。
+aComm 根据注册的具体协议数组生成分组计划和内部作业；协议回调判断
+相邻项是否可以合并，并负责缓存报文和实际事务。
+aModbus 管固定请求编码、响应解析、协议校验并提供 RTU 默认微秒值；
+映射代码处理协议地址及数据转换，通过 aComm 绑定完成数据交换。
+aComm 绑定管理快照、订阅节点、非阻塞入队及完成通知，不直接依赖 aBus。
 aComm 整个模块只依赖 aOS/aLib，通道模式为 STREAM/GAP，不设置具体协议枚举。
-通用调度和映射不引用具体协议，通过公共端点函数表调用具体实现。
-app/protocol 组合配置、适配回调并创建通信任务；system 在总线初始化及
+公共表项的目标标识直接使用 deviceID、sigIndex、paramIndex，不嵌套 target。
+具体数组通过 get 回调访问，禁止将协议数组强转成公共表项数组后遍历。
+app/protocol 注册通信表、协议回调和上下文，配置资源并创建通信任务；
+应用无需手动组装主站计划、分组和周期作业。system 在总线初始化及
 参数恢复之后调用 protocolInit。一个串口的所有主站请求由同一任务串行执行。
-本 Demo 从站注册连续作业回调调用 ServerProcess，主从任务复用 Process/Wait。
-纯 aModbus 仍可由应用直接调用，不要求创建 aComm。
+本 Demo 从站由注册 process 回调调用 ServerProcess，
+aComm 自动创建连续服务作业，主从任务复用 Process/Wait。
+公共头收敛为 aComm.h、aComm_endpoint.h、aComm_channel.h 和
+aComm_instance.h；仅静态资源或嵌入运行状态时包含 instance。
+aModbus 的同步事务 API 仍可由应用直接调用，无需创建调度器实例。
 详细契约见 [aComm](../func/aComm/README.md) 和 [产品协议](../app/protocol/README.md)。

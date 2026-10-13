@@ -35,4 +35,5 @@ aModbusHandle_t *aModbusAllocate(void);
 void aModbusServerCallbacks(aModbusHandle_t *handle,
     nmbs_callbacks *callbacks);
 #endif
+void aModbusEndpointInit(aModbusHandle_t *handle);
 #endif

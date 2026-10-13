@@ -1,4 +1,4 @@
-#include "aComm_channel_instance.h"
+#include "aComm_instance.h"
 #include "aOS.h"
 #include <string.h>
 

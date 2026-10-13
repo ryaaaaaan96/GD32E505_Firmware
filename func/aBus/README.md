@@ -455,7 +455,8 @@ Subscribe 的零掩码是参数错误；协议配置零掩码则跳过登记。
 ## 可选通信端点
 
 启用 ACOMM_ENABLE 时编译 aBus_endpoint.c。应用用 aBusEndpointInit 借用已就绪
-的总线，再将首成员 base 交给 aComm 映射。总线核心不调用通信管理或协议栈。
+的总线，再将首成员 base 注册为协议映射的数据端点，例如 aModbus 映射。
+总线核心不调用通信管理或协议栈。
 端点提供 SIG/字段读写、元信息、快照更新与可选事件，不额外创建锁或分配内存。
 同步与范围校验沿用总线原有接口；销毁映射不会销毁总线。
 静态订阅的 native 存储使用 aBusEndpointSubscription_t，生命周期覆盖映射。

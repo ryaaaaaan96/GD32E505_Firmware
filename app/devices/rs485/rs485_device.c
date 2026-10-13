@@ -1,4 +1,5 @@
 #include "rs485_device.h"
+#include "app_config.h"
 #include "aDev_usart.h"
 #include "aDrv_basic.h"
 #include "aOS.h"
@@ -11,7 +12,7 @@ static uint8_t tx_buffer[256U];
 static const aDevUsartConfig_t usart_config = {
     .drv_config = {
         .id = ADRV_USART_2,
-        .baud_rate = 115200U,
+        .baud_rate = APP_RS485_BAUD_RATE,
         .parity = ADRV_USART_PARITY_NONE,
         .stop_bits = ADRV_USART_STOP_1,
         .tx_pin = ADRV_PIN(ADRV_GPIO_PORT_C, 10),

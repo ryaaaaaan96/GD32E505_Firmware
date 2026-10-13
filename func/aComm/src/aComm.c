@@ -1,4 +1,4 @@
-#include "aComm_instance.h"
+#include "aComm_table_internal.h"
 
 #include <limits.h>
 #include <string.h>
@@ -6,7 +6,7 @@
 void aCommConfigStructInit(aCommConfig_t *config)
 {
     if (config != NULL) {
-        const aCommConfig_t defaults = {0};
+        const aCommConfig_t defaults = {.error_delay_ms = 5U};
         *config = defaults;
     }
 }
@@ -37,12 +37,58 @@ void aCommRequestStructInit(aCommRequest_t *request)
     }
 }
 
+static aBool_t table_enabled(const aCommConfig_t *config)
+{
+    return config->table.items != NULL || config->table.count != 0U;
+}
+static const aCommJobConfig_t *job_get(aCommHandle_t *handle, size_t index)
+{
+    return table_enabled(&handle->config) ?
+        &handle->table_jobs[index].config : &handle->config.jobs[index];
+}
+static void table_execute(void *context, size_t step,
+    aCommStepResult_t *result)
+{
+    aCommTableJob_t *job = context;
+    const aCommPlanRequest_t request = {
+        .frame_index = job->first_frame + step, .execution = result
+    };
+    result->status = aCommPlanExecute(job->plan, &request);
+}
+static void table_jobs_init(aCommHandle_t *handle)
+{
+    size_t count = aCommPlanGroupCount(&handle->plan);
+    handle->config.job_count = count;
+    for (size_t i = 0U; i < count; i++) {
+        aCommPlanGroup_t group;
+        (void)aCommPlanGroupGet(&handle->plan, i, &group);
+        aCommTableJob_t *job = &handle->table_jobs[i];
+        *job = (aCommTableJob_t){
+            .plan = &handle->plan, .first_frame = group.first_frame,
+            .config = {
+                .execute = table_execute, .context = job,
+                .step_count = group.frame_count,
+                .poll_time_ms = group.poll_time_ms,
+                .retry_count = handle->config.retry_count,
+                .interval_ms = handle->config.interval_ms,
+                .error_delay_ms = handle->config.error_delay_ms
+            }
+        };
+    }
+}
+
 static aStatus_t config_check(const aCommConfig_t *config)
 {
     if (config == NULL ||
         (config->job_count != 0U && config->jobs == NULL) ||
         (config->event_count != 0U && config->events == NULL)) {
         return A_STATUS_INVALID_PARAM;
+    }
+    if (table_enabled(config)) {
+        if (config->job_count != 0U || config->jobs != NULL ||
+            config->interval_ms > INT32_MAX ||
+            config->error_delay_ms == 0U ||
+            config->error_delay_ms > INT32_MAX) return A_STATUS_INVALID_PARAM;
     }
     for (size_t i = 0U; i < config->job_count; i++) {
         const aCommJobConfig_t *job = &config->jobs[i];
@@ -60,6 +106,60 @@ static aStatus_t config_check(const aCommConfig_t *config)
     return A_STATUS_OK;
 }
 
+aStatus_t aCommConfigCheck(const aCommConfig_t *config)
+{
+    aStatus_t status = config_check(config);
+    if (status != A_STATUS_OK) return status;
+    const aCommProtocol_t *protocol = &config->protocol;
+    if (protocol->ops == NULL) {
+        return protocol->config != NULL || protocol->items != NULL ||
+            protocol->count != 0U || protocol->context != NULL ?
+            A_STATUS_INVALID_PARAM : A_STATUS_OK;
+    }
+    if (table_enabled(config) || config->jobs != NULL ||
+        config->job_count != 0U || protocol->ops->init == NULL ||
+        protocol->ops->deinit == NULL ||
+        (protocol->count != 0U && protocol->items == NULL) ||
+        config->interval_ms > INT32_MAX || config->error_delay_ms == 0U ||
+        config->error_delay_ms > INT32_MAX) return A_STATUS_INVALID_PARAM;
+    return protocol->ops->check == NULL ? A_STATUS_OK :
+        protocol->ops->check(protocol);
+}
+
+/* 初始化回调只准备协议和计划；调度资源分配失败时统一回收协议。 */
+static aStatus_t protocol_prepare(const aCommConfig_t *config,
+    aCommConfig_t *resolved, aCommJobConfig_t *job)
+{
+    aStatus_t status = aCommConfigCheck(config);
+    if (status != A_STATUS_OK) return status;
+    *resolved = *config;
+    const aCommProtocol_t *protocol = &config->protocol;
+    if (protocol->ops == NULL) return A_STATUS_OK;
+    status = protocol->ops->init(protocol, &resolved->table);
+    if (status != A_STATUS_OK) return status;
+    if (!table_enabled(resolved)) {
+        aCommJobConfigStructInit(job);
+        job->execute = protocol->ops->process;
+        job->context = protocol->context;
+        job->retry_count = config->retry_count;
+        job->interval_ms = config->interval_ms;
+        job->error_delay_ms = config->error_delay_ms;
+        resolved->jobs = job;
+        resolved->job_count = 1U;
+    }
+    return A_STATUS_OK;
+}
+static aStatus_t protocol_cleanup(const aCommConfig_t *config,
+    aStatus_t status)
+{
+    if (config->protocol.ops != NULL) {
+        aStatus_t cleanup = config->protocol.ops->deinit(
+            config->protocol.context);
+        if (cleanup != A_STATUS_OK) return cleanup;
+    }
+    return status;
+}
+
 static aStatus_t instance_init(const aCommConfig_t *config,
                               aCommHandle_t *handle, aBool_t dynamic)
 {
@@ -67,10 +167,20 @@ static aStatus_t instance_init(const aCommConfig_t *config,
     if (status != A_STATUS_OK) return status;
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
     if (handle->ready) return A_STATUS_BUSY;
-    if (handle->job_capacity < config->job_count ||
+    size_t job_count = config->job_count;
+    if (table_enabled(config)) {
+        size_t frames, items;
+        status = aCommPlanMeasure(&config->table, &frames, &items, &job_count);
+        if (status != A_STATUS_OK) return status;
+        if (handle->table_capacity < job_count ||
+            (job_count != 0U && handle->table_jobs == NULL)) {
+            return A_STATUS_INVALID_PARAM;
+        }
+    }
+    if (handle->job_capacity < job_count ||
         handle->event_capacity < config->event_count ||
         handle->request_capacity < config->request_capacity ||
-        (config->job_count != 0U && handle->jobs == NULL) ||
+        (job_count != 0U && handle->jobs == NULL) ||
         (config->event_count != 0U && handle->events == NULL) ||
         (config->request_capacity != 0U && handle->requests == NULL)) {
         return A_STATUS_INVALID_PARAM;
@@ -78,15 +188,22 @@ static aStatus_t instance_init(const aCommConfig_t *config,
     handle->wake = NULL;
     handle->queue_mutex = NULL;
     status = aOSWaitObjectCreate(&handle->wake);
-    if (status != A_STATUS_OK) return status;
+    if (status != A_STATUS_OK) goto cleanup;
     if (config->request_capacity != 0U) {
         status = aOSMutexCreate(&handle->queue_mutex);
-        if (status != A_STATUS_OK) {
-            aOSWaitObjectDestroy(&handle->wake);
-            return status;
-        }
+        if (status != A_STATUS_OK) goto cleanup;
+    }
+    if (table_enabled(config)) {
+        status = aCommPlanBind(&config->table, &handle->plan);
+        if (status != A_STATUS_OK) goto cleanup;
     }
     handle->config = *config;
+    if (config->protocol.ops != NULL && !table_enabled(config)) {
+        handle->protocol_job = *config->jobs;
+        handle->config.jobs = &handle->protocol_job;
+    }
+    handle->stopping = A_FALSE;
+    if (table_enabled(config)) table_jobs_init(handle);
     handle->head = 0U;
     handle->used = 0U;
     handle->job_cursor = 0U;
@@ -94,7 +211,7 @@ static aStatus_t instance_init(const aCommConfig_t *config,
     handle->class_cursor = 0U;
     handle->dynamic = dynamic;
     aAtomicInit(&handle->active, A_FALSE);
-    for (size_t i = 0U; i < config->job_count; i++) {
+    for (size_t i = 0U; i < job_count; i++) {
         aCommJobState_t *state = &handle->jobs[i];
         state->step_index = 0U;
         state->retries = 0U;
@@ -109,6 +226,10 @@ static aStatus_t instance_init(const aCommConfig_t *config,
     }
     handle->ready = A_TRUE;
     return A_STATUS_OK;
+cleanup:
+    aOSMutexDestroy(&handle->queue_mutex);
+    aOSWaitObjectDestroy(&handle->wake);
+    return status;
 }
 
 static aStatus_t instance_deinit(aCommHandle_t *handle)
@@ -116,6 +237,15 @@ static aStatus_t instance_deinit(aCommHandle_t *handle)
     if (!handle->ready) return A_STATUS_NOT_READY;
     if (aAtomicLoad(&handle->active) || handle->used != 0U) {
         return A_STATUS_BUSY;
+    }
+    if (handle->plan.ready) {
+        aStatus_t status = aCommPlanUnbind(&handle->plan);
+        if (status != A_STATUS_OK) return status;
+    }
+    if (handle->config.protocol.ops != NULL) {
+        handle->stopping = A_TRUE;
+        aStatus_t status = protocol_cleanup(&handle->config, A_STATUS_OK);
+        if (status != A_STATUS_OK) return status;
     }
     /* 生命周期由应用串行化；必须先停止投递者和等待任务。 */
     handle->ready = A_FALSE;
@@ -127,7 +257,14 @@ static aStatus_t instance_deinit(aCommHandle_t *handle)
 #if ACOMM_STATIC_ENABLE
 aStatus_t aCommInitStatic(const aCommConfig_t *config, aCommHandle_t *handle)
 {
-    return instance_init(config, handle, A_FALSE);
+    aCommConfig_t resolved;
+    aCommJobConfig_t job;
+    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (handle->ready) return A_STATUS_BUSY;
+    aStatus_t status = protocol_prepare(config, &resolved, &job);
+    if (status != A_STATUS_OK) return status;
+    status = instance_init(&resolved, handle, A_FALSE);
+    return status == A_STATUS_OK ? status : protocol_cleanup(&resolved, status);
 }
 
 aStatus_t aCommDeInitStatic(aCommHandle_t *handle)
@@ -155,32 +292,62 @@ aStatus_t aCommCreate(const aCommConfig_t *config, aCommHandle_t **handle_out)
 {
     aCommHandle_t *handle;
     size_t size = sizeof(*handle), jobs, events, requests;
+    size_t frames = 0U, items = 0U, groups = 0U;
+    size_t frame_offset, index_offset, group_offset;
     aStatus_t status;
+    aCommConfig_t resolved;
+    aCommJobConfig_t job;
     if (handle_out == NULL) return A_STATUS_INVALID_PARAM;
     *handle_out = NULL;
-    status = config_check(config);
+    status = protocol_prepare(config, &resolved, &job);
     if (status != A_STATUS_OK) return status;
-    if (!reserve(&size, config->job_count, sizeof(aCommJobState_t), &jobs) ||
+    config = &resolved;
+    status = config_check(config);
+    if (status != A_STATUS_OK) goto cleanup;
+    size_t job_count = config->job_count;
+    if (table_enabled(config)) {
+        status = aCommPlanMeasure(&config->table, &frames, &items, &groups);
+        if (status != A_STATUS_OK) goto cleanup;
+        job_count = groups;
+    }
+    if (!reserve(&size, groups, sizeof(aCommTableJob_t), &group_offset) ||
+        !reserve(&size, frames, sizeof(aCommPlanFrame_t), &frame_offset) ||
+        !reserve(&size, items, sizeof(size_t), &index_offset) ||
+        !reserve(&size, job_count, sizeof(aCommJobState_t), &jobs) ||
         !reserve(&size, config->event_count, sizeof(aCommEventState_t),
                  &events) ||
         !reserve(&size, config->request_capacity, sizeof(aCommRequest_t),
-                 &requests)) return A_STATUS_INVALID_PARAM;
+                 &requests)) {
+        status = A_STATUS_INVALID_PARAM;
+        goto cleanup;
+    }
     handle = aOSAlloc(size);
-    if (handle == NULL) return A_STATUS_NO_MEMORY;
+    if (handle == NULL) {
+        status = A_STATUS_NO_MEMORY;
+        goto cleanup;
+    }
     memset(handle, 0, sizeof(*handle));
     handle->jobs = (void *)((uint8_t *)handle + jobs);
     handle->events = (void *)((uint8_t *)handle + events);
     handle->requests = (void *)((uint8_t *)handle + requests);
-    handle->job_capacity = config->job_count;
+    handle->job_capacity = job_count;
+    handle->table_jobs = (void *)((uint8_t *)handle + group_offset);
+    handle->table_capacity = groups;
+    handle->plan.frames = (void *)((uint8_t *)handle + frame_offset);
+    handle->plan.capacity = frames;
+    handle->plan.indices = (void *)((uint8_t *)handle + index_offset);
+    handle->plan.index_capacity = items;
     handle->event_capacity = config->event_count;
     handle->request_capacity = config->request_capacity;
     status = instance_init(config, handle, A_TRUE);
     if (status != A_STATUS_OK) {
         aOSFree(handle);
-        return status;
+        goto cleanup;
     }
     *handle_out = handle;
     return A_STATUS_OK;
+cleanup:
+    return protocol_cleanup(config, status);
 }
 
 aStatus_t aCommDestroy(aCommHandle_t *handle)
@@ -197,7 +364,7 @@ aStatus_t aCommDestroy(aCommHandle_t *handle)
 aStatus_t aCommEventPost(aCommHandle_t *handle, size_t event_index)
 {
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
-    if (!handle->ready) return A_STATUS_NOT_READY;
+    if (!handle->ready || handle->stopping) return A_STATUS_NOT_READY;
     if (event_index >= handle->config.event_count) return A_STATUS_NOT_FOUND;
     aAtomicStore(&handle->events[event_index].pending, A_TRUE);
     aOSWaitObjectNotify(handle->wake);
@@ -207,7 +374,7 @@ aStatus_t aCommEventPost(aCommHandle_t *handle, size_t event_index)
 aStatus_t aCommJobTrigger(aCommHandle_t *handle, size_t job_index)
 {
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
-    if (!handle->ready) return A_STATUS_NOT_READY;
+    if (!handle->ready || handle->stopping) return A_STATUS_NOT_READY;
     if (job_index >= handle->config.job_count) return A_STATUS_NOT_FOUND;
     aAtomicStore(&handle->jobs[job_index].triggered, A_TRUE);
     aOSWaitObjectNotify(handle->wake);
@@ -221,7 +388,7 @@ aStatus_t aCommSubmit(aCommHandle_t *handle, const aCommRequest_t *request)
     if (handle == NULL || request == NULL || request->execute == NULL) {
         return A_STATUS_INVALID_PARAM;
     }
-    if (!handle->ready) return A_STATUS_NOT_READY;
+    if (!handle->ready || handle->stopping) return A_STATUS_NOT_READY;
     if (handle->config.request_capacity == 0U) return A_STATUS_UNSUPPORTED;
     status = aOSMutexLock(handle->queue_mutex, A_TIMEOUT_NO_WAIT);
     if (status != A_STATUS_OK) return status;
@@ -243,7 +410,7 @@ aStatus_t aCommSubmit(aCommHandle_t *handle, const aCommRequest_t *request)
 static uint32_t job_remaining(aCommHandle_t *handle, size_t index,
                               uint32_t now)
 {
-    const aCommJobConfig_t *job = &handle->config.jobs[index];
+    const aCommJobConfig_t *job = job_get(handle, index);
     aCommJobState_t *state = &handle->jobs[index];
     if (state->step_index == job->step_count) return UINT32_MAX;
     uint32_t remaining = aTimepointRemaining(&state->delay, now).milliseconds;
@@ -265,7 +432,7 @@ static aBool_t job_process(aCommHandle_t *handle, aCommProcessResult_t *result)
     for (size_t n = 0U; n < count; n++) {
         size_t i = (handle->job_cursor + n) % count;
         aCommJobState_t *state = &handle->jobs[i];
-        const aCommJobConfig_t *job = &handle->config.jobs[i];
+        const aCommJobConfig_t *job = job_get(handle, i);
         uint32_t now = aOSGetUptimeMs();
         uint32_t delay;
         if (job_remaining(handle, i, now) != 0U) continue;
@@ -379,7 +546,7 @@ static aTimeout_t next_wait(aCommHandle_t *handle)
 static aStatus_t enter(aCommHandle_t *handle)
 {
     if (handle == NULL) return A_STATUS_INVALID_PARAM;
-    if (!handle->ready) return A_STATUS_NOT_READY;
+    if (!handle->ready || handle->stopping) return A_STATUS_NOT_READY;
     if (aAtomicExchange(&handle->active, A_TRUE)) return A_STATUS_BUSY;
     return A_STATUS_OK;
 }
@@ -432,4 +599,15 @@ aStatus_t aCommWait(aCommHandle_t *handle, aTimeout_t timeout)
     status = aOSWaitObjectWait(handle->wake, timeout);
     aAtomicStore(&handle->active, A_FALSE);
     return status;
+}
+
+aStatus_t aCommTrigger(aCommHandle_t *handle)
+{
+    if (handle == NULL) return A_STATUS_INVALID_PARAM;
+    if (!handle->ready || handle->stopping) return A_STATUS_NOT_READY;
+    for (size_t i = 0U; i < handle->config.job_count; i++) {
+        aAtomicStore(&handle->jobs[i].triggered, A_TRUE);
+    }
+    aOSWaitObjectNotify(handle->wake);
+    return A_STATUS_OK;
 }

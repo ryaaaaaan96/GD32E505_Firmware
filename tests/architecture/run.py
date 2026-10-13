@@ -42,10 +42,11 @@ for folder in ("app", "device", "func", "platform/aLib"):
                                  r'aOSValidateIsrPriority)\b', text), path
         if path.is_relative_to(root / "func/aModbus"):
             assert not re.search(r'#\s*include\s*[<"]aBus', text), path
-            if path.name not in ("aModbus_endpoint.c", "aModbus_endpoint.h"):
-                assert not re.search(r'#\s*include\s*[<"]aComm', text), path
             assert not re.search(r'#\s*include\s*[<"](?:aDrv|aDev)',
                                  text), path
+            # 数据订阅及完成由 aComm 管理，协议只注册执行/观察回调。
+            assert not re.search(r'->(?:subscribe|unsubscribe|publish|complete)'
+                                 r'\s*\(', text), path
         if path.is_relative_to(root / "app/devices/rs485"):
             assert not re.search(r'#\s*include\s*[<"](?:aModbus|modbus|'
                                  r'IDU_modbus|FAN_modbus|protocol)',
@@ -90,9 +91,10 @@ headers = ("aDataLayout.h", "aComm_endpoint.h",
            "aDev_led.h", "aDev_led_instance.h",
            "aBus.h", "aBus_event.h", "aModbus_client.h",
            "aModbus_server.h", "aMemory.h", "aDataBase.h", "aShell.h", "aLog.h",
-           "aComm.h", "aComm_instance.h", "aComm_mapping.h",
-           "aComm_mapping_instance.h", "aModbus.h",
-           "aComm_channel.h", "aComm_channel_instance.h",
+           "aComm.h", "aComm_instance.h",
+           "aModbus_mapping.h",
+           "aModbus_mapping_instance.h", "aModbus.h",
+           "aComm_channel.h",
            "protocol.h", "IDU_sig_table.h", "FAN_sig_table.h")
 command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
            "-fsyntax-only", *["-I" + path for path in includes],

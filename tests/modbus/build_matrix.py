@@ -19,7 +19,7 @@ profiles = {
     "disabled": (0, 0, 0, 0, 0),
     "core_no_usart": (1, 1, 1, 1, 1),
     "events_off_client": (1, 1, 1, 1, 1),
-    "no_comm_server": (1, 1, 1, 0, 1),
+    "core_server": (1, 1, 1, 0, 1),
     "core_no_bus": (1, 1, 1, 1, 1),
     "scheduler_only": (0, 0, 0, 0, 0),
     "static_comm_client": (1, 1, 1, 1, 0),
@@ -99,7 +99,7 @@ cmake_language(DEFER CALL force_modbus)
                       "set(ADEV_USART_DYNAMIC_ENABLE OFF)"]
         if name.startswith("dynamic_"):
             lines += ["set(ACOMM_STATIC_ENABLE OFF)"]
-        if name in ("disabled", "no_comm_server"):
+        if name == "disabled":
             lines += ["set(ACOMM_ENABLE OFF)"]
         for feature, value in zip(("ENABLE", "STATIC_ENABLE", "DYNAMIC_ENABLE",
                                    "CLIENT_ENABLE", "SERVER_ENABLE"), values):
@@ -184,6 +184,4 @@ cmake_language(DEFER CALL force_modbus)
             assert "aModbusCreate" not in exported
             assert "aModbusInitStatic" not in exported
             assert not (build / "lib/libaModbusPoll.a").exists()
-            if name == "no_comm_server":
-                assert not (build / "lib/libaComm.a").exists()
         print(f"{name}: Release firmware build/link passed")

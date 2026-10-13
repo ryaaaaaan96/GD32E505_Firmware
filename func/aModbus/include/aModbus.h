@@ -38,6 +38,7 @@
 #define AMODBUS_MAX_REGISTERS 125U
 #define AMODBUS_MAX_BITS 2000U
 #define AMODBUS_MAX_VALUE_SIZE 250U
+#define AMODBUS_RTU_MAX_FRAME_SIZE 256U
 
 typedef struct aModbusHandle aModbusHandle_t;
 
@@ -49,6 +50,44 @@ typedef enum {
 /** 大于 19200 baud 时的 RTU 默认静默时间，单位为微秒。 */
 #define AMODBUS_RTU_DEFAULT_BYTE_GAP_US 750U
 #define AMODBUS_RTU_DEFAULT_FRAME_GAP_US 1750U
+
+/** 串行传输的纯线路耗时，向上取整到毫秒，返回 uint64_t 整数表达式。
+ * byte_count 包括地址、功能码、数据及 CRC；整笔预算可传请求与响应之和。
+ * baud_rate > 0，character_bits 为起始/数据/校验/停止位总和（7..16）。
+ * 参数使用无副作用的非负整数；byte_count 不超过 UINT32_MAX。
+ */
+#define AMODBUS_RTU_WIRE_TIME_MS(baud_rate_, character_bits_, byte_count_) \
+    ((UINT64_C(1000) * (character_bits_) * (byte_count_) + \
+      (uint64_t)(baud_rate_) - 1U) / (uint64_t)(baud_rate_))
+
+/** 传输耗时 + 用户余量，可直接初始化 static const 中的 aTimeout_t。
+ * margin_ms 包含设备响应、调度及静默等待余量，不替代通道的分帧时间。
+ * 参数须为常量表达式，最终毫秒值不超过 UINT32_MAX；只用于初始化。
+ * 不显式窄化计算结果，越界常量交给编译器诊断，避免静默回绕。
+ */
+#define AMODBUS_RTU_TIMEOUT_INIT(baud_rate_, character_bits_, \
+                               byte_count_, margin_ms_) \
+    { \
+        .milliseconds = AMODBUS_RTU_WIRE_TIME_MS(baud_rate_, \
+            character_bits_, byte_count_) + (uint64_t)(margin_ms_), \
+        .type = A_TIMEOUT_TYPE_RELATIVE, \
+    }
+
+/** 默认字符及静默时间，向上取整到微秒，可用于只读通道配置。
+ * 输入约束同 WIRE_TIME_MS；大于 19200 baud 使用固定的默认静默时间。
+ * 宏只计算数值，间隔判断及等待由外部通道完成。
+ */
+#define AMODBUS_RTU_CHARACTER_US(baud_rate_, character_bits_) \
+    ((UINT64_C(1000000) * (character_bits_) + (uint64_t)(baud_rate_) - 1U) / \
+     (uint64_t)(baud_rate_))
+#define AMODBUS_RTU_BYTE_GAP_US(baud_rate_, character_bits_) \
+    ((baud_rate_) > 19200U ? AMODBUS_RTU_DEFAULT_BYTE_GAP_US : \
+     (UINT64_C(1500000) * (character_bits_) + (uint64_t)(baud_rate_) - 1U) / \
+     (uint64_t)(baud_rate_))
+#define AMODBUS_RTU_FRAME_GAP_US(baud_rate_, character_bits_) \
+    ((baud_rate_) > 19200U ? AMODBUS_RTU_DEFAULT_FRAME_GAP_US : \
+     (UINT64_C(3500000) * (character_bits_) + (uint64_t)(baud_rate_) - 1U) / \
+     (uint64_t)(baud_rate_))
 
 /** 仅用于提供协议默认值；应用可调整后交给外部通道，不绑定时钟频率。 */
 typedef struct {
@@ -77,6 +116,7 @@ typedef struct {
  */
 aStatus_t aModbusRtuFrameCheck(void *context, const void *data, size_t size);
 
+/** Modbus 报文格式；与通信通道的流式收发或间隔分帧模式分别配置。 */
 typedef enum {
     AMODBUS_TRANSPORT_RTU,
     AMODBUS_TRANSPORT_TCP

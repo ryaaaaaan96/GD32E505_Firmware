@@ -7,7 +7,7 @@
 [aModbus.h](../func/aModbus/include/aModbus.h)、
 [aModbus_client.h](../func/aModbus/include/aModbus_client.h)、
 [aModbus_server.h](../func/aModbus/include/aModbus_server.h)、
-[aComm_mapping.h](../func/aComm/include/aComm_mapping.h) 为准。
+[aModbus_mapping.h](../func/aModbus/include/aModbus_mapping.h) 为准。
 硬件收发尚需在实际主从板上验证；主机测试不能代替线路联调。
 
 ## 1. 职责
@@ -15,13 +15,13 @@
 | 层 | 负责 | 不承担 |
 | --- | --- | --- |
 | aBus | 数据访问、关联注册、范围匹配、多播接收与完成 | 协议地址、收发、调度任务 |
-| aModbus | 协议编码、校验、预编码请求及主从事务 | 映射、aBus、队列、周期、重试计数 |
-| aComm | 通用周期/重试/队列；可选协议适配中的映射、计划和数据交换 | 编码协议字节、创建任务 |
+| aModbus | 协议编码、校验、主从事务、协议映射与数组回调 | aBus 实现、队列、周期、重试计数 |
+| aComm | 公共首成员、数组遍历、周期分组、重试、队列、数据绑定与完成通知 | 协议地址解释、编码协议字节、创建任务 |
 | app/protocol | 点表、通信配置、aComm 装配、队列及任务生命周期 | 编码报文、逐帧重试实现 |
 
 aModbus 主从接口分别位于 client/server 头，公共传输位于 aModbus.h。
-不设置独立 service 层。协议核心不链接 aComm/aBus；可选协议端点实现 aComm 公共函数表。
-aComm 映射不引用具体协议或 aBus，数据与协议端点都由应用显式注册。
+不设置独立 service 层。aModbus 单向依赖 aComm，不引用 aBus 实现。
+应用注册具体协议数组与回调；协议实例内嵌端点，数据端点由应用提供。
 应用创建并持有 aComm，调用 Process/Wait；通信适配通过非阻塞 submit 回调提交工作。
 
 ## 2. 数据标识与运行状态
@@ -31,7 +31,7 @@ aComm 映射不引用具体协议或 aBus，数据与协议端点都由应用显
 
 - `aBusTarget_t`：仅定位，运行请求使用。
 - `aBusTargetConfig_t`：定位加 `subscribe_events`、`publish_events`。
-  配置放在协议条目的 target 内，不放进共享 SIG 定义。
+  配置平铺在协议条目首成员 comm 内，不放进共享 SIG 定义。
 - Flash 定义可被多个 bus 共享；每个 bus 的 RAM 链表相互独立。
 
 ```text
@@ -137,7 +137,7 @@ aBus 将目标转为 SIG 内的字节区间，输入包含 source、binding、ov
 - 字段写命中整组映射时，只处理该字段，不读取旧整组后扩大写入范围。
 - 跨接收者无原子性、回滚或完整字段覆盖保证。
 
-aComm 映射支持完整映射、整组到完整字段，以及完整字段到整组映射。
+aModbus 映射支持完整映射、整组到完整字段，以及完整字段到整组映射。
 结构体仍要求连续、无隐式填充、每字段占整数个寄存器。
 非完整类型字段的交集返回 UNSUPPORTED，不扩大写入。U32/S32 不写半个值。
 同一个 Modbus 主站实例中，订阅 WRITE 的远端地址区间重叠会在初始化拒绝，
@@ -161,7 +161,7 @@ output.accepted 进入回调时为 false；真正标记/入队后置 true。
 通用订阅者一旦接收请求，后续异常不撤销 accepted，调用者不得重投或复用数据。
 aCommSubmit 用返回值明确接收结果：OK 为已接收，其他值均为未接收。
 队列解锁异常由 aOSMutexUnlock 统一记录，不将已入队请求报告为提交失败。
-aComm 映射 主站根据 submit 返回值填写 output.accepted；aBus 的多播接收统计保持独立。
+aComm 绑定根据 submit 返回值填写 output.accepted；aBus 的多播接收统计保持独立。
 
 每个接收者最终调用 `aBusComplete(delivery, status)` 一次。凭据防止重复结算，
 完成回调收到原请求和该接收者身份。凭据复用后，旧指针不能再次完成新请求。WRITE_COMPLETE 只是可选观察通知，
@@ -215,13 +215,14 @@ UPDATED 不隐式转换为远端 WRITE，避免采集→更新→下发循环。
 
 ## 8. Modbus 完整映射与轮询
 
-`aCommMappingClientMap_t` 表示一条主站映射，数组构成完整通信表；
+`aModbusClientMap_t` 表示一条主站映射，数组构成完整通信表；
 ClientConfig 通过 `maps/map_count` 引用它。临时访问、事件请求和采集计划
 共用该表；周期保留在表项内，运行时调度由应用装配的 `aComm` 负责。
 
-- target 包含定位及订阅/发布掩码。
+- comm 平铺 deviceID、sigIndex、paramIndex、订阅/发布掩码，
+  同时持有 flags 和 poll_time_ms。
 - area/address/quantity/word_order 定义远端布局，quantity 必须显式填写并匹配。
-- access 显式指定 READ/WRITE，与断帧 flags 分开。
+- flags 同时显式指定 READ/WRITE 权限和可选 BREAK_BEFORE 断帧标志。
 - `poll_time_ms=0` 不自动采集，但仍可临时访问。
 - `1..INT32_MAX` 是整轮起点周期。
 - `ACOMM_POLL_ONCE` 为一次性组，其余大值非法。
@@ -231,8 +232,9 @@ ClientConfig 通过 `maps/map_count` 引用它。临时访问、事件请求和�
 静态计划提供 indices 和 frames 两个数组，容量可按完整表项数预留；动态按实际帧数与启用项数一次申请。
 不同周期及一次性项不能合成一帧。首轮立即具备执行资格，超期不积压补跑。
 
-aCommPlanGroupCount/Get 给应用提供组范围与周期；aComm 每组一个作业。
-aComm 的 poll_time_ms=0 仍表示无整轮间隔；禁用项根本不生成作业，不能直接
+应用将数组、数量、aModbusClientTableOps 与 context 注册给 aComm；
+aComm 内部生成周期组和作业，应用不再逐组装配。
+手工 Job 的 poll_time_ms=0 仍表示无整轮间隔；禁用表项不生成作业，不能直接
 将零配置传成忙轮询。统一使用 ACOMM_POLL_ONCE（UINT32_MAX），
 应用直接传递周期值。aComm 识别标记后执行一轮并停止，普通 Trigger 不复活。
 
@@ -258,11 +260,14 @@ aCommPlanExecute 返回 status/advance/retryable；调度器按 retry_count
 
 主站只登记 READ/WRITE 请求或 MARK_ONLY，不把 UPDATED 自动转换成协议工作。
 ClientConfig.submit 由应用提供，接收稳定的 aCommRequest_t；应用消费者分别
-调用 execute 与 complete 一次。只注册事件不要求 Plan 或通用调度器，仍使用 aComm 映射 映射。
+调用 execute 与 complete 一次。只注册事件不要求 Plan 或通用调度器；
+aModbus 映射内嵌 aCommBinding，并将协议执行回调注册给它。
 主站模块不创建调度器，不读取调度器私有字段。
-其他模块可直接用 aBus 订阅 UPDATED。每个实际登记映射有一个非阻塞请求槽，
-占用或调度队列满时拒绝新请求，不覆盖旧写值。输入保留的 definition 直接定位
-原始映射；后台由工作项内部执行函数取得地址和字序，不再全表查找。
+其他模块可直接用 aBus 订阅 UPDATED。每个实际登记映射有一个 aComm 管理的
+非阻塞请求槽，占用或调度队列满时拒绝新请求，不覆盖旧写值。
+aComm 在消费者中检查权限及整组/字段交集，再调用协议执行回调。
+公共首成员指针直接定位原始表项；Modbus 回调取得地址和字序，不再全表查找。
+请求结束后由 aComm 可选发布 WRITE_COMPLETE，并通过数据端点完成借用。
 
 后台成功写应答只报告结果，不覆盖本地采集副本，不自动读回。
 周期项由下次采集确认；零周期/已完成一次性项需显式 READ 请求。
@@ -281,8 +286,8 @@ ClientConfig.submit 由应用提供，接收稳定的 aCommRequest_t；应用消
 
 | 决策 | 落地位置 |
 | --- | --- |
-| D1 target 掩码 | aBusTargetConfig_t；运行请求用 aBusTarget_t |
-| D2 完整通信表 | aCommMappingClientMap_t、Plan 的周期分组 |
+| D1 事件掩码 | 通信表平铺在 aCommEntry_t；aBus 运行请求用 aBusTarget_t |
+| D2 完整通信表 | aModbusClientMap_t、Plan 的周期分组 |
 | D3 提供者身份 | SubscriberConfig、AssociationGet/Find |
 | D4 无处理者丢弃 | Publish/Request 的 matched=0 |
 | D5 自动 UPDATED | aBus.c 的提交完成路径 |

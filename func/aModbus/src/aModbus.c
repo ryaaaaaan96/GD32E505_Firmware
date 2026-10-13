@@ -3,12 +3,7 @@
 #include <limits.h>
 #include <string.h>
 
-/* 这里只提供默认微秒值，外部通道负责计数换算和全部间隔判断。 */
-static uint32_t rtu_default_us(uint64_t numerator, uint64_t denominator)
-{
-    return (uint32_t)((numerator + denominator - 1U) / denominator);
-}
-
+/* 动态参数通过函数校验；计算与静态配置宏共用，外部通道执行等待。 */
 aStatus_t aModbusRtuTimingDefaults(uint32_t baud_rate, uint8_t character_bits,
     aModbusRtuTiming_t *timing)
 {
@@ -16,17 +11,9 @@ aStatus_t aModbusRtuTimingDefaults(uint32_t baud_rate, uint8_t character_bits,
         character_bits < 7U || character_bits > 16U) {
         return A_STATUS_INVALID_PARAM;
     }
-    const uint64_t character = 1000000ULL * character_bits;
-    timing->character_us = rtu_default_us(character, baud_rate);
-    if (baud_rate > 19200U) {
-        timing->byte_gap_us = AMODBUS_RTU_DEFAULT_BYTE_GAP_US;
-        timing->frame_gap_us = AMODBUS_RTU_DEFAULT_FRAME_GAP_US;
-    } else {
-        timing->byte_gap_us = rtu_default_us(character * 3U,
-                                           (uint64_t)baud_rate * 2U);
-        timing->frame_gap_us = rtu_default_us(character * 7U,
-                                            (uint64_t)baud_rate * 2U);
-    }
+    timing->character_us = AMODBUS_RTU_CHARACTER_US(baud_rate, character_bits);
+    timing->byte_gap_us = AMODBUS_RTU_BYTE_GAP_US(baud_rate, character_bits);
+    timing->frame_gap_us = AMODBUS_RTU_FRAME_GAP_US(baud_rate, character_bits);
     return A_STATUS_OK;
 }
 
@@ -51,7 +38,7 @@ aStatus_t aModbusRtuFrameCheck(void *context, const void *data, size_t size)
     if (size == 0U) return A_STATUS_ERROR;
     if (filter->role == AMODBUS_ROLE_SERVER && frame[0] != 0U &&
         frame[0] != filter->unit_id) return A_STATUS_NOT_FOUND;
-    if (size < 4U || size > 256U) return A_STATUS_ERROR;
+    if (size < 4U || size > AMODBUS_RTU_MAX_FRAME_SIZE) return A_STATUS_ERROR;
     function = frame[1];
     if (filter->role == AMODBUS_ROLE_CLIENT) {
         if ((function & 0x80U) != 0U) {
@@ -412,6 +399,7 @@ aStatus_t aModbusCoreInit(aModbusHandle_t *handle, aModbusRole_t role,
 {
     nmbs_platform_conf platform;
     nmbs_error error = NMBS_ERROR_INVALID_ARGUMENT;
+    aModbusEndpointInit(handle);
     handle->role = role;
     handle->config = role == AMODBUS_ROLE_CLIENT ?
         &handle->client.modbus : &handle->server.modbus;

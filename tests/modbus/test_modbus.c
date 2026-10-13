@@ -1,10 +1,9 @@
 #include "aModbus.h"
 #include "aModbus_endpoint.h"
 #include "aBus_endpoint.h"
-#include "aComm_mapping_instance.h"
+#include "aModbus_mapping_instance.h"
 #include "aModbus_instance.h"
 #include "aComm_instance.h"
-#include "aComm_channel_instance.h"
 #include "aBus_instance.h"
 #include "aOS.h"
 
@@ -16,7 +15,45 @@ void testAdvanceTime(uint32_t milliseconds);
 void testSetTime(uint32_t milliseconds);
 void testFailAllocation(aBool_t fail);
 unsigned testAllocations(void);
-static aModbusHandle_t *fixtureProtocol(const aCommMapping_t *mapping);
+/* 夹具把旧测试的设备参数应用到协议上下文，计划本身不含协议字段。 */
+typedef struct {
+    const aModbusClientMap_t *items;
+    size_t count;
+    uint8_t unit_id;
+    aTimeout_t timeout;
+} fixturePlanConfig_t;
+static inline void fixturePlanConfigInit(fixturePlanConfig_t *config)
+{
+    *config = (fixturePlanConfig_t){.unit_id = 1U,
+                                   .timeout = A_TIMEOUT_MS(1000U)};
+}
+static inline aCommPlanConfig_t fixturePlanConfig(
+    aModbusMapping_t *handle, const fixturePlanConfig_t *config)
+{
+    handle->client.unit_id = config->unit_id;
+    handle->client.request_timeout = config->timeout;
+    const aCommPlanConfig_t table = {
+        config->items, config->count, &aModbusClientTableOps, handle
+    };
+    return table;
+}
+#if ACOMM_STATIC_ENABLE
+static inline aStatus_t fixturePlanInitStatic(aModbusMapping_t *handle,
+    const fixturePlanConfig_t *config, aCommPlan_t *plan)
+{
+    const aCommPlanConfig_t table = fixturePlanConfig(handle, config);
+    return aCommPlanInitStatic(&table, plan);
+}
+#endif
+#if ACOMM_DYNAMIC_ENABLE
+static inline aStatus_t fixturePlanCreate(aModbusMapping_t *handle,
+    const fixturePlanConfig_t *config, aCommPlan_t **plan)
+{
+    const aCommPlanConfig_t table = fixturePlanConfig(handle, config);
+    return aCommPlanCreate(&table, plan);
+}
+#endif
+static aModbusHandle_t *fixtureProtocol(const aModbusMapping_t *mapping);
 
 void aOSDelayMs(uint32_t milliseconds) { testAdvanceTime(milliseconds); }
 
@@ -92,12 +129,12 @@ static unsigned address_writes;
 static unsigned sig_reads;
 static unsigned sig_writes;
 #if AMODBUS_SERVER_ENABLE
-static aCommMapping_t *callback_instance;
+static aModbusMapping_t *callback_instance;
 #endif
 static aBool_t reject_sig_write;
 
 static aStatus_t address_read(void *context,
-    const aCommAddressReadRequest_t *request)
+    const aModbusAddressReadRequest_t *request)
 {
     uint8_t *bits = request->data;
     assert(context == &bus);
@@ -117,7 +154,7 @@ static aStatus_t address_read(void *context,
 }
 
 static aStatus_t address_write(void *context,
-    const aCommAddressWriteRequest_t *request)
+    const aModbusAddressWriteRequest_t *request)
 {
     const uint8_t *bits = request->data;
     assert(context == &bus);
@@ -134,51 +171,51 @@ static aStatus_t address_write(void *context,
     return A_STATUS_OK;
 }
 
-#define READ_WRITE (ACOMM_MAP_ACCESS_READ | ACOMM_MAP_ACCESS_WRITE)
+#define READ_WRITE (ACOMM_MAP_FLAG_READ | ACOMM_MAP_FLAG_WRITE)
 #define MAP(addr, count, index) \
     {.area = AMODBUS_AREA_HOLDING_REGISTERS, \
-     .address = addr, .quantity = count, .flags = READ_WRITE, \
-     .target = {.deviceID = 1, \
-                   .sigIndex = index, \
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}}
+     .address = addr, .quantity = count, .comm.flags = READ_WRITE, \
+     .comm.deviceID = 1, \
+                   .comm.sigIndex = index, \
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE}
 #define COIL_MAP(addr) \
     {.area = AMODBUS_AREA_COILS, .address = addr, \
-     .quantity = 1U, .flags = READ_WRITE, \
-     .target = {.deviceID = 1, \
-                   .sigIndex = addr, \
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}}
-static const aCommMappingServerMap_t maps[] = {
+     .quantity = 1U, .comm.flags = READ_WRITE, \
+     .comm.deviceID = 1, \
+                   .comm.sigIndex = addr, \
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE}
+static const aModbusServerMap_t maps[] = {
     COIL_MAP(0), COIL_MAP(1), COIL_MAP(2), COIL_MAP(3), COIL_MAP(4),
     MAP(0, 1U, WORD), MAP(1, 2U, COUNTER), MAP(3, 2U, SIGNED),
     {.area = AMODBUS_AREA_HOLDING_REGISTERS,
      .address = 5, .quantity = 2U,
-     .flags = READ_WRITE, .target = {.deviceID = 1,
-                   .sigIndex = MOTOR,
-                   .paramIndex = 0}},
+     .comm.flags = READ_WRITE, .comm.deviceID = 1,
+                   .comm.sigIndex = MOTOR,
+                   .comm.paramIndex = 0},
     MAP(7, 3U, RAW),
     {.area = AMODBUS_AREA_HOLDING_REGISTERS,
-     .address = 10, .quantity = 2U, .flags = READ_WRITE,
-     .target = {.deviceID = 2,
-                   .sigIndex = 0,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}},
+     .address = 10, .quantity = 2U, .comm.flags = READ_WRITE,
+     .comm.deviceID = 2,
+                   .comm.sigIndex = 0,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE},
     {.area = AMODBUS_AREA_INPUT_REGISTERS,
-     .address = 0, .quantity = 2U, .flags = ACOMM_MAP_ACCESS_READ,
-     .target = {.deviceID = 1,
-                   .sigIndex = COUNTER,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE},
+     .address = 0, .quantity = 2U, .comm.flags = ACOMM_MAP_FLAG_READ,
+     .comm.deviceID = 1,
+                   .comm.sigIndex = COUNTER,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE,
      .word_order = AMODBUS_WORD_LOW_FIRST}
 };
 #undef COIL_MAP
-static const aCommMappingAddressRange_t ranges[] = {
+static const aModbusMappingAddressRange_t ranges[] = {
     {.area = AMODBUS_AREA_COILS, .address = 5, .quantity = 5,
      .flags = READ_WRITE, .read = address_read, .write = address_write,
      .context = &bus},
     {.area = AMODBUS_AREA_DISCRETE_INPUTS, .quantity = 10,
-     .flags = ACOMM_MAP_ACCESS_READ, .read = address_read, .context = &bus}
+     .flags = ACOMM_MAP_FLAG_READ, .read = address_read, .context = &bus}
 };
 
 static aStatus_t sig_read(void *context,
-    const aCommMappingSigReadRequest_t *request)
+    const aCommValueReadRequest_t *request)
 {
     assert(context == &bus);
     sig_reads++;
@@ -203,7 +240,7 @@ static aStatus_t sig_read(void *context,
 }
 
 static aStatus_t sig_write(void *context,
-    const aCommMappingSigWriteRequest_t *request)
+    const aCommValueWriteRequest_t *request)
 {
     assert(context == &bus);
     sig_writes++;
@@ -245,7 +282,7 @@ struct link {
     uint8_t response[512];
     size_t response_size;
     size_t response_pos;
-    aCommMapping_t *server;
+    aModbusMapping_t *server;
     aModbusTransportType_t type;
     aBool_t processed;
     aBool_t corrupt;
@@ -422,16 +459,16 @@ typedef struct {
     aModbusTransport_t transport;
     aBusHandle_t *bus; /**< 必填，已初始化；协议模块不销毁。 */
     aTimeout_t byte_timeout; /**< 每次传输的字节等待限制，默认 20 ms。 */
-    const aCommMappingAddressRange_t *ranges; /**< 可选从站回调段；借用至销毁。 */
+    const aModbusMappingAddressRange_t *ranges; /**< 可选从站回调段；借用至销毁。 */
     size_t range_count;
     /** 回调段未命中时查找的离散映射；与 ranges 平级，借用至销毁。
      * 两类配置分别排序，初始化拒绝重叠。批量访问先检查完整覆盖和权限，
      * 再执行回调或 SIG 读写；跨回调/SIG 不提供整体回滚。
      */
-    const aCommMappingServerMap_t *maps;
+    const aModbusServerMap_t *maps;
     size_t map_count;
-    aCommMappingSigReadFn_t sig_read;
-    aCommMappingSigWriteFn_t sig_write;
+    aCommValueReadFn_t sig_read;
+    aCommValueWriteFn_t sig_write;
     void *sig_context;
     /** 可选整组快照工作区；NULL 使用实例内 250 字节工作区。
      * 映射的 SIG 大于 250 字节时必填，容量须覆盖最大 SIG。
@@ -441,10 +478,10 @@ typedef struct {
     void *snapshot;
     size_t snapshot_size;
 #if AMODBUS_CLIENT_ENABLE
-    const aCommMappingClientConfig_t *client_override;
+    const aModbusMappingClientConfig_t *client_override;
 #endif
 #if AMODBUS_SERVER_ENABLE
-    const aCommMappingServerConfig_t *server_override;
+    const aModbusMappingServerConfig_t *server_override;
 #endif
 } fixtureConfig_t;
 static void fixtureConfigInit(fixtureConfig_t *config)
@@ -457,28 +494,36 @@ static void fixtureConfigInit(fixtureConfig_t *config)
 }
 
 typedef struct {
-    aModbusEndpoint_t protocol;
+    aModbusHandle_t *protocol;
+    aModbusMapping_t *mapping;
     aBusEndpoint_t data;
     aBool_t used;
 #if ABUS_EVENT_ENABLE
     aBusEndpointSubscription_t nodes[64];
-    aCommMappingSubscription_t subscriptions[64];
+    aCommBindingSubscription_t subscriptions[64];
 #endif
 } fixtureEndpoints_t;
 static fixtureEndpoints_t endpoint_storage[8];
-static aModbusHandle_t *fixtureProtocol(const aCommMapping_t *mapping)
+static aModbusHandle_t *fixtureProtocol(const aModbusMapping_t *mapping)
 {
-    return ((aModbusEndpoint_t *)mapping->config->protocol)->protocol;
+    for (size_t i = 0U; i < 8U; i++) {
+        if (endpoint_storage[i].mapping == mapping && endpoint_storage[i].used)
+            return endpoint_storage[i].protocol;
+    }
+    return NULL;
 }
-static aCommMappingConfig_t fixtureConnection(const fixtureConfig_t *config,
+static aModbusMappingConfig_t fixtureConnection(const fixtureConfig_t *config,
     fixtureEndpoints_t *endpoints)
 {
-    const aCommMappingConfig_t connection = {
-        .data = config->bus == NULL ? NULL : &endpoints->data.base,
-        .protocol = &endpoints->protocol.base,
-        .sig_read = config->sig_read, .sig_write = config->sig_write,
-        .sig_context = config->sig_context,
-        .snapshot = config->snapshot, .snapshot_size = config->snapshot_size
+    const aModbusMappingConfig_t connection = {
+        .protocol = aModbusCommEndpoint(endpoints->protocol),
+        .comm = {
+            .data = config->bus == NULL ? NULL : &endpoints->data.base,
+            .sig_read = config->sig_read, .sig_write = config->sig_write,
+            .sig_context = config->sig_context,
+            .snapshot = config->snapshot,
+            .snapshot_size = config->snapshot_size
+        }
     };
     return connection;
 }
@@ -488,10 +533,10 @@ static aCommMappingConfig_t fixtureConnection(const fixtureConfig_t *config,
 static aModbusHandle_t protocol_storage[8];
 #endif
 static aStatus_t fixtureOpen(const fixtureConfig_t *config,
-    aCommMapping_t *storage, aCommMapping_t **out, aBool_t dynamic)
+    aModbusMapping_t *storage, aModbusMapping_t **out, aBool_t dynamic)
 {
     aModbusHandle_t *protocol = NULL;
-    aCommMapping_t *binding = storage;
+    aModbusMapping_t *binding = storage;
     aStatus_t status;
     if (out != NULL) *out = NULL;
     if (config == NULL) return A_STATUS_INVALID_PARAM;
@@ -524,19 +569,19 @@ static aStatus_t fixtureOpen(const fixtureConfig_t *config,
         if (!endpoint_storage[i].used) { endpoints = &endpoint_storage[i]; break; }
     }
     assert(endpoints != NULL);
-    aModbusEndpointInit(&endpoints->protocol, NULL);
+    endpoints->protocol = NULL;
     if (config->bus != NULL) {
         assert(aBusEndpointInit(&endpoints->data, config->bus) == A_STATUS_OK);
     }
 #if ABUS_EVENT_ENABLE
     if (storage != NULL) {
-        if (storage->subscriptions == NULL) {
-            storage->subscriptions = endpoints->subscriptions;
-            storage->subscription_capacity = 64U;
+        if (storage->comm.subscriptions == NULL) {
+            storage->comm.subscriptions = endpoints->subscriptions;
+            storage->comm.subscription_capacity = 64U;
         }
-        for (size_t i = 0U; i < storage->subscription_capacity; i++) {
+        for (size_t i = 0U; i < storage->comm.subscription_capacity; i++) {
             assert(i < 64U);
-            storage->subscriptions[i].native = &endpoints->nodes[i];
+            storage->comm.subscriptions[i].native = &endpoints->nodes[i];
         }
     }
 #endif
@@ -554,17 +599,17 @@ static aStatus_t fixtureOpen(const fixtureConfig_t *config,
             status = A_STATUS_UNSUPPORTED;
 #endif
         if (status != A_STATUS_OK) return status;
-        aCommMappingClientConfig_t client;
-        aCommMappingClientConfigStructInit(&client);
+        aModbusMappingClientConfig_t client;
+        aModbusMappingClientConfigStructInit(&client);
         if (config->client_override != NULL) client = *config->client_override;
+        endpoints->protocol = protocol;
         client.binding = fixtureConnection(config, endpoints);
-        endpoints->protocol.protocol = protocol;
 #if AMODBUS_DYNAMIC_ENABLE
-        if (dynamic) status = aCommMappingClientCreate(&client, &binding);
+        if (dynamic) status = aModbusMappingClientCreate(&client, &binding);
         else
 #endif
 #if AMODBUS_STATIC_ENABLE
-            status = aCommMappingClientInitStatic(&client, binding);
+            status = aModbusMappingClientInitStatic(&client, binding);
 #else
             status = A_STATUS_UNSUPPORTED;
 #endif
@@ -575,11 +620,11 @@ static aStatus_t fixtureOpen(const fixtureConfig_t *config,
 #if AMODBUS_SERVER_ENABLE
         aModbusServerConfig_t core = {
             .modbus = transport, .unit_id = config->unit_id,
-            .read = aModbusEndpointServerRead, .write = aModbusEndpointServerWrite
+            .read = aModbusMappingServerRead, .write = aModbusMappingServerWrite
         };
         status = aModbusServerConfigCheck(&core);
         if (status != A_STATUS_OK) return status;
-        aCommMappingServerConfig_t server = {
+        aModbusMappingServerConfig_t server = {
             .binding = fixtureConnection(config, endpoints),
             .maps = config->maps, .map_count = config->map_count,
             .ranges = config->ranges, .range_count = config->range_count
@@ -587,19 +632,16 @@ static aStatus_t fixtureOpen(const fixtureConfig_t *config,
         if (config->server_override != NULL) server = *config->server_override;
         server.binding = fixtureConnection(config, endpoints);
 #if AMODBUS_DYNAMIC_ENABLE
-        if (dynamic) status = aCommMappingServerCreate(&server, &binding);
+        if (dynamic) status = aModbusMappingServerCreate(&server, &binding);
         else
 #endif
 #if AMODBUS_STATIC_ENABLE
-            status = aCommMappingServerInitStatic(&server, binding);
+            status = aModbusMappingServerInitStatic(&server, binding);
 #else
             status = A_STATUS_UNSUPPORTED;
 #endif
         if (status != A_STATUS_OK) return status;
-        endpoints->protocol.read = aCommMappingServerRead;
-        endpoints->protocol.write = aCommMappingServerWrite;
-        endpoints->protocol.context = binding;
-        core.context = &endpoints->protocol;
+        core.context = binding;
 #if AMODBUS_DYNAMIC_ENABLE
         if (dynamic) status = aModbusServerCreate(&core, &protocol);
         else
@@ -611,17 +653,17 @@ static aStatus_t fixtureOpen(const fixtureConfig_t *config,
 #endif
         if (status != A_STATUS_OK) {
 #if AMODBUS_DYNAMIC_ENABLE
-            if (dynamic) (void)aCommMappingDestroy(binding);
+            if (dynamic) (void)aModbusMappingDestroy(binding);
             else
 #endif
 #if AMODBUS_STATIC_ENABLE
-                (void)aCommMappingDeInitStatic(binding);
+                (void)aModbusMappingDeInitStatic(binding);
 #else
                 (void)binding;
 #endif
             return status;
         }
-        endpoints->protocol.protocol = protocol;
+        endpoints->protocol = protocol;
 #else
         status = A_STATUS_UNSUPPORTED;
 #endif
@@ -638,18 +680,20 @@ static aStatus_t fixtureOpen(const fixtureConfig_t *config,
 #endif
         return status;
     }
+    endpoints->mapping = binding;
     endpoints->used = A_TRUE;
     if (out != NULL) *out = binding;
     return A_STATUS_OK;
 }
 
 #if AMODBUS_STATIC_ENABLE
-static aStatus_t fixtureDeInitStatic(aCommMapping_t *handle)
+static aStatus_t fixtureDeInitStatic(aModbusMapping_t *handle)
 {
     aModbusHandle_t *protocol = handle == NULL ? NULL : fixtureProtocol(handle);
     fixtureEndpoints_t *endpoints = handle == NULL ? NULL :
-        (fixtureEndpoints_t *)handle->config->protocol;
-    aStatus_t status = aCommMappingDeInitStatic(handle);
+        (fixtureEndpoints_t *)((char *)handle->config->comm.data -
+        offsetof(fixtureEndpoints_t, data));
+    aStatus_t status = aModbusMappingDeInitStatic(handle);
     if (status != A_STATUS_OK) return status;
     status = aModbusDeInitStatic(protocol);
     if (status == A_STATUS_OK) endpoints->used = A_FALSE;
@@ -657,12 +701,13 @@ static aStatus_t fixtureDeInitStatic(aCommMapping_t *handle)
 }
 #endif
 #if AMODBUS_DYNAMIC_ENABLE
-static aStatus_t fixtureDestroy(aCommMapping_t *handle)
+static aStatus_t fixtureDestroy(aModbusMapping_t *handle)
 {
     if (handle == NULL) return A_STATUS_OK;
     aModbusHandle_t *protocol = fixtureProtocol(handle);
-    fixtureEndpoints_t *endpoints = (fixtureEndpoints_t *)handle->config->protocol;
-    aStatus_t status = aCommMappingDestroy(handle);
+    fixtureEndpoints_t *endpoints = (fixtureEndpoints_t *)((char *)handle->config->comm.data -
+        offsetof(fixtureEndpoints_t, data));
+    aStatus_t status = aModbusMappingDestroy(handle);
     if (status != A_STATUS_OK) return status;
     status = aModbusDestroy(protocol);
     if (status == A_STATUS_OK) endpoints->used = A_FALSE;
@@ -672,15 +717,15 @@ static aStatus_t fixtureDestroy(aCommMapping_t *handle)
 
 #if AMODBUS_STATIC_ENABLE
 static aStatus_t fixtureInitStatic(const fixtureConfig_t *config,
-    aCommMapping_t *storage)
+    aModbusMapping_t *storage)
 {
-    *storage = (aCommMapping_t){0};
+    *storage = (aModbusMapping_t){0};
     return fixtureOpen(config, storage, NULL, A_FALSE);
 }
 #endif
 #if AMODBUS_DYNAMIC_ENABLE
 static aStatus_t fixtureCreate(const fixtureConfig_t *config,
-    aCommMapping_t **out)
+    aModbusMapping_t **out)
 {
     return fixtureOpen(config, NULL, out, A_TRUE);
 }
@@ -710,21 +755,21 @@ static fixtureConfig_t configuration(endpoint_t *endpoint,
     return config;
 }
 
-static aCommMapping_t *open_instance(const fixtureConfig_t *config,
-                                     aCommMapping_t *storage)
+static aModbusMapping_t *open_instance(const fixtureConfig_t *config,
+                                     aModbusMapping_t *storage)
 {
 #if AMODBUS_STATIC_ENABLE
     assert(fixtureInitStatic(config, storage) == A_STATUS_OK);
     return storage;
 #else
-    aCommMapping_t *handle;
+    aModbusMapping_t *handle;
     (void)storage;
     assert(fixtureCreate(config, &handle) == A_STATUS_OK);
     return handle;
 #endif
 }
 
-static void close_instance(aCommMapping_t *handle)
+static void close_instance(aModbusMapping_t *handle)
 {
 #if AMODBUS_STATIC_ENABLE
     assert(fixtureDeInitStatic(handle) == A_STATUS_OK);
@@ -736,10 +781,10 @@ static void close_instance(aCommMapping_t *handle)
 static aStatus_t invalid_config(const fixtureConfig_t *config)
 {
 #if AMODBUS_STATIC_ENABLE
-    aCommMapping_t storage;
+    aModbusMapping_t storage;
     return fixtureInitStatic(config, &storage);
 #else
-    aCommMapping_t *handle = (void *)1;
+    aModbusMapping_t *handle = (void *)1;
     aStatus_t status = fixtureCreate(config, &handle);
     assert(handle == NULL);
     return status;
@@ -750,7 +795,7 @@ static void lifecycle(void)
 {
     link_t link = {.type = AMODBUS_TRANSPORT_RTU};
     endpoint_t endpoint = {&link, A_TRUE};
-    aCommMapping_t storage;
+    aModbusMapping_t storage;
     fixtureConfig_t config = configuration(&endpoint,
 #if AMODBUS_SERVER_ENABLE
         AMODBUS_ROLE_SERVER
@@ -758,7 +803,7 @@ static void lifecycle(void)
         AMODBUS_ROLE_CLIENT
 #endif
     );
-    aCommMapping_t *handle = open_instance(&config, &storage);
+    aModbusMapping_t *handle = open_instance(&config, &storage);
     config.sig_read = sig_read;
     config.sig_write = sig_write;
     config.sig_context = &bus;
@@ -795,7 +840,7 @@ static void lifecycle(void)
 }
 
 #if AMODBUS_CLIENT_ENABLE && AMODBUS_SERVER_ENABLE
-static aStatus_t read_remote(aCommMapping_t *client, aModbusArea_t area,
+static aStatus_t read_remote(aModbusMapping_t *client, aModbusArea_t area,
     uint16_t address, uint16_t quantity, void *data, size_t size,
     aModbusResult_t *result)
 {
@@ -810,7 +855,7 @@ static aStatus_t read_remote(aCommMapping_t *client, aModbusArea_t area,
     return aModbusClientRead(fixtureProtocol(client), &request);
 }
 
-static aStatus_t write_remote(aCommMapping_t *client, aModbusArea_t area,
+static aStatus_t write_remote(aModbusMapping_t *client, aModbusArea_t area,
     uint16_t address, uint16_t quantity, const void *data, size_t size,
     aModbusResult_t *result)
 {
@@ -845,8 +890,8 @@ static void stream_tests(void)
             configuration(&server_port, AMODBUS_ROLE_SERVER);
         fixtureConfig_t client_config =
             configuration(&client_port, AMODBUS_ROLE_CLIENT);
-        aCommMapping_t server_storage, client_storage;
-        aCommMapping_t *client;
+        aModbusMapping_t server_storage, client_storage;
+        aModbusMapping_t *client;
         aStatus_t status;
         uint16_t value = 0xBCDE;
         aCommChannel_t *channels[2] = {NULL, NULL};
@@ -921,8 +966,8 @@ static void server_eof(void)
     link_t link = {.type = AMODBUS_TRANSPORT_TCP, .eof_server = A_TRUE};
     endpoint_t endpoint = {&link, A_TRUE};
     fixtureConfig_t config = configuration(&endpoint, AMODBUS_ROLE_SERVER);
-    aCommMapping_t storage;
-    aCommMapping_t *server = open_instance(&config, &storage);
+    aModbusMapping_t storage;
+    aModbusMapping_t *server = open_instance(&config, &storage);
     aModbusServerProcessRequest_t request;
     aModbusServerProcessRequestStructInit(&request);
     assert(aModbusServerProcess(fixtureProtocol(server), &request) == A_STATUS_EOF);
@@ -940,14 +985,14 @@ static void end_to_end(aModbusTransportType_t type, aBool_t callbacks)
         configuration(&server_port, AMODBUS_ROLE_SERVER);
     fixtureConfig_t client_config =
         configuration(&client_port, AMODBUS_ROLE_CLIENT);
-    aCommMapping_t server_storage;
-    aCommMapping_t client_storage;
-    aCommMapping_t *client;
+    aModbusMapping_t server_storage;
+    aModbusMapping_t client_storage;
+    aModbusMapping_t *client;
     aModbusResult_t result;
     uint16_t registers[12];
     uint8_t bits[2] = {0xA5, 0x03};
     uint8_t read_bits[3] = {0, 0, 0xCC};
-    aCommMappingClientSigRequest_t sig_request;
+    aModbusMappingClientSigRequest_t sig_request;
 
     word = 123;
     counter = 0x12345678U;
@@ -1039,20 +1084,20 @@ static void end_to_end(aModbusTransportType_t type, aBool_t callbacks)
     assert(read_remote(client, AMODBUS_AREA_HOLDING_REGISTERS,
         12, 1, registers, sizeof(registers), &result) == A_STATUS_ERROR);
     assert(result.exception == 2U);
-    aCommMappingClientSigRequestStructInit(&sig_request);
+    aModbusMappingClientSigRequestStructInit(&sig_request);
     sig_request.area = AMODBUS_AREA_HOLDING_REGISTERS;
     sig_request.address = 1;
     sig_request.target.deviceID = 1;
     sig_request.target.sigIndex = LOCAL;
-    assert(aCommMappingClientReadSig(client, &sig_request) == A_STATUS_OK);
+    assert(aModbusMappingClientReadSig(client, &sig_request) == A_STATUS_OK);
     assert(local_value == counter);
     local_value = 12345;
-    assert(aCommMappingClientWriteSig(client, &sig_request) == A_STATUS_OK);
+    assert(aModbusMappingClientWriteSig(client, &sig_request) == A_STATUS_OK);
     assert(counter == 12345);
     sig_request.address = 0;
     sig_request.area = AMODBUS_AREA_COILS;
     sig_request.target.sigIndex = 0;
-    assert(aCommMappingClientReadSig(client, &sig_request) == A_STATUS_OK);
+    assert(aModbusMappingClientReadSig(client, &sig_request) == A_STATUS_OK);
     if (callbacks) {
         reject_sig_write = A_TRUE;
         registers[0] = 777;
@@ -1094,8 +1139,8 @@ static void end_to_end(aModbusTransportType_t type, aBool_t callbacks)
 }
 
 /* 分组/发布测试统一经过正式 Plan 路径，配置变化后重新建立计划。 */
-static aStatus_t execute_first_plan(aCommMapping_t *handle,
-    const aCommPlanConfig_t *config, size_t *count, aModbusResult_t *result)
+static aStatus_t execute_first_plan(aModbusMapping_t *handle,
+    const fixturePlanConfig_t *config, size_t *count, aModbusResult_t *result)
 {
     aCommPlan_t *plan;
     aStatus_t status;
@@ -1109,10 +1154,10 @@ static aStatus_t execute_first_plan(aCommMapping_t *handle,
         .frames = frames, .indices = indices,
         .capacity = 8U, .index_capacity = 8U
     };
-    status = aCommPlanInitStatic(handle, config, &storage);
+    status = fixturePlanInitStatic(handle, config, &storage);
     plan = &storage;
 #else
-    status = aCommPlanCreate(handle, config, &plan);
+    status = fixturePlanCreate(handle, config, &plan);
 #endif
     if (status != A_STATUS_OK) return status;
     assert(aCommPlanFrameCount(plan) != 0U);
@@ -1140,37 +1185,37 @@ static void scheduled_test(void *context, size_t step,
 
 static void prepared_plans(aModbusTransportType_t type)
 {
-    aCommMappingClientMap_t items[] = {
+    aModbusClientMap_t items[] = {
         {.area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 0U,
-         .quantity = 1U, .target = {.deviceID = 1U,
-                   .sigIndex = WORD,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}},
+         .quantity = 1U, .comm.deviceID = 1U,
+                   .comm.sigIndex = WORD,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE},
         {.area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 1U,
-         .quantity = 2U, .target = {.deviceID = 1U,
-                   .sigIndex = LOCAL,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}},
+         .quantity = 2U, .comm.deviceID = 1U,
+                   .comm.sigIndex = LOCAL,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE},
         {.area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 3U,
-         .quantity = 2U, .flags = ACOMM_MAP_FLAG_BREAK_BEFORE,
-         .target = {.deviceID = 1U,
-                   .sigIndex = SIGNED,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}},
+         .quantity = 2U, .comm.flags = ACOMM_MAP_FLAG_BREAK_BEFORE,
+         .comm.deviceID = 1U,
+                   .comm.sigIndex = SIGNED,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE},
         {.area = AMODBUS_AREA_COILS, .address = 0U,
-         .quantity = 1U, .target = {.deviceID = 1U,
-                   .sigIndex = 0U,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}},
+         .quantity = 1U, .comm.deviceID = 1U,
+                   .comm.sigIndex = 0U,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE},
         {.area = AMODBUS_AREA_DISCRETE_INPUTS, .address = 1U,
-         .quantity = 1U, .target = {.deviceID = 1U,
-                   .sigIndex = 1U,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}},
+         .quantity = 1U, .comm.deviceID = 1U,
+                   .comm.sigIndex = 1U,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE},
         {.area = AMODBUS_AREA_INPUT_REGISTERS, .address = 0U,
-         .quantity = 2U, .target = {.deviceID = 1U,
-                   .sigIndex = LOCAL,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE},
+         .quantity = 2U, .comm.deviceID = 1U,
+                   .comm.sigIndex = LOCAL,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE,
          .word_order = AMODBUS_WORD_LOW_FIRST},
         {.area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 12U,
-         .quantity = 2U, .target = {.deviceID = 1U,
-                   .sigIndex = LOCAL,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}},
+         .quantity = 2U, .comm.deviceID = 1U,
+                   .comm.sigIndex = LOCAL,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE},
     };
     link_t link = {.type = type};
     endpoint_t server_port = {&link, A_TRUE};
@@ -1179,9 +1224,9 @@ static void prepared_plans(aModbusTransportType_t type)
         configuration(&server_port, AMODBUS_ROLE_SERVER);
     fixtureConfig_t client_config =
         configuration(&client_port, AMODBUS_ROLE_CLIENT);
-    aCommMapping_t server_storage, client_storage;
-    aCommMapping_t *client;
-    aCommPlanConfig_t config;
+    aModbusMapping_t server_storage, client_storage;
+    aModbusMapping_t *client;
+    fixturePlanConfig_t config;
     aCommPlanRequest_t request;
     aCommPlan_t *plan;
     aCommStepResult_t execution;
@@ -1197,37 +1242,37 @@ static void prepared_plans(aModbusTransportType_t type)
         .index_capacity = 7U};
 #endif
     for (size_t i = 0U; i < sizeof(items) / sizeof(items[0]); i++) {
-        items[i].access = ACOMM_MAP_ACCESS_READ;
-        items[i].poll_time_ms = 1000U;
+        items[i].comm.flags |= ACOMM_MAP_FLAG_READ;
+        items[i].comm.poll_time_ms = 1000U;
     }
     client_config.sig_write = sig_write;
     client_config.sig_context = &bus;
     link.server = open_instance(&server_config, &server_storage);
     client = open_instance(&client_config, &client_storage);
-    aCommPlanConfigStructInit(&config);
+    fixturePlanConfigInit(&config);
     config.items = items;
     config.count = sizeof(items) / sizeof(items[0]);
     config.timeout = A_TIMEOUT_MS(50U);
 #if AMODBUS_STATIC_ENABLE
     storage.capacity = 1U;
-    assert(aCommPlanInitStatic(client, &config, &storage) ==
+    assert(fixturePlanInitStatic(client, &config, &storage) ==
            A_STATUS_INVALID_PARAM);
     assert(!storage.ready && client->plan_count == 0U);
     storage.capacity = 7U;
     storage.index_capacity = 1U;
-    assert(aCommPlanInitStatic(client, &config, &storage) ==
+    assert(fixturePlanInitStatic(client, &config, &storage) ==
            A_STATUS_INVALID_PARAM);
     assert(!storage.ready && client->plan_count == 0U);
     storage.index_capacity = 7U;
-    assert(aCommPlanInitStatic(client, &config, &storage) == A_STATUS_OK);
+    assert(fixturePlanInitStatic(client, &config, &storage) == A_STATUS_OK);
     plan = &storage;
     assert(fixtureDeInitStatic(client) == A_STATUS_BUSY);
 #else
-    assert(aCommPlanCreate(client, &config, &plan) == A_STATUS_OK);
+    assert(fixturePlanCreate(client, &config, &plan) == A_STATUS_OK);
     assert(fixtureDestroy(client) == A_STATUS_BUSY);
 #endif
     assert(aCommPlanFrameCount(plan) == 6U);
-    assert(plan->frames[0].count == 2U && plan->frames[0].quantity == 3U);
+    assert(plan->frames[0].count == 2U);
     allocations = testAllocations();
     word = 123U;
     counter = 0x12345678U;
@@ -1304,22 +1349,22 @@ static void prepared_plans(aModbusTransportType_t type)
 #endif
 #if AMODBUS_DYNAMIC_ENABLE
     testFailAllocation(A_TRUE);
-    assert(aCommPlanCreate(client, &config, &plan) == A_STATUS_NO_MEMORY);
+    assert(fixturePlanCreate(client, &config, &plan) == A_STATUS_NO_MEMORY);
     assert(plan == NULL && client->plan_count == 0U);
     testFailAllocation(A_FALSE);
-    assert(aCommPlanCreate(client, &config, &plan) == A_STATUS_OK);
+    assert(fixturePlanCreate(client, &config, &plan) == A_STATUS_OK);
     assert(aCommPlanDestroy(plan) == A_STATUS_OK);
 #endif
     /* 不轮询项不进入计划；按周期稳定分组，一次性独立成组。 */
-    items[0].poll_time_ms = 0U;
-    items[2].poll_time_ms = ACOMM_POLL_ONCE;
-    items[4].poll_time_ms = 0U;
-    items[5].poll_time_ms = 2000U;
+    items[0].comm.poll_time_ms = 0U;
+    items[2].comm.poll_time_ms = ACOMM_POLL_ONCE;
+    items[4].comm.poll_time_ms = 0U;
+    items[5].comm.poll_time_ms = 2000U;
 #if AMODBUS_STATIC_ENABLE
-    assert(aCommPlanInitStatic(client, &config, &storage) == A_STATUS_OK);
+    assert(fixturePlanInitStatic(client, &config, &storage) == A_STATUS_OK);
     plan = &storage;
 #else
-    assert(aCommPlanCreate(client, &config, &plan) == A_STATUS_OK);
+    assert(fixturePlanCreate(client, &config, &plan) == A_STATUS_OK);
 #endif
     assert(aCommPlanGroupCount(plan) == 3U);
     assert(aCommPlanFrameCount(plan) == 5U);
@@ -1348,12 +1393,12 @@ static void prepared_plans(aModbusTransportType_t type)
     assert(aCommPlanDestroy(plan) == A_STATUS_OK);
 #endif
 
-    for (size_t i = 0U; i < config.count; i++) items[i].poll_time_ms = 0U;
+    for (size_t i = 0U; i < config.count; i++) items[i].comm.poll_time_ms = 0U;
 #if AMODBUS_STATIC_ENABLE
-    assert(aCommPlanInitStatic(client, &config, &storage) == A_STATUS_OK);
+    assert(fixturePlanInitStatic(client, &config, &storage) == A_STATUS_OK);
     plan = &storage;
 #else
-    assert(aCommPlanCreate(client, &config, &plan) == A_STATUS_OK);
+    assert(fixturePlanCreate(client, &config, &plan) == A_STATUS_OK);
 #endif
     assert(aCommPlanGroupCount(plan) == 0U);
     assert(aCommPlanFrameCount(plan) == 0U);
@@ -1362,24 +1407,24 @@ static void prepared_plans(aModbusTransportType_t type)
 #else
     assert(aCommPlanDestroy(plan) == A_STATUS_OK);
 #endif
-    items[0].access = ACOMM_MAP_ACCESS_WRITE;
-    items[0].poll_time_ms = ACOMM_POLL_ONCE;
+    items[0].comm.flags = ACOMM_MAP_FLAG_WRITE;
+    items[0].comm.poll_time_ms = ACOMM_POLL_ONCE;
     assert(execute_first_plan(client, &config, NULL, NULL) ==
            A_STATUS_INVALID_PARAM);
-    items[0].access = ACOMM_MAP_ACCESS_READ;
+    items[0].comm.flags = ACOMM_MAP_FLAG_READ;
 
     /* 重试次数由通用作业配置。 */
     /* 单个一次性帧：成功立即停止，超时重试两次后停止。 */
     if (type == AMODBUS_TRANSPORT_RTU) {
         for (unsigned failure = 0U; failure < 2U; failure++) {
             for (size_t i = 0U; i < config.count; i++) {
-                items[i].poll_time_ms = i == 0U ? ACOMM_POLL_ONCE : 0U;
+                items[i].comm.poll_time_ms = i == 0U ? ACOMM_POLL_ONCE : 0U;
             }
 #if AMODBUS_STATIC_ENABLE
-            assert(aCommPlanInitStatic(client, &config, &storage) == A_STATUS_OK);
+            assert(fixturePlanInitStatic(client, &config, &storage) == A_STATUS_OK);
             plan = &storage;
 #else
-            assert(aCommPlanCreate(client, &config, &plan) == A_STATUS_OK);
+            assert(fixturePlanCreate(client, &config, &plan) == A_STATUS_OK);
 #endif
             const aCommJobConfig_t job = {
                 .execute = scheduled_test, .context = plan, .step_count = 1U,
@@ -1432,7 +1477,7 @@ static void prepared_plans(aModbusTransportType_t type)
 }
 
 static aStatus_t maximum_read(void *context,
-    const aCommAddressReadRequest_t *request)
+    const aModbusAddressReadRequest_t *request)
 {
     (void)context;
     if (request->area == AMODBUS_AREA_COILS) {
@@ -1451,7 +1496,7 @@ static aStatus_t maximum_read(void *context,
 }
 
 static aStatus_t maximum_write(void *context,
-    const aCommAddressWriteRequest_t *request)
+    const aModbusAddressWriteRequest_t *request)
 {
     (void)context;
     if (request->area == AMODBUS_AREA_COILS) {
@@ -1468,7 +1513,7 @@ static aStatus_t maximum_write(void *context,
 
 static void maximum_frames(aModbusTransportType_t type)
 {
-    static const aCommMappingAddressRange_t maximum_ranges[] = {
+    static const aModbusMappingAddressRange_t maximum_ranges[] = {
         {.area = AMODBUS_AREA_COILS, .quantity = 2000, .flags = READ_WRITE,
          .read = maximum_read, .write = maximum_write},
         {.area = AMODBUS_AREA_HOLDING_REGISTERS, .quantity = 65536,
@@ -1481,9 +1526,9 @@ static void maximum_frames(aModbusTransportType_t type)
         configuration(&server_port, AMODBUS_ROLE_SERVER);
     fixtureConfig_t client_config =
         configuration(&client_port, AMODBUS_ROLE_CLIENT);
-    aCommMapping_t server_storage;
-    aCommMapping_t client_storage;
-    aCommMapping_t *client;
+    aModbusMapping_t server_storage;
+    aModbusMapping_t client_storage;
+    aModbusMapping_t *client;
     uint16_t registers[125];
     uint8_t bits[251];
     aModbusResult_t result;
@@ -1520,15 +1565,15 @@ static void malformed_frames(void)
     link_t link = {.type = AMODBUS_TRANSPORT_RTU};
     endpoint_t port = {&link, A_TRUE};
     fixtureConfig_t config = configuration(&port, AMODBUS_ROLE_SERVER);
-    aCommMapping_t storage;
+    aModbusMapping_t storage;
     aModbusServerProcessRequest_t process;
     aModbusResult_t result;
     aModbusClientReadRequest_t read;
     endpoint_t client_port = {&link, A_FALSE};
     fixtureConfig_t client_config =
         configuration(&client_port, AMODBUS_ROLE_CLIENT);
-    aCommMapping_t client_storage;
-    aCommMapping_t *client;
+    aModbusMapping_t client_storage;
+    aModbusMapping_t *client;
 
     link.server = open_instance(&config, &storage);
     aModbusServerProcessRequestStructInit(&process);
@@ -1573,11 +1618,11 @@ static void malformed_frames(void)
     close_instance(link.server);
 
     /* 地址段重叠和整个 STRUCT 映射在初始化时拒绝。 */
-    aCommMappingAddressRange_t invalid_ranges[2] = {ranges[0], ranges[0]};
+    aModbusMappingAddressRange_t invalid_ranges[2] = {ranges[0], ranges[0]};
     config.ranges = invalid_ranges;
     config.range_count = 2;
     assert(invalid_config(&config) == A_STATUS_INVALID_PARAM);
-    aCommMappingServerMap_t invalid_map = MAP(0U, 3U, MOTOR);
+    aModbusServerMap_t invalid_map = MAP(0U, 3U, MOTOR);
     config.ranges = NULL;
     config.range_count = 0U;
     config.maps = &invalid_map;

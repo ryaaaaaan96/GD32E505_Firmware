@@ -1,6 +1,6 @@
 /**
  * @file aComm.h
- * @brief 周期作业、合并事件和临时请求；执行任务由应用创建。
+ * @brief 协议注册、通信表、调度及数据绑定；任务由应用创建。
  * 仅任务上下文，多生产者、单消费者；回调在 Process 调用者中执行。
  * 配置数组及 context 借用至销毁，生命周期操作由应用串行编排。
  */
@@ -8,6 +8,7 @@
 #define A_COMM_H
 
 #include "aOS.h"
+#include "aComm_endpoint.h"
 
 #ifndef ACOMM_STATIC_ENABLE
 #define ACOMM_STATIC_ENABLE 1
@@ -24,20 +25,112 @@
 #error "aComm requires an allocation API"
 #endif
 
-typedef struct aCommHandle aCommHandle_t;
+/* -------------------- 通信表与计划 -------------------- */
+
+#define ACOMM_POLL_ONCE UINT32_MAX
+#define ACOMM_MAP_FLAG_READ (1U << 0)
+#define ACOMM_MAP_FLAG_WRITE (1U << 1)
+#define ACOMM_MAP_SIG_WHOLE ACOMM_DATA_WHOLE
+#define ACOMM_MAP_FLAG_BREAK_BEFORE (1U << 2)
+#define ACOMM_MAP_FLAG_ACCESS_MASK \
+    (ACOMM_MAP_FLAG_READ | ACOMM_MAP_FLAG_WRITE)
+#define ACOMM_MAP_FLAG_MASK \
+    (ACOMM_MAP_FLAG_ACCESS_MASK | ACOMM_MAP_FLAG_BREAK_BEFORE)
 
 typedef struct {
-    aStatus_t status; /**< 业务执行结果，与调度器错误分开。 */
-    aBool_t advance; /**< false 表示暂未执行，不消耗重试次数。 */
-    aBool_t retryable; /**< 已执行但允许重试，由作业 retry_count 限制。 */
+    uint32_t poll_time_ms; /**< 0 不采集；ONCE 一轮；其余为整轮最小周期。 */
+    uint16_t flags; /**< READ/WRITE 权限及 BREAK_BEFORE 断帧标志。 */
+    uint16_t deviceID; /**< 数据端点中的设备标识。 */
+    size_t sigIndex; /**< 设备点表中的 SIG 下标。 */
+    size_t paramIndex; /**< 字段下标；ACOMM_MAP_SIG_WHOLE 表示整个 SIG。 */
+    uint32_t subscribe_events; /**< 订阅事件掩码，零表示不订阅。 */
+    uint32_t publish_events; /**< 操作完成时发布的事件掩码，零表示不发布。 */
+} aCommEntry_t;
+
+typedef struct {
+    aStatus_t status;
+    aBool_t advance; /**< false 表示未执行，不消耗重试次数。 */
+    aBool_t retryable; /**< 已执行失败且可重试，由调度器限制次数。 */
 } aCommStepResult_t;
+
+typedef struct {
+    uint8_t data[ACOMM_PREPARED_CAPACITY];
+    size_t size; /**< 0 表示没有缓存；字节由协议复制，禁止直接强转。 */
+} aCommPrepared_t;
+
+typedef struct {
+    const void *entries; /**< 原始具体协议数组。 */
+    const size_t *indices; /**< 本次操作的原表下标，不复制表项。 */
+    size_t count;
+} aCommBatch_t;
+
+typedef struct {
+    const aCommEntry_t *(*get)(const void *entries, size_t index);
+    aStatus_t (*check)(void *context, const aCommEntry_t *entry);
+    aBool_t (*merge)(void *context, const aCommEntry_t *first,
+        const aCommEntry_t *previous, const aCommEntry_t *next);
+    aStatus_t (*prepare)(void *context, const aCommBatch_t *batch,
+        aCommPrepared_t *prepared);
+    void (*execute)(void *context, const aCommBatch_t *batch,
+        const aCommPrepared_t *prepared, aCommStepResult_t *execution,
+        aCommEndpointResult_t *result);
+    aStatus_t (*acquire)(void *context);
+    aStatus_t (*release)(void *context);
+} aCommTableOps_t;
+
+/** 数组、回调及 context 借用至销毁，不允许移动或修改。
+ * get/execute 必填；其余可为 NULL；acquire/release 必须成对。
+ * get/check/merge 不分配、不做 I/O，同一输入须返回相同结果；
+ * 初始化统计与填充会重复调用这些回调。
+ * prepare 只生成缓存，不取得资源、不做 I/O；失败时直接丢弃字节。
+ * acquire/release 保护协议上下文的借用生命周期；失败不改变借用计数。
+ */
+typedef struct {
+    const void *items;
+    size_t count;
+    const aCommTableOps_t *ops;
+    void *context;
+} aCommPlanConfig_t;
+
+typedef struct aCommPlan aCommPlan_t;
+typedef struct {
+    size_t frame_index;
+    aCommStepResult_t *execution;
+    aCommEndpointResult_t *result;
+} aCommPlanRequest_t;
+typedef struct {
+    size_t first_frame;
+    size_t frame_count;
+    uint32_t poll_time_ms;
+} aCommPlanGroup_t;
+
+void aCommPlanConfigStructInit(aCommPlanConfig_t *config);
+void aCommPlanRequestStructInit(aCommPlanRequest_t *request);
+/* 通常由协议 init 回调返回计划配置；以下也支持独立使用计划。 */
+#if ACOMM_STATIC_ENABLE
+aStatus_t aCommPlanInitStatic(const aCommPlanConfig_t *config,
+    aCommPlan_t *plan);
+aStatus_t aCommPlanDeInitStatic(aCommPlan_t *plan);
+#endif
+#if ACOMM_DYNAMIC_ENABLE
+aStatus_t aCommPlanCreate(const aCommPlanConfig_t *config,
+    aCommPlan_t **plan_out);
+aStatus_t aCommPlanDestroy(aCommPlan_t *plan);
+#endif
+size_t aCommPlanFrameCount(const aCommPlan_t *plan);
+size_t aCommPlanGroupCount(const aCommPlan_t *plan);
+aStatus_t aCommPlanGroupGet(const aCommPlan_t *plan, size_t index,
+    aCommPlanGroup_t *group);
+aStatus_t aCommPlanExecute(aCommPlan_t *plan,
+    const aCommPlanRequest_t *request);
+
+/* -------------------- 调度与协议注册 -------------------- */
+
+typedef struct aCommHandle aCommHandle_t;
 
 typedef void (*aCommExecuteFn_t)(void *context, size_t step_index,
                                aCommStepResult_t *result);
 typedef void (*aCommEventFn_t)(void *context);
-
-/** 执行完整一轮后停止；普通 Trigger 不重新启动。 */
-#define ACOMM_POLL_ONCE UINT32_MAX
 
 typedef struct {
     aCommExecuteFn_t execute;
@@ -66,7 +159,35 @@ typedef struct {
 typedef aStatus_t (*aCommSubmitFn_t)(void *context,
     const aCommRequest_t *request);
 
+typedef struct aCommProtocol aCommProtocol_t;
+/** 协议注册回调，不规定主从角色、地址格式或传输介质。
+ * check 不分配资源、不访问端口；init 失败须撤销本次创建的资源。
+ * init 成功后可返回采集表；空表则由 process 处理一个服务步骤。
+ * deinit 在计划解除引用后调用，须支持失败后重试，成功才转移所有权。
+ * 初始化/释放由应用串行编排，启动前和释放前必须停止所有生产者。
+ */
 typedef struct {
+    aStatus_t (*check)(const aCommProtocol_t *protocol);
+    aStatus_t (*init)(const aCommProtocol_t *protocol,
+        aCommPlanConfig_t *table);
+    aCommExecuteFn_t process; /**< 无采集表时必填；在 Process 调用者中运行。 */
+    aStatus_t (*deinit)(void *context);
+} aCommProtocolOps_t;
+
+struct aCommProtocol {
+    const void *config; /**< 只读协议配置，仅对应回调解释。 */
+    const void *items; /**< 具体协议结构体数组，不按公共结构体步长遍历。 */
+    size_t count;
+    const aCommProtocolOps_t *ops;
+    void *context; /**< 应用持有的协议运行环境，保持有效至释放成功。 */
+};
+
+typedef struct {
+    aCommProtocol_t protocol; /**< 可选统一注册；与直接配置 table/jobs 互斥。 */
+    aCommPlanConfig_t table; /**< 注册具体协议数组；与 jobs 二选一。 */
+    uint16_t retry_count;
+    uint32_t interval_ms;
+    uint32_t error_delay_ms; /**< 表调度失败等待，StructInit 默认 5 ms。 */
     const aCommJobConfig_t *jobs;
     size_t job_count;
     const aCommEventConfig_t *events;
@@ -89,7 +210,7 @@ typedef struct {
     aTimeout_t wait; /**< 本次处理后的建议等待；事件可提前唤醒。 */
 } aCommProcessResult_t;
 
-/** @brief 填写空配置，无作业、事件或临时队列。
+/** @brief 填写默认配置：无通信表、作业、事件和队列，错误等待 5 ms。
  * @param[out] config 配置输出，NULL 不操作；不申请资源。
  */
 void aCommConfigStructInit(aCommConfig_t *config);
@@ -106,8 +227,12 @@ void aCommEventConfigStructInit(aCommEventConfig_t *config);
  */
 void aCommRequestStructInit(aCommRequest_t *request);
 
+/** 只检查配置及协议注册，不分配资源或开启端口。 */
+aStatus_t aCommConfigCheck(const aCommConfig_t *config);
+
 /* 配置结构体复制，数组及上下文借用至销毁；生命周期由应用单线程编排。
- * 静态实例零初始化，再提供数组及容量；见 aComm_instance.h。
+ * 静态实例零初始化，再提供数组及容量；通信表模式还需计划与作业存储，
+ * 见 aComm_instance.h。
  * OS 对象仍可能分配。
  * 除 poll_time_ms 的 ACOMM_POLL_ONCE 标记外，配置时间不得超过 INT32_MAX。
  * 相邻处理间隔须小于时基完整回绕周期。
@@ -181,4 +306,97 @@ aStatus_t aCommJobTrigger(aCommHandle_t *handle, size_t job_index);
  */
 aStatus_t aCommSubmit(aCommHandle_t *handle, const aCommRequest_t *request);
 
+/** 提前触发全部作业；已完成的 ONCE 不重新启动。 */
+aStatus_t aCommTrigger(aCommHandle_t *handle);
+
+/* -------------------- 数据绑定与事件请求 -------------------- */
+
+typedef struct aCommBinding aCommBinding_t;
+typedef struct {
+    aCommTarget_t target;
+    void *data;
+    size_t size;
+    aTimeout_t timeout;
+} aCommValueReadRequest_t;
+typedef struct {
+    aCommTarget_t target;
+    const void *data;
+    size_t size;
+    aTimeout_t timeout;
+} aCommValueWriteRequest_t;
+/* 回调同步完成整项操作；缓冲区仅在调用期间借用，不得重入当前绑定。 */
+typedef aStatus_t (*aCommValueReadFn_t)(void *,
+    const aCommValueReadRequest_t *);
+typedef aStatus_t (*aCommValueWriteFn_t)(void *,
+    const aCommValueWriteRequest_t *);
+typedef struct {
+    aCommEndpoint_t *data;
+    aCommValueReadFn_t sig_read; /**< NULL 时使用数据端点。 */
+    aCommValueWriteFn_t sig_write;
+    void *sig_context;
+    void *snapshot; /**< NULL 使用内部工作区；外部区须对齐且不与数据重叠。 */
+    size_t snapshot_size;
+} aCommBindingConfig_t;
+
+/** 请求已通过目标、权限及重叠范围检查；协议只解释自己的表项和地址。
+ * target 是此次实际访问目标；整组绑定可能收到某个完整字段的请求。
+ * info 为整个 SIG 的元信息；source 为写请求新值，读请求时为 NULL。
+ */
+typedef struct {
+    const aCommEntry_t *entry;
+    aCommTarget_t target;
+    aCommDataInfo_t info;
+    const void *source;
+    aBool_t write;
+} aCommBindingRequest_t;
+typedef struct {
+    uint32_t type; /**< 关联查询标签，aComm 不据此选择协议。 */
+    void *context;
+    aStatus_t (*execute)(void *, const aCommBindingRequest_t *);
+    void (*observe)(void *, const aCommEntry_t *, const aCommNotifyInput_t *);
+    aCommSubmitFn_t submit;
+    void *submit_context;
+} aCommBindingEvents_t;
+
+/** 同一个 SIG 的快照读或原子更新；edit 负责协议转换，不负责申请工作区。
+ * write=false：读取完整快照后调用 edit；true：由端点在同步区间调用 edit。
+ * 此接口走数据端点；自定义 sig_read/sig_write 的同步由提供者负责。
+ */
+typedef struct {
+    aCommDataQuery_t target;
+    size_t size;
+    aStatus_t (*edit)(void *, void *, size_t);
+    void *context;
+    aTimeout_t timeout;
+    aBool_t write;
+} aCommBindingTransfer_t;
+
+void aCommBindingConfigStructInit(aCommBindingConfig_t *config);
+void aCommValueReadRequestStructInit(aCommValueReadRequest_t *request);
+void aCommValueWriteRequestStructInit(aCommValueWriteRequest_t *request);
+aStatus_t aCommBindingConfigCheck(const aCommBindingConfig_t *config);
+aStatus_t aCommBindingEntryCheck(const aCommBindingConfig_t *config,
+    const aCommBindingEvents_t *events, const aCommEntry_t *entry);
+/** 静态嵌入实例：先零初始化并提供订阅槽；配置复制，引用借用至 DeInit。
+ * 无独立堆分配；共享工作区要求调用者串行化访问。
+ * observe 在通知现场执行，禁止阻塞；execute 在队列消费者中执行。
+ */
+aStatus_t aCommBindingInit(const aCommBindingConfig_t *config,
+    const aCommBindingEvents_t *events, aCommBinding_t *binding);
+aStatus_t aCommBindingSubscribe(aCommBinding_t *binding,
+    const aCommEntry_t *entry);
+/** 停止生产者后调用；未完成请求或端点仍借用节点时返回 BUSY。 */
+aStatus_t aCommBindingDeInit(aCommBinding_t *binding);
+aStatus_t aCommBindingRead(aCommBinding_t *binding,
+    const aCommValueReadRequest_t *request);
+aStatus_t aCommBindingWrite(aCommBinding_t *binding,
+    const aCommValueWriteRequest_t *request);
+aStatus_t aCommBindingTransfer(aCommBinding_t *binding,
+    const aCommBindingTransfer_t *request);
+/** 为宿主的一次分配计算附加存储；只给订阅项分配槽位及端点原生节点。 */
+aStatus_t aCommBindingStorageSize(const aCommBindingConfig_t *config,
+    size_t count, size_t *size);
+/** storage 必须标准最大对齐，容量至少为 StorageSize 返回值。 */
+aStatus_t aCommBindingStorageSetup(aCommBinding_t *binding,
+    const aCommBindingConfig_t *config, void *storage, size_t count);
 #endif

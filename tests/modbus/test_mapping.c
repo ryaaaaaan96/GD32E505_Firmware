@@ -1,5 +1,7 @@
-/* 只链接 aComm/aLib/aOS：以字节寻址端点验证映射并未写死寄存器协议。 */
-#include "aComm_mapping_instance.h"
+#include "aModbus_mapping_internal.h"
+/* 替换私有地址编解码回调，验证协议映射的数据转换与预编码边界。 */
+#include "aModbus_mapping_instance.h"
+#include "aComm_instance.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -64,15 +66,15 @@ static aStatus_t ready(aCommEndpoint_t *base)
     return A_STATUS_OK;
 }
 static aStatus_t area(aCommEndpoint_t *base, uint16_t id,
-    aCommAreaInfo_t *result)
+    aModbusMapArea_t *result)
 {
     (void)base;
     if (id != 9U) return A_STATUS_INVALID_PARAM;
-    *result = (aCommAreaInfo_t){.unit_bits = 8U, .read_limit = 6U,
+    *result = (aModbusMapArea_t){.unit_bits = 8U, .read_limit = 6U,
         .write_limit = 6U, .address_limit = 32U, .writable = A_TRUE};
     return A_STATUS_OK;
 }
-static aStatus_t check(aCommEndpoint_t *base, const aCommAddress_t *address,
+static aStatus_t check(aCommEndpoint_t *base, const aModbusMapAddress_t *address,
     const void *data, size_t size, aBool_t write)
 {
     (void)base;
@@ -84,20 +86,20 @@ static aStatus_t check(aCommEndpoint_t *base, const aCommAddress_t *address,
 }
 static aStatus_t describe(const aCommDataInfo_t *data,
     const aCommTarget_t *target, uint16_t region, uint8_t order,
-    aCommValueInfo_t *result)
+    aModbusMapValue_t *result)
 {
     if (target->paramIndex != ACOMM_DATA_WHOLE || region != 9U || order != 0U) {
         return A_STATUS_UNSUPPORTED;
     }
-    *result = (aCommValueInfo_t){.type = data->type, .size = data->size,
+    *result = (aModbusMapValue_t){.type = data->type, .size = data->size,
         .quantity = (uint16_t)data->size};
     return A_STATUS_OK;
 }
-static aStatus_t layout(const aCommValueInfo_t *value)
+static aStatus_t layout(const aModbusMapValue_t *value)
 {
     return value->type == ALIB_DATA_RAW ? A_STATUS_OK : A_STATUS_UNSUPPORTED;
 }
-static aStatus_t copy(const aCommValueInfo_t *value, uint16_t region,
+static aStatus_t copy(const aModbusMapValue_t *value, uint16_t region,
     uint8_t order, size_t first, size_t count, void *local, void *remote,
     aBool_t write)
 {
@@ -113,8 +115,8 @@ static aStatus_t slice(const aCommDataInfo_t *data, size_t field,
     (void)data; (void)field; (void)offset; (void)order;
     return A_STATUS_UNSUPPORTED;
 }
-static aBool_t merge(aCommEndpoint_t *base, const aCommAddress_t *first,
-    const aCommAddress_t *next)
+static aBool_t merge(aCommEndpoint_t *base, const aModbusMapAddress_t *first,
+    const aModbusMapAddress_t *next)
 {
     (void)base;
     return first->area == next->area && first->unit_id == next->unit_id &&
@@ -125,7 +127,7 @@ static aStatus_t wire_read(aCommEndpoint_t *base,
     const aCommReadAccess_t *request)
 {
     wire_t *wire = (wire_t *)base;
-    const aCommAddress_t *target = request->target;
+    const aModbusMapAddress_t *target = request->target;
     assert(check(base, target, request->data, request->size, A_FALSE) ==
         A_STATUS_OK);
     wire->reads++;
@@ -137,19 +139,19 @@ static aStatus_t wire_write(aCommEndpoint_t *base,
     const aCommWriteAccess_t *request)
 {
     wire_t *wire = (wire_t *)base;
-    const aCommAddress_t *target = request->target;
+    const aModbusMapAddress_t *target = request->target;
     assert(check(base, target, request->data, request->size, A_TRUE) ==
         A_STATUS_OK);
     memcpy(wire->bytes + target->address, request->data, target->quantity);
     return A_STATUS_OK;
 }
-static aStatus_t prepare(aCommEndpoint_t *base, const aCommAddress_t *address,
+static aStatus_t prepare(aCommEndpoint_t *base, const aModbusMapAddress_t *address,
     aCommPrepared_t *result)
 {
     if (((wire_t *)base)->fail_prepare) return A_STATUS_ERROR;
     result->data[0] = 0x42U;
     result->size = 1U;
-    result->address = *address;
+    (void)address;
     return A_STATUS_OK;
 }
 static aStatus_t prepared_read(aCommEndpoint_t *base,
@@ -163,70 +165,72 @@ static const aCommDataOps_t data_ops = {.info = info, .update = update};
 static const aCommEndpointOps_t local_ops = {
     .read = data_read, .write = data_write, .data = &data_ops
 };
-static const aCommAddressOps_t address_ops = {
+static const aModbusAddressOps_t address_ops = {
     .ready = ready, .area = area, .check = check, .describe = describe,
     .layout = layout, .copy = copy, .slice = slice, .merge = merge,
     .prepare = prepare, .read_prepared = prepared_read
 };
 static const aCommEndpointOps_t wire_ops = {
-    .read = wire_read, .write = wire_write, .address = &address_ops
+    .read = wire_read, .write = wire_write, .extension = &address_ops
 };
 
 static void exercise(aBool_t preencode)
 {
     data_t local = {.base.ops = &local_ops};
-    aCommAddressOps_t rules = address_ops;
+    aModbusAddressOps_t rules = address_ops;
     aCommEndpointOps_t operations = wire_ops;
     if (!preencode) { rules.prepare = NULL; rules.read_prepared = NULL; }
-    operations.address = &rules;
+    operations.extension = &rules;
     wire_t wire = {.base.ops = &operations};
-    const aCommMappingClientMap_t maps[] = {
+    const aModbusClientMap_t maps[] = {
         {.area = 9U, .address = 2U, .quantity = 3U,
-         .target = {7U, 0U, ACOMM_DATA_WHOLE, 0U, 0U},
-         .access = ACOMM_MAP_ACCESS_READ, .poll_time_ms = 10U},
+         .comm.deviceID = 7U, .comm.sigIndex = 0U,
+         .comm.paramIndex = ACOMM_DATA_WHOLE,
+         .comm.flags = ACOMM_MAP_FLAG_READ, .comm.poll_time_ms = 10U},
         {.area = 9U, .address = 5U, .quantity = 3U,
-         .target = {7U, 1U, ACOMM_DATA_WHOLE, 0U, 0U},
-         .access = ACOMM_MAP_ACCESS_READ, .poll_time_ms = 10U}
+         .comm.deviceID = 7U, .comm.sigIndex = 1U,
+         .comm.paramIndex = ACOMM_DATA_WHOLE,
+         .comm.flags = ACOMM_MAP_FLAG_READ, .comm.poll_time_ms = 10U}
     };
-    const aCommMappingClientConfig_t config = {
-        .binding = {.data = &local.base, .protocol = &wire.base},
+    const aModbusMappingClientConfig_t config = {
+        .binding = {.comm.data = &local.base, .protocol = &wire.base},
         .maps = maps, .map_count = 2U, .unit_id = 1U,
         .request_timeout = A_TIMEOUT_MS(10U)
     };
-    const aCommPlanConfig_t plan_config = {
-        .items = maps, .count = 2U, .unit_id = 1U,
-        .timeout = A_TIMEOUT_MS(10U)
-    };
-    aCommMapping_t *mapping;
+    aModbusMapping_t *mapping;
     aCommPlan_t *plan;
 #if ACOMM_STATIC_ENABLE
-    aCommMapping_t storage = {0};
+    aModbusMapping_t storage = {0};
     size_t indices[2];
     aCommPlanFrame_t frames[2];
     aCommPlan_t plan_storage = {.frames = frames, .capacity = 2U,
         .indices = indices, .index_capacity = 2U};
     mapping = &storage;
     plan = &plan_storage;
-    assert(aCommMappingClientInitStatic(&config, mapping) == A_STATUS_OK);
+    assert(aModbusMappingClientInitStatic(&config, mapping) == A_STATUS_OK);
 #else
-    assert(aCommMappingClientCreate(&config, &mapping) == A_STATUS_OK);
+    assert(aModbusMappingClientCreate(&config, &mapping) == A_STATUS_OK);
 #endif
+    const aCommPlanConfig_t plan_config = {
+        .items = maps, .count = 2U, .ops = &aModbusClientTableOps,
+        .context = mapping
+    };
     if (preencode) {
         wire.fail_prepare = A_TRUE;
 #if ACOMM_STATIC_ENABLE
-        assert(aCommPlanInitStatic(mapping, &plan_config, plan) == A_STATUS_ERROR);
+        assert(aCommPlanInitStatic(&plan_config, plan) == A_STATUS_ERROR);
         assert(!plan->ready);
 #else
-        assert(aCommPlanCreate(mapping, &plan_config, &plan) == A_STATUS_ERROR);
+        assert(aCommPlanCreate(&plan_config, &plan) == A_STATUS_ERROR);
         assert(plan == NULL);
 #endif
         assert(mapping->plan_count == 0U);
         wire.fail_prepare = A_FALSE;
     }
 #if ACOMM_STATIC_ENABLE
-    assert(aCommPlanInitStatic(mapping, &plan_config, plan) == A_STATUS_OK);
+    assert(aCommPlanInitStatic(&plan_config, plan) == A_STATUS_OK);
 #else
-    assert(aCommPlanCreate(mapping, &plan_config, &plan) == A_STATUS_OK);
+    assert(aCommPlanCreate(&plan_config, &plan) == A_STATUS_OK);
 #endif
     assert(aCommPlanFrameCount(plan) == 1U);
     for (unsigned i = 0U; i < 6U; i++) wire.bytes[2U + i] = (uint8_t)(i + 1U);
@@ -234,50 +238,51 @@ static void exercise(aBool_t preencode)
     assert(aCommPlanExecute(plan, &request) == A_STATUS_OK);
     assert(wire.reads == 1U && wire.prepared_reads == (unsigned)preencode);
     assert(memcmp(local.values, wire.bytes + 2U, 6U) == 0);
-    aCommMappingClientSigRequest_t write = {
+    aModbusMappingClientSigRequest_t write = {
         .unit_id = 1U, .area = 9U, .address = 20U,
         .target = {7U, 1U, ACOMM_DATA_WHOLE}, .timeout = A_TIMEOUT_MS(10U)
     };
-    assert(aCommMappingClientWriteSig(mapping, &write) == A_STATUS_OK);
+    assert(aModbusMappingClientWriteSig(mapping, &write) == A_STATUS_OK);
     assert(memcmp(wire.bytes + 20U, local.values[1], 3U) == 0);
 #if ACOMM_STATIC_ENABLE
     assert(aCommPlanDeInitStatic(plan) == A_STATUS_OK);
-    assert(aCommMappingDeInitStatic(mapping) == A_STATUS_OK);
+    assert(aModbusMappingDeInitStatic(mapping) == A_STATUS_OK);
 #else
     assert(aCommPlanDestroy(plan) == A_STATUS_OK);
-    assert(aCommMappingDestroy(mapping) == A_STATUS_OK);
+    assert(aModbusMappingDestroy(mapping) == A_STATUS_OK);
 #endif
-    const aCommMappingServerMap_t server_maps[] = {
+    const aModbusServerMap_t server_maps[] = {
         {.area = 9U, .address = 2U, .quantity = 3U,
-         .flags = ACOMM_MAP_ACCESS_READ | ACOMM_MAP_ACCESS_WRITE,
-         .target = {7U, 0U, ACOMM_DATA_WHOLE, 0U, 0U}}
+         .comm.flags = ACOMM_MAP_FLAG_READ | ACOMM_MAP_FLAG_WRITE,
+         .comm.deviceID = 7U, .comm.sigIndex = 0U,
+         .comm.paramIndex = ACOMM_DATA_WHOLE}
     };
-    const aCommMappingServerConfig_t server = {
+    const aModbusMappingServerConfig_t server = {
         .binding = config.binding, .maps = server_maps, .map_count = 1U
     };
 #if ACOMM_STATIC_ENABLE
-    assert(aCommMappingServerInitStatic(&server, mapping) == A_STATUS_OK);
+    assert(aModbusMappingServerInitStatic(&server, mapping) == A_STATUS_OK);
 #else
-    assert(aCommMappingServerCreate(&server, &mapping) == A_STATUS_OK);
+    assert(aModbusMappingServerCreate(&server, &mapping) == A_STATUS_OK);
 #endif
     uint8_t bytes[3] = {0};
-    aCommAddressReadRequest_t read = {
+    aModbusAddressReadRequest_t read = {
         .area = 9U, .address = 3U, .quantity = 2U,
         .data = bytes, .size = sizeof(bytes), .timeout = A_TIMEOUT_MS(10U)
     };
-    assert(aCommMappingServerRead(mapping, &read) == A_STATUS_OK);
+    assert(aModbusMappingServerRead(mapping, &read) == A_STATUS_OK);
     assert(bytes[0] == 2U && bytes[1] == 3U);
     bytes[0] = 7U;
-    aCommAddressWriteRequest_t set = {
+    aModbusAddressWriteRequest_t set = {
         .area = 9U, .address = 2U, .quantity = 3U,
         .data = bytes, .size = sizeof(bytes), .timeout = A_TIMEOUT_MS(10U)
     };
-    assert(aCommMappingServerWrite(mapping, &set) == A_STATUS_OK);
+    assert(aModbusMappingServerWrite(mapping, &set) == A_STATUS_OK);
     assert(memcmp(bytes, local.values[0], 3U) == 0);
 #if ACOMM_STATIC_ENABLE
-    assert(aCommMappingDeInitStatic(mapping) == A_STATUS_OK);
+    assert(aModbusMappingDeInitStatic(mapping) == A_STATUS_OK);
 #else
-    assert(aCommMappingDestroy(mapping) == A_STATUS_OK);
+    assert(aModbusMappingDestroy(mapping) == A_STATUS_OK);
 #endif
 }
 int main(void)

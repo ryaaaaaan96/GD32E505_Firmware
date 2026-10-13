@@ -2,9 +2,13 @@
 #define APP_CONFIG_H
 
 /* IDU 与 FAN 点表共用的 aBus 实例号，挂载和 RAM 绑定必须一致。 */
-enum {
-    PROTOCOL_BUS_INSTANCE_ID = 1U
-};
+#define PROTOCOL_BUS_INSTANCE_ID 1U
+
+/* 板载 RS485：串口配置、协议传输预算和分帧时序共用这些常量。
+ * 当前为 8N1：1 起始位 + 8 数据位 + 1 停止位，共 10 位。
+ * 修改校验位/停止位后同步修改 CHARACTER_BITS，装配时校验实际格式。 */
+#define APP_RS485_BAUD_RATE 115200U
+#define APP_RS485_CHARACTER_BITS 10U
 
 /* 应用调试角色：0 为 Server（从站），1 为 Client（主站）。
  * USART2 同时只运行一种角色，不另设可与之冲突的 Server 开关。

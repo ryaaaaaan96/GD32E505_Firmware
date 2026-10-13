@@ -6,8 +6,10 @@
 #include "aModbus_server.h"
 #include "nanomodbus.h"
 #include "aAtomic.h"
+#include "aComm_endpoint.h"
 
 struct aModbusHandle {
+    aCommEndpoint_t comm; /**< 公共首成员，运行端点随协议实例一起生存。 */
     nmbs_t core;
     /* 主从配置共用存储；config 指向当前角色的 modbus 成员。 */
     union {

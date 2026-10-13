@@ -1,8 +1,12 @@
 # 官方源码保持不变，直接继承项目参数，不加载上游工程 CMake。
+# 协议和映射依赖 aComm 契约；aComm 不反向依赖协议模块。
 add_library(aModbus STATIC
     src/aModbus.c
     src/aModbus_client.c
     src/aModbus_server.c
+    src/aModbus_endpoint.c
+    src/aModbus_mapping.c
+    src/aModbus_mapping_data.c
     nanoMODBUS/nanomodbus.c
 )
 target_include_directories(aModbus PUBLIC
@@ -15,7 +19,7 @@ if(AMODBUS_STATIC_ENABLE)
 endif()
 target_include_directories(aModbus ${nanomodbus_visibility}
     "${CMAKE_CURRENT_SOURCE_DIR}/nanoMODBUS")
-target_link_libraries(aModbus PUBLIC aOS
+target_link_libraries(aModbus PUBLIC aOS aComm
     PRIVATE aclass_project_options)
 foreach(feature STATIC DYNAMIC CLIENT SERVER)
     target_compile_definitions(aModbus PUBLIC
@@ -37,9 +41,3 @@ target_compile_definitions(aModbus ${nanomodbus_visibility}
     NMBS_SERVER_READ_WRITE_REGISTERS_DISABLED
     NMBS_SERVER_READ_DEVICE_IDENTIFICATION_DISABLED
 )
-
-# 可选端点实现只依赖公共契约；核心在关闭 aComm 后仍可独立构建。
-if(ACOMM_ENABLE)
-    target_sources(aModbus PRIVATE src/aModbus_endpoint.c)
-    target_link_libraries(aModbus PUBLIC aComm)
-endif()

@@ -1,5 +1,5 @@
 /* 不链接任何协议栈，验证任意字节帧、流式传输及注册回调。 */
-#include "aComm_channel_instance.h"
+#include "aComm_instance.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

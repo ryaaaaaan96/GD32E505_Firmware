@@ -73,6 +73,7 @@ _aclass_option(ADRV_GPIO_SWD_PROTECT_DISABLE)
 # ── func / aShell ─────────────────────────────────────────────────────
 
 # ── func / aModbus ────────────────────────────────────────────────────
+_aclass_requires(AMODBUS_ENABLE ACOMM_ENABLE)
 if(AMODBUS_ENABLE AND NOT AMODBUS_STATIC_ENABLE AND
    NOT AMODBUS_DYNAMIC_ENABLE)
     message(FATAL_ERROR "aModbus requires STATIC or DYNAMIC allocation")

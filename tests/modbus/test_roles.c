@@ -4,9 +4,9 @@
 #undef main
 
 static fixtureEndpoints_t preflight;
-static aCommMappingConfig_t preflightConnection(const fixtureConfig_t *config)
+static aModbusMappingConfig_t preflightConnection(const fixtureConfig_t *config)
 {
-    aModbusEndpointInit(&preflight.protocol, NULL);
+    preflight.protocol = NULL;
     assert(aBusEndpointInit(&preflight.data, config->bus) == A_STATUS_OK);
     return fixtureConnection(config, &preflight);
 }
@@ -23,7 +23,7 @@ static aStatus_t submit(void *context, const aCommRequest_t *work)
     return A_STATUS_OK;
 }
 
-static void notified(void *context, const aCommMappingServerMap_t *map,
+static void notified(void *context, const aModbusServerMap_t *map,
     const aCommNotifyInput_t *input)
 {
     assert(context == &notifications);
@@ -33,7 +33,7 @@ static void notified(void *context, const aCommMappingServerMap_t *map,
     notifications++;
 }
 
-static aStatus_t release(aCommMapping_t *handle)
+static aStatus_t release(aModbusMapping_t *handle)
 {
 #if AMODBUS_DYNAMIC_ENABLE
     return fixtureDestroy(handle);
@@ -48,10 +48,10 @@ static void roles(void)
     endpoint_t server_port = {&wire, A_TRUE}, client_port = {&wire, A_FALSE};
     fixtureConfig_t server_fixture = configuration(
         &server_port, AMODBUS_ROLE_SERVER);
-    aCommMappingServerMap_t map = MAP(0U, 2U, COUNTER);
-    map.target.subscribe_events = ABUS_EVENT_UPDATED;
-    aCommMappingServerConfig_t server;
-    aCommMappingServerConfigStructInit(&server);
+    aModbusServerMap_t map = MAP(0U, 2U, COUNTER);
+    map.comm.subscribe_events = ABUS_EVENT_UPDATED;
+    aModbusMappingServerConfig_t server;
+    aModbusMappingServerConfigStructInit(&server);
     server.binding = preflightConnection(&server_fixture);
     server_fixture.server_override = &server;
     server.maps = &map;
@@ -59,16 +59,16 @@ static void roles(void)
     server.notify = notified;
     server.notify_context = &notifications;
 
-    aCommMappingClientMap_t client_map = {
+    aModbusClientMap_t client_map = {
         .area = AMODBUS_AREA_HOLDING_REGISTERS, .address = 0U,
-        .quantity = 2U, .access = ACOMM_MAP_ACCESS_READ | ACOMM_MAP_ACCESS_WRITE,
-        .target = {.deviceID = 1U, .sigIndex = COUNTER,
-            .paramIndex = ABUS_SIG_WHOLE,
-            .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE},
-        .poll_time_ms = 0U
+        .quantity = 2U, .comm.flags = ACOMM_MAP_FLAG_READ | ACOMM_MAP_FLAG_WRITE,
+        .comm.deviceID = 1U, .comm.sigIndex = COUNTER,
+            .comm.paramIndex = ABUS_SIG_WHOLE,
+            .comm.subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
+        .comm.poll_time_ms = 0U
     };
-    aCommMappingClientConfig_t client;
-    aCommMappingClientConfigStructInit(&client);
+    aModbusMappingClientConfig_t client;
+    aModbusMappingClientConfigStructInit(&client);
     fixtureConfig_t client_fixture = configuration(
         &client_port, AMODBUS_ROLE_CLIENT);
     client.binding = preflightConnection(&client_fixture);
@@ -77,17 +77,17 @@ static void roles(void)
     client.map_count = 1U;
     client.submit = submit;
     client.submit_context = &queued;
-    aCommMapping_t *master;
+    aModbusMapping_t *master;
 #if AMODBUS_DYNAMIC_ENABLE
     assert(fixtureCreate(&server_fixture, &wire.server) == A_STATUS_OK);
     assert(fixtureCreate(&client_fixture, &master) == A_STATUS_OK);
 #else
-    aCommMappingSubscription_t server_subs[1], client_subs[1];
-    aCommMapping_t server_storage = {
-        .subscriptions = server_subs, .subscription_capacity = 1U
+    aCommBindingSubscription_t server_subs[1], client_subs[1];
+    aModbusMapping_t server_storage = {
+        .comm.subscriptions = server_subs, .comm.subscription_capacity = 1U
     };
-    aCommMapping_t client_storage = {
-        .subscriptions = client_subs, .subscription_capacity = 1U
+    aModbusMapping_t client_storage = {
+        .comm.subscriptions = client_subs, .comm.subscription_capacity = 1U
     };
     assert(fixtureOpen(&server_fixture, &server_storage, NULL, A_FALSE) == A_STATUS_OK);
     assert(fixtureOpen(&client_fixture, &client_storage, NULL, A_FALSE) == A_STATUS_OK);
@@ -97,8 +97,8 @@ static void roles(void)
 #endif
     /* 从站绑定拒绝主动请求；主站只有事件项，完全不创建计划或 aComm。 */
     assert(master->plan_count == 0U);
-    assert(master->subscription_count == 1U);
-    assert(wire.server->subscription_count == 1U);
+    assert(master->comm.subscription_count == 1U);
+    assert(wire.server->comm.subscription_count == 1U);
     uint32_t value = 234U;
     aBusRequestConfig_t request_config = {
         .target = {1U, COUNTER, ABUS_SIG_WHOLE},
@@ -130,8 +130,8 @@ static void roles(void)
 
     /* 仅登记关系可以不提供任何回调；从站主动读写请求必须明确拒绝。 */
     server.notify = NULL;
-    map.target.subscribe_events = ABUS_SUBSCRIBE_MARK_ONLY;
-    assert(aCommMappingServerConfigCheck(&server) == A_STATUS_OK);
+    map.comm.subscribe_events = ABUS_SUBSCRIBE_MARK_ONLY;
+    assert(aModbusMappingServerConfigCheck(&server) == A_STATUS_OK);
 #if AMODBUS_DYNAMIC_ENABLE
     assert(fixtureCreate(&server_fixture, &wire.server) == A_STATUS_OK);
 #else
@@ -151,15 +151,15 @@ static void roles(void)
     assert(aBusPublish(&bus, &update, &dispatched) == A_STATUS_OK);
     assert(dispatched.matched == 0U && notifications == 1U);
     assert(release(wire.server) == A_STATUS_OK);
-    map.target.subscribe_events = ABUS_REQUEST_READ;
-    assert(aCommMappingServerConfigCheck(&server) == A_STATUS_UNSUPPORTED);
-    map.target.subscribe_events = ABUS_EVENT_UPDATED;
-    assert(aCommMappingServerConfigCheck(&server) == A_STATUS_INVALID_PARAM);
+    map.comm.subscribe_events = ABUS_REQUEST_READ;
+    assert(aModbusMappingServerConfigCheck(&server) == A_STATUS_UNSUPPORTED);
+    map.comm.subscribe_events = ABUS_EVENT_UPDATED;
+    assert(aModbusMappingServerConfigCheck(&server) == A_STATUS_INVALID_PARAM);
     client.binding.protocol = master->config->protocol;
     client.submit = NULL;
-    assert(aCommMappingClientConfigCheck(&client) == A_STATUS_INVALID_PARAM);
-    client_map.target.subscribe_events = ABUS_SUBSCRIBE_MARK_ONLY;
-    assert(aCommMappingClientConfigCheck(&client) == A_STATUS_OK);
+    assert(aModbusMappingClientConfigCheck(&client) == A_STATUS_INVALID_PARAM);
+    client_map.comm.subscribe_events = ABUS_SUBSCRIBE_MARK_ONLY;
+    assert(aModbusMappingClientConfigCheck(&client) == A_STATUS_OK);
     assert(release(master) == A_STATUS_OK);
 }
 
@@ -223,11 +223,11 @@ static void short_bits(aModbusTransportType_t type)
         reply[8] = 1U; reply[9] = 0x55U;
         reply_size = 10U;
     }
-    aCommMapping_t *handle;
+    aModbusMapping_t *handle;
 #if AMODBUS_DYNAMIC_ENABLE
     assert(fixtureCreate(&config, &handle) == A_STATUS_OK);
 #else
-    aCommMapping_t storage = {0};
+    aModbusMapping_t storage = {0};
     assert(fixtureInitStatic(&config, &storage) == A_STATUS_OK);
     handle = &storage;
 #endif
@@ -241,23 +241,23 @@ static void short_bits(aModbusTransportType_t type)
     assert(aModbusClientRead(fixtureProtocol(handle), &read) == A_STATUS_ERROR);
     assert(result[0] == 0xAAU && result[1] == 0xAAU);
     if (type == AMODBUS_TRANSPORT_RTU) {
-        aCommMappingClientMap_t items[9];
+        aModbusClientMap_t items[9];
         for (size_t i = 0U; i < 9U; i++) {
-            items[i] = (aCommMappingClientMap_t){
+            items[i] = (aModbusClientMap_t){
                 .area = AMODBUS_AREA_COILS, .address = (uint16_t)i,
-                .quantity = 1U, .access = ACOMM_MAP_ACCESS_READ,
-                .poll_time_ms = 1000U,
-                .target = {.deviceID = 1U, .sigIndex = i,
-                    .paramIndex = ABUS_SIG_WHOLE}
+                .quantity = 1U, .comm.flags = ACOMM_MAP_FLAG_READ,
+                .comm.poll_time_ms = 1000U,
+                .comm.deviceID = 1U, .comm.sigIndex = i,
+                    .comm.paramIndex = ABUS_SIG_WHOLE
             };
         }
-        const aCommPlanConfig_t plan_config = {
+        const fixturePlanConfig_t plan_config = {
             .items = items, .count = 9U, .unit_id = 1U,
             .timeout = A_TIMEOUT_MS(1000U)
         };
         aCommPlan_t *plan;
 #if AMODBUS_DYNAMIC_ENABLE
-        assert(aCommPlanCreate(handle, &plan_config, &plan) == A_STATUS_OK);
+        assert(fixturePlanCreate(handle, &plan_config, &plan) == A_STATUS_OK);
 #else
         aCommPlanFrame_t frames[1];
         size_t indices[9];
@@ -265,7 +265,7 @@ static void short_bits(aModbusTransportType_t type)
             .frames = frames, .capacity = 1U,
             .indices = indices, .index_capacity = 9U
         };
-        assert(aCommPlanInitStatic(handle, &plan_config, &plan_storage) ==
+        assert(fixturePlanInitStatic(handle, &plan_config, &plan_storage) ==
                A_STATUS_OK);
         plan = &plan_storage;
 #endif

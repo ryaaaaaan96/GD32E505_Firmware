@@ -6,6 +6,7 @@
 #include "aStream.h"
 
 typedef struct aCommChannel aCommChannel_t;
+/** 指定接收边界的获取方式，不代表具体协议或网络类型。 */
 typedef enum {
     ACOMM_CHANNEL_STREAM, /**< 直接消费底层字节流，允许半包、粘包和 EOF。 */
     ACOMM_CHANNEL_GAP     /**< 按真实接收时间分帧，每次 read 不跨帧。 */

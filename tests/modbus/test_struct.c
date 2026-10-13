@@ -2,7 +2,7 @@
 #define main original_modbus_main
 #include "test_modbus.c"
 #undef main
-#include "aComm_mapping_internal.h"
+#include "aModbus_mapping_internal.h"
 
 typedef struct {
     uint32_t number;
@@ -44,17 +44,17 @@ static void invalid_layouts(void)
     };
     /* 只用于定义查询，无数据读写；确保检查不依赖 aBus 定义检查开关。 */
     aBusHandle_t metadata_bus = {.tables = &table, .table_count = 1U};
-    aCommMappingServerMap_t map = {
+    aModbusServerMap_t map = {
         .area = AMODBUS_AREA_HOLDING_REGISTERS,
-        .address = 100U, .quantity = 10U, .flags = READ_WRITE,
-        .target = {.deviceID = 3U,
-                   .sigIndex = 0U,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}
+        .address = 100U, .quantity = 10U, .comm.flags = READ_WRITE,
+        .comm.deviceID = 3U,
+                   .comm.sigIndex = 0U,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE
     };
     link_t link = {.type = AMODBUS_TRANSPORT_RTU};
     endpoint_t port = {&link, A_TRUE};
     fixtureConfig_t config = configuration(&port, AMODBUS_ROLE_SERVER);
-    aCommMapping_t storage;
+    aModbusMapping_t storage;
 
     config.bus = &metadata_bus;
     config.maps = &map;
@@ -101,7 +101,7 @@ static void invalid_layouts(void)
 }
 
 static aStatus_t local_read(void *context,
-    const aCommMappingSigReadRequest_t *request)
+    const aCommValueReadRequest_t *request)
 {
     assert(request->target.paramIndex == ACOMM_MAP_SIG_WHOLE);
     assert(request->size == sizeof(mixed_t));
@@ -110,7 +110,7 @@ static aStatus_t local_read(void *context,
 }
 
 static aStatus_t local_write(void *context,
-    const aCommMappingSigWriteRequest_t *request)
+    const aCommValueWriteRequest_t *request)
 {
     assert(request->target.paramIndex == ACOMM_MAP_SIG_WHOLE);
     assert(request->size == sizeof(mixed_t));
@@ -120,24 +120,24 @@ static aStatus_t local_write(void *context,
 
 static void transfers(aModbusTransportType_t type, aBool_t callbacks)
 {
-    static const aCommMappingServerMap_t maps[] = {
+    static const aModbusServerMap_t maps[] = {
         {.area = AMODBUS_AREA_HOLDING_REGISTERS,
-         .address = 100U, .quantity = 10U, .flags = READ_WRITE,
-         .target = {.deviceID = 3U,
-                   .sigIndex = 0U,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}},
+         .address = 100U, .quantity = 10U, .comm.flags = READ_WRITE,
+         .comm.deviceID = 3U,
+                   .comm.sigIndex = 0U,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE},
         MAP(110U, 1U, WORD),
         {.area = AMODBUS_AREA_HOLDING_REGISTERS,
-         .address = 200U, .quantity = 10U, .flags = READ_WRITE,
-         .target = {.deviceID = 3U,
-                   .sigIndex = 0U,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE},
+         .address = 200U, .quantity = 10U, .comm.flags = READ_WRITE,
+         .comm.deviceID = 3U,
+                   .comm.sigIndex = 0U,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE,
          .word_order = AMODBUS_WORD_LOW_FIRST},
         {.area = AMODBUS_AREA_INPUT_REGISTERS,
-         .address = 0U, .quantity = 10U, .flags = ACOMM_MAP_ACCESS_READ,
-         .target = {.deviceID = 3U,
-                   .sigIndex = 0U,
-                   .paramIndex = ACOMM_MAP_SIG_WHOLE}},
+         .address = 0U, .quantity = 10U, .comm.flags = ACOMM_MAP_FLAG_READ,
+         .comm.deviceID = 3U,
+                   .comm.sigIndex = 0U,
+                   .comm.paramIndex = ACOMM_MAP_SIG_WHOLE},
     };
     const uint16_t expected[] = {0U, 1234U, 0xFFFFU, 0xFFD6U, 999U,
                                0x1122U, 0x3344U, 0x5566U, 0x89ABU, 0xCDEFU};
@@ -145,13 +145,13 @@ static void transfers(aModbusTransportType_t type, aBool_t callbacks)
     endpoint_t server_port = {&link, A_TRUE}, client_port = {&link, A_FALSE};
     fixtureConfig_t server = configuration(&server_port, AMODBUS_ROLE_SERVER);
     fixtureConfig_t client = configuration(&client_port, AMODBUS_ROLE_CLIENT);
-    aCommMapping_t server_storage, client_storage, *handle;
+    aModbusMapping_t server_storage, client_storage, *handle;
     aModbusResult_t result;
     aCommEndpointResult_t endpoint_result;
     uint16_t registers[11];
     unsigned before;
     mixed_t local;
-    aCommMappingClientSigRequest_t request = {
+    aModbusMappingClientSigRequest_t request = {
         .unit_id = 1U, .area = AMODBUS_AREA_HOLDING_REGISTERS,
         .address = 100U, .target = {.deviceID = 3U,
                    .sigIndex = 0U,
@@ -237,24 +237,24 @@ static void transfers(aModbusTransportType_t type, aBool_t callbacks)
         108U, 3U, registers, 6U, &result) == A_STATUS_OK);
     assert(mixed.tail == 88U && word == 321U);
 
-    assert(aCommMappingClientReadSig(handle, &request) == A_STATUS_OK);
+    assert(aModbusMappingClientReadSig(handle, &request) == A_STATUS_OK);
     assert(memcmp(&local, &mixed, sizeof(local)) == 0);
     local = initial;
     before = sig_writes;
-    assert(aCommMappingClientWriteSig(handle, &request) == A_STATUS_OK);
+    assert(aModbusMappingClientWriteSig(handle, &request) == A_STATUS_OK);
     assert(memcmp(&mixed, &initial, sizeof(mixed)) == 0);
     if (callbacks) assert(sig_writes == before + 1U);
     {
-        aCommMappingClientMap_t map = {
-            .access = ACOMM_MAP_ACCESS_READ,
-            .poll_time_ms = ACOMM_POLL_ONCE,
+        aModbusClientMap_t map = {
+            .comm.flags = ACOMM_MAP_FLAG_READ,
+            .comm.poll_time_ms = ACOMM_POLL_ONCE,
             .area = request.area, .address = 100U, .quantity = 10U,
-            .flags = 0U, .target = {.deviceID = request.target.deviceID,
-                .sigIndex = request.target.sigIndex,
-                .paramIndex = request.target.paramIndex}
+             .comm.deviceID = request.target.deviceID,
+                .comm.sigIndex = request.target.sigIndex,
+                .comm.paramIndex = request.target.paramIndex
         };
         size_t completed;
-        const aCommPlanConfig_t plan_config = {
+        const fixturePlanConfig_t plan_config = {
             .items = &map, .count = 1U,
             .unit_id = 1U, .timeout = A_TIMEOUT_MS(1000U)
         };

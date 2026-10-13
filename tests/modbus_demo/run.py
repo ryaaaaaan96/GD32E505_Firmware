@@ -7,23 +7,21 @@ import re
 import shutil
 import subprocess
 import tempfile
-
 root = Path(__file__).resolve().parents[2]
 sources = [
-    "func/aComm/src/aComm_mapping.c",
-    "func/aComm/src/aComm_mapping_client.c",
-    "func/aComm/src/aComm_mapping_server.c",
+    "func/aModbus/src/aModbus_mapping.c",
     "tests/modbus_demo/test_demo.c", "tests/modbus/os_mock.c",
     "tests/comm/wait_mock.c", "func/aComm/src/aComm.c", "func/aComm/src/aComm_channel.c",
     "func/aModbus/src/aModbus_endpoint.c",
     "func/aComm/src/aComm_endpoint.c", "func/aBus/src/aBus_endpoint.c",
+    "func/aComm/src/aComm_binding.c",
     "app/protocol/FAN_modbus_master.c",
     "app/protocol/IDU_modbus_slave.c",
     "app/devices/rs485/rs485_device.c",
     "app/protocol/protocol_tables.c",
-    "func/aModbus/src/aModbus.c", "func/aComm/src/aComm_mapping_data.c",
+    "func/aModbus/src/aModbus.c", "func/aModbus/src/aModbus_mapping_data.c",
     "func/aModbus/src/aModbus_client.c", "func/aModbus/src/aModbus_server.c",
-    "func/aComm/src/aComm_mapping_plan.c",
+    "func/aComm/src/aComm_table.c",
     "func/aModbus/nanoMODBUS/nanomodbus.c", "func/aBus/src/aBus.c",
     "func/aBus/src/aBus_event.c",
 ]
@@ -107,40 +105,39 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     params = protocol / "sig/FAN_test.inc"
     client_maps = protocol / "FAN_modbus_master.c"
     original_client_maps = client_maps.read_text()
-    split_flag = "        .flags = ACOMM_MAP_FLAG_BREAK_BEFORE,\n"
+    split_flag = " |\n                     ACOMM_MAP_FLAG_BREAK_BEFORE"
     assert original_client_maps.count(split_flag) == 1
     client_maps.write_text(original_client_maps.replace(
-        split_flag, "        .flags = 0U,\n"))
+        split_flag, ""))
     mappings = protocol / "IDU_modbus_slave.c"
     # 测试副本增加稀疏保持寄存器和输入寄存器映射，无需外围地址段。
     sparse_maps = """    {
         .area = AMODBUS_AREA_HOLDING_REGISTERS,
         .address = 16U,
         .quantity = 2U,
-        .flags = ACOMM_MAP_ACCESS_READ,
-        .target = {.deviceID = IDU_SIG_DEVICE_ID,
-                   .sigIndex = IDU_SIG_TEST_001, .paramIndex = ACOMM_MAP_SIG_WHOLE},
+        .comm.flags = ACOMM_MAP_FLAG_READ,
+        .comm.deviceID = IDU_SIG_DEVICE_ID,
+                   .comm.sigIndex = IDU_SIG_TEST_001, .comm.paramIndex = ACOMM_MAP_SIG_WHOLE,
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
         .area = AMODBUS_AREA_HOLDING_REGISTERS,
         .address = 20U,
         .quantity = 2U,
-        .flags = ACOMM_MAP_ACCESS_READ | ACOMM_MAP_ACCESS_WRITE,
-        .target = {.deviceID = FAN_SIG_DEVICE_ID,
-                   .sigIndex = FAN_SIG_TEST_001, .paramIndex = FAN_TEST_001_U32},
+        .comm.flags = ACOMM_MAP_FLAG_READ | ACOMM_MAP_FLAG_WRITE,
+        .comm.deviceID = FAN_SIG_DEVICE_ID,
+                   .comm.sigIndex = FAN_SIG_TEST_001, .comm.paramIndex = FAN_TEST_001_U32,
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
-
 """
     input_maps = """
     {
         .area = AMODBUS_AREA_INPUT_REGISTERS,
         .address = 0U,
         .quantity = 2U,
-        .flags = ACOMM_MAP_ACCESS_READ,
-        .target = {.deviceID = IDU_SIG_DEVICE_ID,
-                   .sigIndex = IDU_SIG_TEST_001, .paramIndex = ACOMM_MAP_SIG_WHOLE},
+        .comm.flags = ACOMM_MAP_FLAG_READ,
+        .comm.deviceID = IDU_SIG_DEVICE_ID,
+                   .comm.sigIndex = IDU_SIG_TEST_001, .comm.paramIndex = ACOMM_MAP_SIG_WHOLE,
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },"""
     original_maps = mappings.read_text()
@@ -148,7 +145,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     assert original_maps.count(group_marker) == 1
     changed = original_maps.replace(group_marker, sparse_maps + group_marker)
     changed, count = re.subn(
-        r"(static const aCommMappingServerMap_t maps\[\] = \{\n)(.*?)(^\};)",
+        r"(static const aModbusServerMap_t maps\[\] = \{\n)(.*?)(^\};)",
         lambda match: match[1] + match[2] + input_maps + "\n" + match[3],
         changed, flags=re.M | re.S)
     assert count == 1
@@ -199,7 +196,6 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     subprocess.run([executable, "length"], check=True, timeout=20)
     print("invalid slave quantity rejected before port open")
     mappings.write_text(valid_maps)
-
     # 普通数组仍执行运行期校验，无效地址映射在打开串口前被拒绝。
     mappings.write_text(mappings.read_text().replace(".address = 16U",
                                                ".address = 1U"))
@@ -209,7 +205,6 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
                    cwd=root, check=True)
     subprocess.run([executable, "mapping"], check=True, timeout=20)
     print("invalid maps rejected before port open")
-
     # 显式协议长度与 U32 目标不匹配，必须在打开串口前拒绝。
     valid_client_maps = client_maps.read_text()
     assert ".quantity = 2U" in valid_client_maps
@@ -222,7 +217,6 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     subprocess.run([executable, "length"], check=True, timeout=20)
     print("invalid master quantity rejected before port open")
     client_maps.write_text(valid_client_maps)
-
     # 无效主站目标在端口打开和任务创建前拒绝。
     client_maps.write_text(client_maps.read_text().replace(
         '.deviceID = FAN_SIG_DEVICE_ID,', '.deviceID = 99U,'))

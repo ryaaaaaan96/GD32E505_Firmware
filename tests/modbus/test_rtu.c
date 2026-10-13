@@ -1,5 +1,5 @@
 /* 不链接 aDrv/aDev，验证通用分帧、多实例、低波特率及生命周期。 */
-#include "aComm_channel_instance.h"
+#include "aComm_instance.h"
 #include "aModbus.h"
 #include "aOS.h"
 #include <assert.h>
@@ -10,6 +10,29 @@
 void testSetTime(uint32_t ms);
 unsigned testAllocations(void);
 void testFailAllocation(aBool_t fail);
+
+/* 常量表达式可直接初始化只读配置；大数计算不能先在 32 位内溢出。 */
+_Static_assert(AMODBUS_RTU_WIRE_TIME_MS(115200U, 10U, 0U) == 0U,
+               "empty transfer");
+_Static_assert(AMODBUS_RTU_WIRE_TIME_MS(115200U, 10U, 1U) == 1U,
+               "round up sub-millisecond transfer");
+_Static_assert(AMODBUS_RTU_WIRE_TIME_MS(115200U, 10U, 256U) == 23U,
+               "maximum frame");
+_Static_assert(AMODBUS_RTU_WIRE_TIME_MS(9600U, 11U, 256U) == 294U,
+               "parity and low baud rate");
+_Static_assert(AMODBUS_RTU_WIRE_TIME_MS(1200U, 10U, 256U) == 2134U,
+               "slow transfer");
+_Static_assert(AMODBUS_RTU_WIRE_TIME_MS(1U, 16U, UINT32_MAX) ==
+               UINT64_C(68719476720000), "64-bit intermediate");
+static const aTimeout_t io_timeout =
+    AMODBUS_RTU_TIMEOUT_INIT(115200U, 10U, 256U, 20U);
+static const aTimeout_t transaction_timeout =
+    AMODBUS_RTU_TIMEOUT_INIT(115200U, 10U, 512U, 500U);
+static const aCommTiming_t static_timing = {
+    .character_us = AMODBUS_RTU_CHARACTER_US(19200U, 11U),
+    .byte_gap_us = AMODBUS_RTU_BYTE_GAP_US(19200U, 11U),
+    .frame_gap_us = AMODBUS_RTU_FRAME_GAP_US(19200U, 11U),
+};
 
 static uint64_t now_us;
 typedef struct {
@@ -392,6 +415,13 @@ static void timing_defaults(void)
 
 int main(void)
 {
+    assert(io_timeout.type == A_TIMEOUT_TYPE_RELATIVE);
+    assert(io_timeout.milliseconds == 43U);
+    assert(transaction_timeout.type == A_TIMEOUT_TYPE_RELATIVE);
+    assert(transaction_timeout.milliseconds == 545U);
+    assert(static_timing.character_us == 573U);
+    assert(static_timing.byte_gap_us == 860U);
+    assert(static_timing.frame_gap_us == 2006U);
     timing_defaults();
     failures();
     multi_instance();

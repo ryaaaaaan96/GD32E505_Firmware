@@ -4,10 +4,10 @@
 #define testModbusInit(bus) modbusInit(&rs485_link, (bus))
 #include "aComm_instance.h"
 #include "aModbus_instance.h"
-#include "aComm_mapping_instance.h"
+#include "aModbus_mapping_instance.h"
 static aStatus_t testModbusProcess(void)
 {
-    if (rs485_link.modbus == NULL) return A_STATUS_NOT_READY;
+    if (rs485_link.protocol.protocol == NULL) return A_STATUS_NOT_READY;
     aCommProcessResult_t result;
     aStatus_t status;
     if (rs485_link.comm == NULL) return A_STATUS_NOT_READY;
@@ -34,6 +34,7 @@ static aStatus_t testModbusProcess(void)
 void testAdvanceTime(uint32_t ms);
 unsigned testAllocations(void);
 void testFailAllocation(aBool_t fail);
+void testFailWaitCreate(aBool_t fail);
 static aBool_t complete_before_submit_return;
 aStatus_t __real_aCommSubmit(aCommHandle_t *handle,
     const aCommRequest_t *request);
@@ -98,10 +99,12 @@ aStatus_t __wrap_aCommPlanExecute(aCommPlan_t *plan,
     aStatus_t status;
 #if APP_MODBUS_CLIENT_ENABLE
     assert(request->frame_index == expected_poll);
-    assert(plan->config.unit_id ==
-           FAN_modbus_master_config.client.unit_id);
-    assert(plan->config.timeout.milliseconds ==
-           FAN_modbus_master_config.client.request_timeout.milliseconds);
+    assert(((aModbusMapping_t *)plan->config.context)->client.unit_id ==
+           ((const aModbusCommConfig_t *)
+           FAN_modbus_master_config.protocol.config)->unit_id);
+    assert(((aModbusMapping_t *)plan->config.context)->client.request_timeout.milliseconds ==
+           ((const aModbusCommConfig_t *)
+           FAN_modbus_master_config.protocol.config)->timeout.milliseconds);
 #endif
     if (task_test) {
         request->execution->advance = A_TRUE;
@@ -113,7 +116,7 @@ aStatus_t __wrap_aCommPlanExecute(aCommPlan_t *plan,
     if (request->execution->advance &&
         (!request->execution->retryable ||
          rs485_link.comm->jobs[0].retries >=
-         rs485_link.comm->config.jobs[0].retry_count)) {
+         rs485_link.comm->table_jobs[0].config.retry_count)) {
         expected_poll = (expected_poll + 1U) % aCommPlanFrameCount(plan);
     }
 #endif
@@ -912,15 +915,16 @@ static void master_tests(void)
     unsigned allocations = testAllocations();
 
     assert(FAN_SIG_COUNT == 50U);
-    assert(FAN_modbus_master_config.client.map_count == 50U);
+    assert(FAN_modbus_master_config.protocol.count == 50U);
     for (size_t i = 0U;
-         i < FAN_modbus_master_config.client.map_count; i++) {
-        const aCommMappingClientMap_t *map =
-            &FAN_modbus_master_config.client.maps[i];
-        const aCommTargetConfig_t *target = &map->target;
+         i < FAN_modbus_master_config.protocol.count; i++) {
+        const aModbusClientMap_t *map =
+            &((const aModbusClientMap_t *)
+              FAN_modbus_master_config.protocol.items)[i];
+        const aCommEntry_t *target = &map->comm;
         assert(target->deviceID == FAN_SIG_DEVICE_ID);
         assert(target->sigIndex < FAN_SIG_COUNT);
-        if (!seen[target->sigIndex] && map->poll_time_ms != 0U) {
+        if (!seen[target->sigIndex] && map->comm.poll_time_ms != 0U) {
             selected++;
         }
         seen[target->sigIndex] = A_TRUE;
@@ -1018,12 +1022,12 @@ static void task_tests(void)
     assert(process_count == 7U);
 #if APP_MODBUS_CLIENT_ENABLE
     uint32_t elapsed = 0U;
-    const aCommJobConfig_t *schedule = &rs485_link.comm->config.jobs[0];
+    const aCommJobConfig_t *schedule = &rs485_link.comm->table_jobs[0].config;
     assert(delay_count == 7U);
     for (size_t i = 0U; i < delay_count; i++) {
         uint32_t expected = task_results[i] == A_STATUS_OK ?
                             schedule->interval_ms : schedule->error_delay_ms;
-        if ((i + 1U) % aCommPlanFrameCount(rs485_link.plan) == 0U) {
+        if ((i + 1U) % aCommPlanFrameCount(&rs485_link.comm->plan) == 0U) {
             uint32_t remaining = schedule->poll_time_ms > elapsed ?
                                  schedule->poll_time_ms - elapsed : 0U;
             if (remaining > expected) expected = remaining;
@@ -1090,6 +1094,12 @@ int main(int argc, char **argv)
     assert(testModbusInit(bus_handle) == A_STATUS_NO_MEMORY);
     testFailAllocation(A_FALSE);
 #endif
+    /* 协议与映射初始化成功后，调度器资源失败也必须解除订阅并回收实例。 */
+    testFailWaitCreate(A_TRUE);
+    assert(testModbusInit(bus_handle) == A_STATUS_NO_MEMORY);
+    testFailWaitCreate(A_FALSE);
+    assert(rs485_link.protocol.protocol == NULL);
+    assert(rs485_link.protocol.mapping == NULL);
     assert(opened == closed && testAllocations() == baseline);
     assert(testModbusInit(bus_handle) == A_STATUS_OK);
     assert(testModbusInit(bus_handle) == A_STATUS_BUSY);

@@ -18,7 +18,8 @@ with tempfile.TemporaryDirectory(prefix="aclass-comm-") as folder:
             "-Iplatform/aLib/include", "-Iplatform/aOS/public", "-Ifunc/aComm/include",
         ]
         subprocess.run(command + [
-            "func/aComm/src/aComm.c", "tests/comm/test_comm.c",
+            "func/aComm/src/aComm.c", "func/aComm/src/aComm_table.c",
+            "tests/comm/test_comm.c",
             "tests/comm/wait_mock.c", "tests/modbus/os_mock.c", "-o", exe,
         ], cwd=root, check=True)
         subprocess.run([exe], check=True, timeout=20)
@@ -41,11 +42,29 @@ with tempfile.TemporaryDirectory(prefix="aclass-comm-") as folder:
         ], cwd=root, check=True)
         subprocess.run([channel], check=True, timeout=20)
 
-        mapping = str(Path(folder) / f"mapping-{static}-{dynamic}")
-        subprocess.run(command + [
-            "func/aComm/src/aComm_endpoint.c",
-            *[str(p.relative_to(root)) for p in
-              (root / "func/aComm/src").glob("aComm_mapping*.c")],
-            "tests/comm/test_mapping.c", "tests/modbus/os_mock.c", "-o", mapping,
+        table = str(Path(folder) / f"table-{static}-{dynamic}")
+        subprocess.run([flag for flag in command
+                        if flag != "-Wl,--wrap=aOSWaitObjectNotify"] + [
+            "func/aComm/src/aComm.c", "func/aComm/src/aComm_table.c",
+            "tests/comm/test_table.c", "tests/comm/wait_mock.c",
+            "tests/modbus/os_mock.c", "-o", table,
         ], cwd=root, check=True)
-        subprocess.run([mapping], check=True, timeout=20)
+        subprocess.run([table], check=True, timeout=20)
+
+        registration = str(Path(folder) / f"registration-{static}-{dynamic}")
+        subprocess.run([flag for flag in command
+                        if flag != "-Wl,--wrap=aOSWaitObjectNotify"] + [
+            "func/aComm/src/aComm.c", "func/aComm/src/aComm_table.c",
+            "tests/comm/test_registration.c", "tests/comm/wait_mock.c",
+            "tests/modbus/os_mock.c", "-o", registration,
+        ], cwd=root, check=True)
+        subprocess.run([registration], check=True, timeout=20)
+
+        binding = str(Path(folder) / f"binding-{static}-{dynamic}")
+        subprocess.run([flag for flag in command
+                        if flag != "-Wl,--wrap=aOSWaitObjectNotify"] + [
+            "func/aComm/src/aComm_endpoint.c",
+            "func/aComm/src/aComm_binding.c", "tests/comm/test_binding.c",
+            "-o", binding,
+        ], cwd=root, check=True)
+        subprocess.run([binding], check=True, timeout=20)

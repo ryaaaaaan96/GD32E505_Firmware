@@ -14,6 +14,7 @@ if(DEFINED CASE)
     elseif(CASE STREQUAL "comm_dynamic")
         set(ACOMM_STATIC_ENABLE OFF)
     elseif(CASE STREQUAL "comm_off")
+        set(AMODBUS_ENABLE OFF)
         set(ACOMM_ENABLE OFF)
         set(ACOMM_STATIC_ENABLE OFF)
         set(ACOMM_DYNAMIC_ENABLE OFF)
@@ -184,7 +185,7 @@ foreach(case comm_static comm_dynamic comm_off comm_no_allocation
         RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error
     )
     if(case MATCHES "^comm_(static|dynamic|off)$" OR
-       case MATCHES "^comm_missing_(modbus|scheduler|bus)$" OR
+       case MATCHES "^comm_missing_(modbus|bus)$" OR
        case MATCHES "^led_(static|dynamic|both)$" OR
        case MATCHES "^(default|bus_static|bus_dynamic|bus_check_off|bus_none|bus_sig|bus_off|minimal|polling|independent_app|database_custom|memory_off|dma_without_async|async_without_direct|direct_without_dma|log_off|log_independent|modbus_client_static|modbus_server_dynamic|modbus_without_bus)$")
         if(NOT result EQUAL 0)

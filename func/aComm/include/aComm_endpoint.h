@@ -39,14 +39,6 @@ typedef struct {
     size_t param_count;
 } aCommDataInfo_t;
 typedef struct {
-    aDataType_t type;
-    size_t size;
-    const aDataRange_t *range;
-    uint16_t quantity;
-    const aDataField_t *params;
-    size_t param_count;
-} aCommValueInfo_t;
-typedef struct {
     uint8_t exception; /**< 端点提供的错误详情，通用层不解释。 */
     aBool_t started;
     aBool_t retryable;
@@ -65,28 +57,6 @@ typedef struct {
     aTimeout_t timeout;
     aCommEndpointResult_t *result;
 } aCommWriteAccess_t;
-typedef struct {
-    uint8_t unit_id;
-    uint16_t area;
-    uint16_t address;
-    uint16_t quantity;
-} aCommAddress_t;
-typedef struct {
-    uint16_t area, address, quantity;
-    void *data;
-    size_t size;
-    aTimeout_t timeout;
-} aCommAddressReadRequest_t;
-typedef struct {
-    uint16_t area, address, quantity;
-    const void *data;
-    size_t size;
-    aTimeout_t timeout;
-} aCommAddressWriteRequest_t;
-typedef aStatus_t (*aCommAddressReadFn_t)(void *,
-    const aCommAddressReadRequest_t *);
-typedef aStatus_t (*aCommAddressWriteFn_t)(void *,
-    const aCommAddressWriteRequest_t *);
 typedef struct {
     aCommDataQuery_t target;
     void *buffer;
@@ -151,47 +121,11 @@ typedef struct {
     aStatus_t (*complete)(void *, aStatus_t);
 } aCommDataOps_t;
 
-/** 线性地址端的协议规则；回调不修改映射，不执行调度。
- * unit_bits 为 1 或 8 的倍数；缓冲区为端点约定的数据表示。
- * copy 处理单位区间与业务值的转换，write 表示解码写入业务值。
- * prepare/read_prepared 可选，预编码对象是字节表示，禁止强转为私有结构。
- */
-typedef struct {
-    uint16_t unit_bits;
-    uint16_t read_limit, write_limit;
-    uint32_t address_limit;
-    aBool_t writable;
-} aCommAreaInfo_t;
-typedef struct {
-    uint8_t data[ACOMM_PREPARED_CAPACITY];
-    size_t size;
-    aCommAddress_t address;
-} aCommPrepared_t;
-typedef struct {
-    aStatus_t (*ready)(aCommEndpoint_t *);
-    aStatus_t (*area)(aCommEndpoint_t *, uint16_t, aCommAreaInfo_t *);
-    aStatus_t (*check)(aCommEndpoint_t *, const aCommAddress_t *,
-        const void *, size_t, aBool_t);
-    aStatus_t (*describe)(const aCommDataInfo_t *, const aCommTarget_t *,
-        uint16_t, uint8_t, aCommValueInfo_t *);
-    aStatus_t (*layout)(const aCommValueInfo_t *);
-    aStatus_t (*copy)(const aCommValueInfo_t *, uint16_t, uint8_t,
-        size_t, size_t, void *, void *, aBool_t);
-    aStatus_t (*slice)(const aCommDataInfo_t *, size_t, uint16_t *, uint8_t *);
-    aBool_t (*merge)(aCommEndpoint_t *, const aCommAddress_t *,
-        const aCommAddress_t *);
-    aStatus_t (*prepare)(aCommEndpoint_t *, const aCommAddress_t *,
-        aCommPrepared_t *);
-    aStatus_t (*read_prepared)(aCommEndpoint_t *, const aCommPrepared_t *,
-        const aCommReadAccess_t *);
-    uint32_t provider_type;
-} aCommAddressOps_t;
-
 typedef struct {
     aStatus_t (*read)(aCommEndpoint_t *, const aCommReadAccess_t *);
     aStatus_t (*write)(aCommEndpoint_t *, const aCommWriteAccess_t *);
     const aCommDataOps_t *data;
-    const aCommAddressOps_t *address;
+    const void *extension; /**< 具体提供者解释，通用层不访问。 */
 } aCommEndpointOps_t;
 struct aCommEndpoint {
     const aCommEndpointOps_t *ops;
