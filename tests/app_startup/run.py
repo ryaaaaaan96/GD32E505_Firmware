@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-system-") as directory:
     for master in (0, 1):
         for dynamic in (0, 1):
             subprocess.run(command + [
-                f"-DAPP_MODBUS_MASTER_ENABLE={master}",
+                f"-DAPP_MODBUS_CLIENT_ENABLE={master}",
                 f"-DABUS_DYNAMIC_ENABLE={dynamic}",
                 f"-DADATABASE_DYNAMIC_ENABLE={dynamic}"],
                 cwd=root, check=True)

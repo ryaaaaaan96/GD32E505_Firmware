@@ -118,7 +118,7 @@ static const aCommMappingServerMap_t maps[] = {
         .target = {.deviceID = IDU_SIG_DEVICE_ID,
                    .sigIndex = IDU_SIG_TEST_001,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_SUBSCRIBE_MARK_ONLY},
+                   .subscribe_events = ACOMM_SUBSCRIBE_MARK_ONLY},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -1129,7 +1129,7 @@ const protocolServerConfig_t IDU_modbus_slave_config = {
                 .milliseconds = 20U, .type = A_TIMEOUT_TYPE_RELATIVE
             },
         },
-        .unit_id = APP_MODBUS_SLAVE_UNIT_ID,
+        .unit_id = APP_MODBUS_SERVER_UNIT_ID,
     },
     .server = {
         .ranges = ranges,

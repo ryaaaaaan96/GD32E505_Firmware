@@ -3,6 +3,7 @@
 
 #if APP_MODBUS_ENABLE
 #include "protocol_internal.h"
+#include "aBus_endpoint.h"
 #include "rs485_device.h"
 #if !ACOMM_ENABLE
 #error "Protocol demo requires ACOMM_ENABLE"
@@ -20,7 +21,7 @@
 #endif
 
 /* 只读配置在设备 .c 中定义，按当前角色声明并装配。 */
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
 #if !AMODBUS_CLIENT_ENABLE
 #error "Modbus master demo requires AMODBUS_CLIENT_ENABLE"
 #endif
@@ -45,7 +46,7 @@ typedef struct {
     aStatus_t (*close)(void);
 } protocolLinkConfig_t;
 
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
 typedef struct {
     aCommPlan_t *plan;
     size_t first_frame;
@@ -53,7 +54,7 @@ typedef struct {
 #endif
 
 /* 静态资源上限只在应用编排处维护，产品映射文件保持只读。 */
-#if !ACOMM_DYNAMIC_ENABLE || !AMODBUS_DYNAMIC_ENABLE
+#if !ACOMM_DYNAMIC_ENABLE && APP_MODBUS_CLIENT_ENABLE
 #define PROTOCOL_MAP_CAPACITY 50U
 #endif
 
@@ -67,7 +68,7 @@ typedef struct {
     aCommChannel_t *channel;
     aModbusRtuFilter_t filter;
     aCommHandle_t *comm;
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     aCommPlan_t *plan;
     aCommJobConfig_t *jobs;
     protocolGroup_t *groups;
@@ -82,7 +83,7 @@ typedef struct {
 #if !ACOMM_DYNAMIC_ENABLE
     aCommMapping_t mapping_instance;
 #if ABUS_EVENT_ENABLE
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     aCommMappingSubscription_t subscriptions[PROTOCOL_MAP_CAPACITY];
     aBusEndpointSubscription_t nodes[PROTOCOL_MAP_CAPACITY];
 #else
@@ -90,7 +91,7 @@ typedef struct {
     aBusEndpointSubscription_t nodes[1];
 #endif
 #endif
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     aCommPlan_t plan_instance;
     aCommPlanFrame_t frames[PROTOCOL_MAP_CAPACITY];
     size_t indices[PROTOCOL_MAP_CAPACITY];
@@ -99,7 +100,7 @@ typedef struct {
 #if !ACOMM_DYNAMIC_ENABLE
     aCommChannel_t channel_instance;
     aCommHandle_t comm_instance;
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     aCommJobConfig_t job_configs[PROTOCOL_MAP_CAPACITY];
     protocolGroup_t group_states[PROTOCOL_MAP_CAPACITY];
     aCommJobState_t job_states[PROTOCOL_MAP_CAPACITY];
@@ -116,7 +117,7 @@ static aStatus_t modbusDeInit(protocolLink_t *link);
 
 /* 每条硬件链路注册自己的配置；总线无需知道协议或端口。 */
 static const protocolLinkConfig_t rs485_config = {
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     .product = &FAN_modbus_master_config,
 #else
     .product = &IDU_modbus_slave_config,
@@ -131,7 +132,7 @@ static const protocolLinkConfig_t rs485_config = {
     .close = rs485PortClose,
 };
 
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
 static void scheduledExecute(void *context, size_t step,
     aCommStepResult_t *result)
 {
@@ -262,7 +263,7 @@ static void modbusTask(void *argument)
             aOSDelayMs(link->config->product->error_delay_ms);
             continue;
         }
-#if ASHELL_ENABLE && APP_MODBUS_MASTER_ENABLE
+#if ASHELL_ENABLE && APP_MODBUS_CLIENT_ENABLE
         if (result.type == ACOMM_WORK_JOB &&
             result.execution.status != link->previous_status) {
             ASHELL_PRINT("Modbus master: %s (status %d)\r\n",
@@ -285,7 +286,7 @@ static aStatus_t modbusPrepare(protocolLink_t *link, aBusHandle_t *bus)
 {
     rs485Port_t port;
     aCommChannelConfig_t framing;
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     aModbusClientConfig_t config = link->config->product->protocol;
     aCommMappingClientConfig_t mapping = link->config->product->client;
 #else
@@ -301,7 +302,7 @@ static aStatus_t modbusPrepare(protocolLink_t *link, aBusHandle_t *bus)
     framing.stream = port.output;
     /* 产品指定微秒值；aComm 负责计数换算、间隔判断与等待。 */
     framing.timing = link->config->product->timing;
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     link->filter = (aModbusRtuFilter_t){
         .role = AMODBUS_ROLE_CLIENT, .unit_id = mapping.unit_id
     };
@@ -343,7 +344,7 @@ static aStatus_t modbusPrepare(protocolLink_t *link, aBusHandle_t *bus)
     link->mapping_instance.subscription_capacity =
         sizeof(link->subscriptions) / sizeof(link->subscriptions[0]);
 #endif
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
 #if AMODBUS_DYNAMIC_ENABLE
     status = aModbusClientCreate(&config, &link->modbus);
 #else
@@ -419,7 +420,7 @@ static aStatus_t modbusInit(protocolLink_t *link, aBusHandle_t *bus)
         product->error_delay_ms == 0U || product->error_delay_ms > INT32_MAX) {
         return A_STATUS_INVALID_PARAM;
     }
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     aCommMappingConfig_t check = product->client.binding;
     check.data = &link->data_endpoint.base;
     check.protocol = &link->protocol_endpoint.base;
@@ -458,7 +459,7 @@ static aStatus_t modbusInit(protocolLink_t *link, aBusHandle_t *bus)
         return cleanup_status == A_STATUS_OK ? status : cleanup_status;
     }
 #if ASHELL_ENABLE
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     ASHELL_PRINT("Modbus RTU master: unit %u\r\n",
         (unsigned)product->client.unit_id);
 #else
@@ -484,7 +485,7 @@ static aStatus_t modbusDeInit(protocolLink_t *link)
         if (status != A_STATUS_OK) return status;
         link->comm = NULL;
     }
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
 #if ACOMM_DYNAMIC_ENABLE
     aOSFree(link->jobs);
 #endif
@@ -559,7 +560,7 @@ aStatus_t protocolInit(aBusHandle_t *bus)
 /* 只投递事件，回调在通信任务中触发下一轮；不在调用方直接操作串口。 */
 aStatus_t protocolRefresh(void)
 {
-#if APP_MODBUS_ENABLE && APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_ENABLE && APP_MODBUS_CLIENT_ENABLE
     if (rs485_link.comm == NULL) return A_STATUS_NOT_READY;
     for (size_t i = 0U; i < rs485_link.group_count; i++) {
         aStatus_t status = aCommJobTrigger(rs485_link.comm, i);
@@ -571,7 +572,7 @@ aStatus_t protocolRefresh(void)
 #endif
 }
 
-#if APP_MODBUS_ENABLE && APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_ENABLE && APP_MODBUS_CLIENT_ENABLE
 static aStatus_t temporaryExecute(void *context)
 {
     const protocolModbusRequest_t *request = context;
@@ -605,7 +606,7 @@ void protocolModbusRequestStructInit(protocolModbusRequest_t *request)
 
 aStatus_t protocolModbusSubmit(const protocolModbusRequest_t *request)
 {
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     aCommRequest_t queued;
     if (request == NULL) return A_STATUS_INVALID_PARAM;
     if (rs485_link.comm == NULL) return A_STATUS_NOT_READY;

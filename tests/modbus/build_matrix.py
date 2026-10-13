@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-build-") as directory:
 function(force_modbus)
     # 仅矩阵通过编译宏覆盖应用头默认值，产品不增加 CMake 角色开关。
     target_compile_definitions("${PROJECT_NAME}" PRIVATE
-        APP_MODBUS_MASTER_ENABLE=$<BOOL:${TEST_MODBUS_MASTER_ENABLE}>)
+        APP_MODBUS_CLIENT_ENABLE=$<BOOL:${TEST_MODBUS_MASTER_ENABLE}>)
     if(TARGET aModbus)
         file(WRITE "${CMAKE_BINARY_DIR}/modbus_api_probe.c"
             "#include <aModbus.h>\\n"

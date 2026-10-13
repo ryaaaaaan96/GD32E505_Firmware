@@ -16,7 +16,7 @@ ABUS_RAM_BIND_EXPORT(test_binding,
                      IDU_SIG_TEST_001,
                      test_value);
 
-#if APP_MODBUS_ENABLE && APP_MODBUS_MASTER_ENABLE && ABUS_EVENT_ENABLE
+#if APP_MODBUS_ENABLE && APP_MODBUS_CLIENT_ENABLE && ABUS_EVENT_ENABLE
 #include "protocol.h"
 #include "FAN_sig_table.h"
 #if ASHELL_ENABLE
@@ -73,7 +73,7 @@ static void modbusWriteTest(void)
 static void testTask(void *argument)
 {
     (void)argument;
-#if APP_MODBUS_ENABLE && APP_MODBUS_MASTER_ENABLE && ABUS_EVENT_ENABLE
+#if APP_MODBUS_ENABLE && APP_MODBUS_CLIENT_ENABLE && ABUS_EVENT_ENABLE
     unsigned seconds = 0U;
     aBusRequestStructInit(&write_request, write_delivery, 1U);
 #endif
@@ -81,7 +81,7 @@ static void testTask(void *argument)
         aOSDelayMs(1000U);
         /* 绑定测试不做并发同步；UINT32_MAX 后回绕到零。 */
         test_value++;
-#if APP_MODBUS_ENABLE && APP_MODBUS_MASTER_ENABLE && ABUS_EVENT_ENABLE
+#if APP_MODBUS_ENABLE && APP_MODBUS_CLIENT_ENABLE && ABUS_EVENT_ENABLE
         if (++seconds == 5U) {
             seconds = 0U;
             modbusWriteTest();

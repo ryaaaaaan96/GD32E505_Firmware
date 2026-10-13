@@ -10,8 +10,8 @@
 /* 完整通信表共 50 项，周期采集前 30 个 SIG，组合类型整组配置。
  * Demo 远端地址沿用 IDU 从站对 FAN 副本的映射，便于双板主从联调；
  * 接真实 FAN 时应按其寄存器手册调整，不能从本地 sigIndex 推导地址。
- * quantity 显式填写远端寄存器数，aModbus 校验其与 aBus 目标匹配。
- * 数组按地址递增；aModbus 自动合并连续项，不跨空洞，断帧由 flags 控制。
+ * quantity 显式填写远端寄存器数，aComm 结合端点规则校验目标长度。
+ * 数组按地址递增；aComm 按端点规则合并连续项，断帧由 flags 控制。
  * TEST_031～050 仅临时访问；读取失败按设备配置有限重试。
  */
 static const aCommMappingClientMap_t client_maps[] = {
@@ -26,7 +26,7 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_001,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ,
+                   .subscribe_events = ACOMM_REQUEST_READ,
                    .publish_events = 0U},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
@@ -41,8 +41,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_002,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     /* TEST_003～004：合并读取地址 34～36，不跨地址 37。 */
@@ -56,8 +56,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_003,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -70,8 +70,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_004,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     /* TEST_005～007：S32、RAW、组合 SIG 合并读取地址 38～47。 */
@@ -85,8 +85,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_005,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -99,8 +99,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_006,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -113,8 +113,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_007,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     /* TEST_008～030：连续 U32；TEST_020 要求断帧，分为两次读取。 */
@@ -128,8 +128,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_008,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -142,8 +142,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_009,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -156,8 +156,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_010,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -170,8 +170,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_011,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -184,8 +184,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_012,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -198,8 +198,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_013,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -212,8 +212,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_014,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -226,8 +226,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_015,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -240,8 +240,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_016,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -254,8 +254,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_017,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -268,8 +268,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_018,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -282,8 +282,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_019,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -297,8 +297,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_020,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -311,8 +311,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_021,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -325,8 +325,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_022,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -339,8 +339,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_023,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -353,8 +353,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_024,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -367,8 +367,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_025,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -381,8 +381,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_026,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -395,8 +395,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_027,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -409,8 +409,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_028,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -423,8 +423,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_029,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -437,8 +437,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_030,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     /* TEST_031～050 仅临时读写，不进入自动采集。 */
@@ -450,8 +450,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_031,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -462,8 +462,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_032,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -474,8 +474,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_033,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -486,8 +486,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_034,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -498,8 +498,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_035,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -510,8 +510,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_036,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -522,8 +522,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_037,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -534,8 +534,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_038,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -546,8 +546,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_039,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -558,8 +558,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_040,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -570,8 +570,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_041,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -582,8 +582,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_042,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -594,8 +594,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_043,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -606,8 +606,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_044,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -618,8 +618,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_045,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -630,8 +630,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_046,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -642,8 +642,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_047,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -654,8 +654,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_048,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -666,8 +666,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_049,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
     {
@@ -678,8 +678,8 @@ static const aCommMappingClientMap_t client_maps[] = {
         .target = {.deviceID = FAN_SIG_DEVICE_ID,
                    .sigIndex = FAN_SIG_TEST_050,
                    .paramIndex = ACOMM_MAP_SIG_WHOLE,
-                   .subscribe_events = ABUS_REQUEST_READ | ABUS_REQUEST_WRITE,
-                   .publish_events = ABUS_EVENT_WRITE_COMPLETE},
+                   .subscribe_events = ACOMM_REQUEST_READ | ACOMM_REQUEST_WRITE,
+                   .publish_events = ACOMM_EVENT_WRITE_COMPLETE},
         .word_order = AMODBUS_WORD_HIGH_FIRST,
     },
 };
@@ -695,7 +695,7 @@ const protocolClientConfig_t FAN_modbus_master_config = {
         },
     },
     .client = {
-        .unit_id = APP_MODBUS_MASTER_TARGET_ID,
+        .unit_id = APP_MODBUS_CLIENT_TARGET_ID,
         .request_timeout = {
             .milliseconds = 500U, .type = A_TIMEOUT_TYPE_RELATIVE
         },

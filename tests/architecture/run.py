@@ -100,6 +100,14 @@ command = ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
 for header in headers:
     subprocess.run(command, input=f'#include "{header}"\n',
                    text=True, cwd=root, check=True)
+# 通信配置只使用端点契约；总线实例和事件桥接由 protocol.c 装配。
+for source in ("FAN_modbus_master.c", "IDU_modbus_slave.c"):
+    subprocess.run([
+        "cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only",
+        "-Iplatform/aLib/include", "-Iplatform/aOS/public",
+        "-Ifunc/aComm/include", "-Ifunc/aModbus/include",
+        "-Iapp", "-Iapp/protocol/inc", f"app/protocol/{source}",
+    ], cwd=root, check=True)
 # 设备数据头不依赖 aBus/aModbus；protocol.h 显式借用 aBus。
 subprocess.run([
     "cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-fsyntax-only",

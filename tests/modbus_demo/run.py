@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     for master in (0, 1):
         for dynamic, events in itertools.product((0, 1), (0, 1)):
             executable = str(Path(tmp) / f"demo-{master}-{dynamic}")
-            definitions = [f"-DAPP_MODBUS_MASTER_ENABLE={master}",
+            definitions = [f"-DAPP_MODBUS_CLIENT_ENABLE={master}",
                            f"-DABUS_EVENT_ENABLE={events}"]
             for prefix in ("AMODBUS", "ACOMM", "ADEV_USART"):
                 definitions += [f"-D{prefix}_STATIC_ENABLE={1 - dynamic}",
@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
             print(f"master={master}, dynamic={dynamic}, events={events}: passed")
     for master, dynamic in itertools.product((0, 1), (0, 1)):
         executable = str(Path(tmp) / f"mixed-{master}-{dynamic}")
-        definitions = [f"-DAPP_MODBUS_MASTER_ENABLE={master}",
+        definitions = [f"-DAPP_MODBUS_CLIENT_ENABLE={master}",
                        "-DABUS_EVENT_ENABLE=1"]
         for prefix, allocation in (("AMODBUS", dynamic), ("ACOMM", 1 - dynamic),
                                    ("ADEV_USART", dynamic)):
@@ -165,7 +165,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     ]
     for master in (0, 1):
         executable = str(Path(tmp) / f"extended-{master}")
-        subprocess.run(fixture_flags + [f"-DAPP_MODBUS_MASTER_ENABLE={master}"]
+        subprocess.run(fixture_flags + [f"-DAPP_MODBUS_CLIENT_ENABLE={master}"]
                        + fixture_sources + ["-o", executable],
                        cwd=root, check=True)
         subprocess.run([executable], check=True, timeout=20)
@@ -180,7 +180,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     params.write_text(changed)
     for master in (0, 1):
         executable = str(Path(tmp) / f"invalid-layout-{master}")
-        subprocess.run(fixture_flags + [f"-DAPP_MODBUS_MASTER_ENABLE={master}"]
+        subprocess.run(fixture_flags + [f"-DAPP_MODBUS_CLIENT_ENABLE={master}"]
                        + fixture_sources + ["-o", executable],
                        cwd=root, check=True)
         subprocess.run([executable, "layout"], check=True, timeout=20)
@@ -193,7 +193,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     mappings.write_text(valid_maps.replace(
         map_length, map_length.replace("2U", "1U"), 1))
     executable = str(Path(tmp) / "invalid-map-length")
-    subprocess.run(fixture_flags + ["-DAPP_MODBUS_MASTER_ENABLE=0"]
+    subprocess.run(fixture_flags + ["-DAPP_MODBUS_CLIENT_ENABLE=0"]
                    + fixture_sources + ["-o", executable],
                    cwd=root, check=True)
     subprocess.run([executable, "length"], check=True, timeout=20)
@@ -204,7 +204,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     mappings.write_text(mappings.read_text().replace(".address = 16U",
                                                ".address = 1U"))
     executable = str(Path(tmp) / "overlap")
-    subprocess.run(fixture_flags + ["-DAPP_MODBUS_MASTER_ENABLE=0"]
+    subprocess.run(fixture_flags + ["-DAPP_MODBUS_CLIENT_ENABLE=0"]
                    + fixture_sources + ["-o", executable],
                    cwd=root, check=True)
     subprocess.run([executable, "mapping"], check=True, timeout=20)
@@ -216,7 +216,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     client_maps.write_text(valid_client_maps.replace(
         ".quantity = 2U", ".quantity = 1U", 1))
     executable = str(Path(tmp) / "invalid-poll-length")
-    subprocess.run(fixture_flags + ["-DAPP_MODBUS_MASTER_ENABLE=1"]
+    subprocess.run(fixture_flags + ["-DAPP_MODBUS_CLIENT_ENABLE=1"]
                    + fixture_sources + ["-o", executable],
                    cwd=root, check=True)
     subprocess.run([executable, "length"], check=True, timeout=20)
@@ -227,7 +227,7 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     client_maps.write_text(client_maps.read_text().replace(
         '.deviceID = FAN_SIG_DEVICE_ID,', '.deviceID = 99U,'))
     executable = str(Path(tmp) / 'invalid-poll')
-    subprocess.run(fixture_flags + ['-DAPP_MODBUS_MASTER_ENABLE=1']
+    subprocess.run(fixture_flags + ['-DAPP_MODBUS_CLIENT_ENABLE=1']
                    + fixture_sources + ['-o', executable],
                    cwd=root, check=True)
     subprocess.run([executable, 'poll'], check=True, timeout=20)

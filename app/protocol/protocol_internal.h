@@ -2,7 +2,6 @@
 #define PROTOCOL_INTERNAL_H
 #include "aComm_mapping.h"
 #include "aModbus_endpoint.h"
-#include "aBus_endpoint.h"
 
 /* 产品分别描述协议和业务映射；实例、任务及生命周期由 protocol.c 装配。 */
 typedef struct {

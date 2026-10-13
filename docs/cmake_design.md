@@ -160,8 +160,12 @@ databaseInit 初始化数据库模块并打开已有实例，首次格式化由 
 ### Modbus 应用开关
 
 `APP_MODBUS_DEMO_ENABLE` 控制本产品示例；角色和站号在 `app/app_config.h`
-配置，`APP_MODBUS_MASTER_ENABLE` 为 0 时运行从站、1 时运行主站，默认 0。
-CMake 注册主从两份源码，预处理时保留所选角色；不再从 CMake 定义角色宏。
+配置，`APP_MODBUS_CLIENT_ENABLE` 为 0 时运行从站、1 时运行主站，默认 1。
+`APP_MODBUS_CLIENT_TARGET_ID` 配置远端站号，
+`APP_MODBUS_SERVER_UNIT_ID` 配置本机从站站号。
+CMake 注册主从两份源码，protocol.c 按应用角色选择配置；未引用的配置在
+链接时裁剪。库的 CLIENT/SERVER 能力开关独立控制协议接口，
+产品 CMake 不另行定义应用角色宏。
 示例经过依赖裁剪后的启用状态由 `APP_MODBUS_ENABLE` C 宏表示。
 库的 `AMODBUS_CLIENT_ENABLE` / `AMODBUS_SERVER_ENABLE` 控制协议能力，
 与应用实际运行角色分开。关闭协议库或串口依赖时，应用 Demo 一同裁剪；

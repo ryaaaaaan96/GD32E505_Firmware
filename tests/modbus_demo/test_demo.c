@@ -72,7 +72,7 @@ static aBool_t task_test, run_immediately;
 static void task_tests(void);
 static jmp_buf task_done;
 static size_t process_count, delay_count;
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
 static size_t expected_poll;
 #endif
 static uint32_t task_delays[7];
@@ -96,7 +96,7 @@ aStatus_t __wrap_aCommPlanExecute(aCommPlan_t *plan,
     const aCommPlanRequest_t *request)
 {
     aStatus_t status;
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     assert(request->frame_index == expected_poll);
     assert(plan->config.unit_id ==
            FAN_modbus_master_config.client.unit_id);
@@ -109,7 +109,7 @@ aStatus_t __wrap_aCommPlanExecute(aCommPlan_t *plan,
     } else {
         status = __real_aCommPlanExecute(plan, request);
     }
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     if (request->execution->advance &&
         (!request->execution->retryable ||
          rs485_link.comm->jobs[0].retries >=
@@ -151,7 +151,7 @@ void aDevUsartConfigStructInit(aDevUsartConfig_t *config)
 }
 void aDevUsartClearRxError(aDevUsartHandle_t *handle) { (void)handle; }
 
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
 static uint32_t response_value = 4321U;
 static aBool_t response_enabled = A_TRUE, response_extra;
 static uint16_t last_address, last_quantity;
@@ -293,7 +293,7 @@ aSSize_t aDevUsartWrite(aDevUsartHandle_t *handle, const void *data,
 {
     assert(handle == device && timeout.milliseconds > 0U);
     assert(output_size + size <= sizeof(output));
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     const uint8_t *frame = data;
     assert(frame[1] == 3U || frame[1] == 6U || frame[1] == 16U);
     assert(frame[1] == 16U ? size >= 11U : size == 8U);
@@ -366,7 +366,7 @@ aStatus_t aOSCreateTask(const aOSTaskConfig_t *task, aOSTaskHandle_t *out)
     /* 创建任务前串口与接收者必须已就绪。 */
     assert(device != NULL && rx_callback != NULL && rx_context != NULL);
     created_task = *task;
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     expected_poll = 0U;
 #endif
     if (fail_task) return A_STATUS_NO_MEMORY;
@@ -387,7 +387,7 @@ static FANTest_t motor_get(void)
     return motor;
 }
 
-#if !APP_MODBUS_MASTER_ENABLE
+#if !APP_MODBUS_CLIENT_ENABLE
 static uint32_t target_get(void)
 {
     uint32_t value;
@@ -991,7 +991,7 @@ static void port_tests(void)
     assert(opened == closed && testAllocations() == baseline);
 }
 
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
 static void reset_poll(void)
 {
     aCommJobState_t *state = &rs485_link.comm->jobs[0];
@@ -1009,14 +1009,14 @@ static void task_tests(void)
     process_count = 0U;
     delay_count = 0U;
     task_test = A_TRUE;
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     reset_poll();
 #endif
     if (setjmp(task_done) == 0) {
         created_task.function(created_task.argument);
     }
     assert(process_count == 7U);
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     uint32_t elapsed = 0U;
     const aCommJobConfig_t *schedule = &rs485_link.comm->config.jobs[0];
     assert(delay_count == 7U);
@@ -1102,7 +1102,7 @@ int main(int argc, char **argv)
     run_immediately = A_TRUE;
     assert(modbusInit(&rs485_link, bus_handle) == A_STATUS_OK);
     run_immediately = A_FALSE;
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
     check_reentry = A_TRUE;
     master_tests();
     check_reentry = A_FALSE;

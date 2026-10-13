@@ -294,7 +294,14 @@ access.result 不使用，状态和协议异常统一通过 complete 返回。
 
 ### 协议装配
 
-`app_config.h` 的 `APP_MODBUS_MASTER_ENABLE` 仍选择当前唯一物理链路的角色。
+`app_config.h` 的 `APP_MODBUS_CLIENT_ENABLE` 选择当前唯一物理链路的角色：
+1 为主站 Client（当前默认），0 为从站 Server。远端站号使用
+`APP_MODBUS_CLIENT_TARGET_ID`，本机从站站号使用 `APP_MODBUS_SERVER_UNIT_ID`。
+
+通信映射的权限、断帧、订阅及发布标志使用 `ACOMM_*`；协议区域、字序与
+RTU 默认时间使用 `AMODBUS_*`。直接调用 aBus 的请求及点表定义使用 `ABUS_*`，
+由端点负责桥接事件。映射、计划、队列与通道的分配跟随 `ACOMM_*_ENABLE`，
+协议实例的分配独立跟随 `AMODBUS_*_ENABLE`。
 从站使用上述映射；主站按上节配置采集 30 个 FAN SIG。
 增减轮询项直接修改 FAN_modbus_master.c 的 client_maps 数组，初始化先校验全部目标，
 失败时不打开串口。同一区域内地址连续且未要求断帧的项由 aComm 映射合并为一次请求。
@@ -367,7 +374,7 @@ Shell 是本地调试入口，可写组合字段；Modbus 的只读权限属于�
 IDU_modbus_slave.c；protocol.c 在 APP_MODBUS_ENABLE 内按主从角色声明：
 
 ```c
-#if APP_MODBUS_MASTER_ENABLE
+#if APP_MODBUS_CLIENT_ENABLE
 extern const protocolClientConfig_t FAN_modbus_master_config;
 #else
 extern const protocolServerConfig_t IDU_modbus_slave_config;
