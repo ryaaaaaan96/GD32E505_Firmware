@@ -43,7 +43,9 @@ with tempfile.TemporaryDirectory(prefix="aclass-matrix-") as directory:
     )
     for name, values in profiles.items():
         config = base / (name + ".cmake")
-        lines = [f'include("{root}/config/aclass_config.cmake")', "set(ASHELL_ENABLE OFF)"]
+        # USART 裁剪用例不启用控制台的两个消费者；日志也独立依赖中断串口。
+        lines = [f'include("{root}/config/aclass_config.cmake")',
+                 "set(ASHELL_ENABLE OFF)", "set(ALOG_ENABLE OFF)"]
         lines += [
             f"set(ADEV_USART_STATIC_ENABLE {'ON' if name in ('static_only', 'both_allocations') else 'OFF'})",
             f"set(ADEV_USART_DYNAMIC_ENABLE {'OFF' if name == 'static_only' else 'ON'})",

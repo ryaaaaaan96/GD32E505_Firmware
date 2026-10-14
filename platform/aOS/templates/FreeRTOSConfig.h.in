@@ -55,6 +55,7 @@
 #define INCLUDE_vTaskDelay @FREERTOS_INCLUDE_vTaskDelay@
 #define INCLUDE_xTaskGetSchedulerState @FREERTOS_INCLUDE_xTaskGetSchedulerState@
 #define INCLUDE_xTaskGetCurrentTaskHandle @FREERTOS_INCLUDE_xTaskGetCurrentTaskHandle@
+#define INCLUDE_xTaskGetHandle @FREERTOS_INCLUDE_xTaskGetHandle@
 #define INCLUDE_uxTaskGetStackHighWaterMark @FREERTOS_INCLUDE_uxTaskGetStackHighWaterMark@
 #define INCLUDE_xTaskGetIdleTaskHandle @FREERTOS_INCLUDE_xTaskGetIdleTaskHandle@
 #define INCLUDE_eTaskGetState @FREERTOS_INCLUDE_eTaskGetState@

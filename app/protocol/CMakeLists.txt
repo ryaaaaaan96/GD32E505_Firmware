@@ -4,12 +4,10 @@ target_include_directories(${APP_TARGET} PRIVATE
 
 if(ABUS_ENABLE)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
-    # 构建期检查固定 Key；不增加固件 RAM 或初始化的重复扫描。
+    # 直接 CMake 构建只检查；build.py 会先生成，避免并行构建改写源码。
     add_custom_target(app_sig_check
         COMMAND ${Python3_EXECUTABLE}
-            "${ACLASS_PRODUCT_DIR}/scripts/check_sig.py"
-            "${CMAKE_CURRENT_SOURCE_DIR}/sig/IDU_test.inc"
-            "${CMAKE_CURRENT_SOURCE_DIR}/sig/FAN_test.inc"
+            "${ACLASS_PRODUCT_DIR}/scripts/generate_points.py" --check
         VERBATIM)
     add_dependencies(${APP_TARGET} app_sig_check)
     target_sources(${APP_TARGET} PRIVATE protocol_tables.c)

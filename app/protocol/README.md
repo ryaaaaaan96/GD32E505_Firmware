@@ -9,14 +9,16 @@ protocol.c 负责端口、实例、回调注册和通信任务的生命周期。
 
 | 内容 | 位置 |
 | --- | --- |
-| IDU、FAN 测试测点唯一清单 | `sig/IDU_test.inc`、`sig/FAN_test.inc` |
+| 测点、映射与持久化唯一输入 | `config/points.json` |
+| 生成的 SIG 定义清单 | `sig/IDU_test.inc`、`sig/FAN_test.inc` |
 | 设备号、自动索引、固定 Key、共享类型 | `inc/IDU_sig_table.h`、`inc/FAN_sig_table.h` |
-| 从站地址、权限与通信配置 | `IDU_modbus_slave.c` |
-| 主站采集项与通信配置 | `FAN_modbus_master.c` |
+| 从站地址、权限 | `generated/IDU_modbus_slave.inc` |
+| 主站采集项 | `generated/FAN_modbus_master.inc` |
+| 手写通信配置、回调 | `IDU_modbus_slave.c`、`FAN_modbus_master.c` |
 | 需要保存的测点 | `persistence/sig_persist.inc` |
 | 只读定义、RAM 存储计划、持久化选择 | `protocol_tables.c` |
 | 链路实例、端口装配、任务资源及创建 | `protocol.c` |
-| 后续 JSON 输入预留 | `config/` |
+| 生成格式及操作 | [config/README.md](config/README.md) |
 
 主从都将 `aCommConfig_t` 交给 aComm：protocol.items 是具体协议数组，
 protocol.count 为条目数，protocol.config 指向只读 `aModbusCommConfig_t`，
@@ -54,8 +56,9 @@ protocol 初始化会检查它与实际端口格式一致。
 
 ## 配置与运行资源的边界
 
-- `FAN_modbus_master.c` 描述 **IDU 作为主站访问 FAN**：直接定义远端采集数组，
-  配置站号、事务超时、轮询周期及出错后的等待。文件名中的 FAN 是访问对象。
+- `FAN_modbus_master.c` 描述 **IDU 作为主站访问 FAN**：包含生成的采集数组，
+  配置站号、事务超时及出错后的等待，轮询周期在 JSON 中配置。
+  文件名中的 FAN 是访问对象。
 - `IDU_modbus_slave.c` 描述 IDU 对外提供的地址空间、访问权限和处理超时。
   地址空间可以同时包含 IDU 数据、FAN 的本地采集副本及地址段回调示例。
 - `protocol_tables.c` 生成 SIG/字段定义、默认值、范围、RAM 绑定和持久化
@@ -93,7 +96,7 @@ aModbus 从站可使用其他地址回调，不要求使用 aBus；模块依赖 
 `system_init.c` 的数据库段持有 KV/TSDB 实例及静态索引 RAM，并结合
 `system_device.c` 提供的 aMemory 区域完成装配。点表文件不包含 FlashDB
 私有布局或 Flash 分区配置。公开数量 `PROTOCOL_PERSIST_SIG_COUNT` 由同一
-持久化清单在编译期推导，system 不需要知道具体的 IDU/FAN 测点。
+JSON 生成，system 不需要知道具体的 IDU/FAN 测点。
 
 ## 100 个 TEST 测点
 
@@ -126,19 +129,21 @@ FAN TEST_007 默认 `{100, 25}`，范围为 0～6000、-1000～1000。
 `ABUS_BOUND_SIG` 定义已有外部 RAM 绑定的测点，两者生成相同的 aBusSig_t。
 两种宏都携带 C 存储类型，同源生成 size 和静态 RAM，避免长度手工计算。
 后者只让产品的静态存储展开跳过已绑定项，不新增 aBus 公共类型或运行状态。
-IDU TEST_001 在 test_task.c 绑定，FAN TEST_001 在 protocol_tables.c 绑定。
+演示配置中 IDU TEST_001 在 test_task.c 绑定，FAN TEST_001 在
+protocol_tables.c 绑定。`APP_DEMO_ENABLE=OFF` 时不链接测试任务，IDU TEST_001
+改由 protocol_tables.c 提供静态绑定；其余测点与服务保持可用，纯静态模式同样
+无需为该项申请堆。点表仍为测试数据定义，产品需自行替换。
 静态模式从同一清单为其余项按 C 类型生成 RAM；动态模式由 aBus 一次分配未绑定数据池。
 直接访问绑定变量的同步仍由应用负责，测试任务的自增不与总线接口互斥。
 
-构建调用 `scripts/check_sig.py` 检查每张表的名称、16 位 Key 唯一性。
-清单 Key 使用十进制或十六进制字面量，不使用表达式或前导零八进制。
-这项检查不占固件 RAM；类型、偏移、范围等继续由 aBus 定义检查负责。
-未来 JSON 生成器尚未实现。
+构建调用 `scripts/generate_points.py --check` 校验 JSON 与生成快照的一致性。
+生成器检查名称、Key、类型、偏移、默认值、范围及映射引用；不占固件 RAM。
+aBus/aModbus 仍保留各自运行期检查，手写点表同样受到保护。
 
 ## Modbus 测试布局
 
-SIG 保留 X-Macro 清单，用同一份定义生成索引、Key、描述及静态存储。
-协议映射直接使用普通 C 数组，不再维护 mapping 目录或映射展开宏：
+JSON 统一生成索引、Key、定义清单和静态存储展开；SIG 清单保留 X-Macro。
+协议映射生成普通 C 数组，由主从配置文件包含，不引入映射展开宏：
 
 - `FAN_modbus_master.c` 的 `client_maps[]` 使用 `aModbusClientMap_t`，
   定义区域、地址、长度、目标、字序和断帧标志；临时访问与自动采集共用此表。
@@ -156,7 +161,7 @@ SIG 保留 X-Macro 清单，用同一份定义生成索引、Key、描述及静�
 目标类型、字节大小和范围仍从 aBus 查询，目标引用 SIG 清单生成的枚举。
 主站采集项和从站离散映射均显式配置 quantity，并检查它与目标长度匹配。
 修改字段顺序不会改变映射指向的业务成员或协议地址；初始化继续检查映射合法性。
-未来 JSON 生成器可以生成 SIG 清单和普通 C 通信配置，当前手工维护。
+修改点表和映射请编辑 config/points.json，再运行生成器。
 
 USART2 PC10/PC11、PA15 DE，115200、8N1、站号 1。
 寄存器地址均从 0 开始，U32/S32 用两个保持寄存器，高字在前。
@@ -444,10 +449,9 @@ system 通过 protocol.h 取得点表配置并向 protocolInit 传入总线；�
 | 指针目标失效或存在并发修改 | const 不递归保护指针目标；result、context 等可写目标单独约定生命周期及同步 |
 | 设备配置依赖扩散 | 引用集中在 protocol.c；公共协议库不引用具体设备对象 |
 
-只读配置不需要为消除 extern 再增加 getter 或运行时注册。未来 JSON
-生成器应统一维护设备 .c 的配置定义和 protocol.c 的配套声明，并校验
-名称、类型、符号唯一性及主从裁剪关系。当前尚未实现生成工具，声明一致性
-依靠源码同步维护；构建与回归测试验证链接和实际功能，不替代完整类型检查。
+只读配置不需要为消除 extern 再增加 getter 或运行时注册。当前 JSON 生成器
+负责点表、映射及容量；设备 .c 的配置对象和 protocol.c 的配套声明仍手写。
+声明一致性依靠源码同步维护；构建与回归验证链接和功能，不替代完整类型检查。
 
 开源项目也使用相同的跨文件声明机制，具体对象的访问约束仍需分别遵守：
 
@@ -462,7 +466,8 @@ system 通过 protocol.h 取得点表配置并向 protocolInit 传入总线；�
 
 ### 按 SIG 的异步测试
 
-主站且 ABUS_EVENT_ENABLE 开启时，test 任务每 5 秒调用 protocolRequest，
+`APP_DEMO_ENABLE` 和 `ABUS_EVENT_ENABLE` 开启且选择主站时，test 任务每
+5 秒调用 protocolRequest，
 目标仅填写 FAN_SIG_DEVICE_ID、FAN_SIG_TEST_003、ABUS_SIG_WHOLE。
 请求值 101～200 循环，aComm 根据公共字段处理目标和订阅；
 后台 Modbus 回调从具体表项取得地址 34、数量 2、字序和设备超时。

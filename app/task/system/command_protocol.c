@@ -6,8 +6,24 @@
 static int protocol_command(int argc, char **argv)
 {
     aStatus_t status;
+    if (argc == 2 && strcmp(argv[1], "stats") == 0) {
+        protocolStats_t stats;
+        status = protocolGetStats(&stats);
+        if (status != A_STATUS_OK) {
+            ASHELL_REPLY("protocol stats failed: %d\r\n", (int)status);
+            return -1;
+        }
+        ASHELL_REPLY("work=%lu errors=%lu timeouts=%lu max_process_ms=%lu\r\n",
+            (unsigned long)stats.work_count, (unsigned long)stats.error_count,
+            (unsigned long)stats.timeout_count,
+            (unsigned long)stats.max_process_ms);
+        ASHELL_REPLY("rx_queued=%lu rx_dropped=%lu\r\n",
+            (unsigned long)stats.queued_frames,
+            (unsigned long)stats.dropped_frames);
+        return 0;
+    }
     if (argc != 2 || strcmp(argv[1], "refresh") != 0) {
-        ASHELL_REPLY("protocol refresh\r\n");
+        ASHELL_REPLY("protocol refresh | stats\r\n");
         return -1;
     }
     status = protocolRefresh();
@@ -19,4 +35,4 @@ static int protocol_command(int argc, char **argv)
     return 0;
 }
 
-ASHELL_CMD_EXPORT(protocol, protocol_command, "Request a fresh polling round");
+ASHELL_CMD_EXPORT(protocol, protocol_command, "Refresh polling or show stats");

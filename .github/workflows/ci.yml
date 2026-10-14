@@ -1,0 +1,50 @@
+name: Firmware checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [host, firmware, matrix]
+    env:
+      ARM_GCC_ROOT: /usr
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang cmake ninja-build python3 python3-venv \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi
+      - name: Install point generator
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install -r scripts/requirements.txt
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+      - name: Run checks
+        run: python3 scripts/test.py --suite ${{ matrix.suite }}
+      - name: Show failing logs
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for report in Path('build/tests').rglob('results.json'):
+              for result in json.loads(report.read_text()):
+                  if not result['passed']:
+                      print(result['name'])
+                      print(Path(result['log']).read_text()[-16000:])
+          PY

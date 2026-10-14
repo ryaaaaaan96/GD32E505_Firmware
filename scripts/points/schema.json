@@ -1,0 +1,406 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "aClass 点表输入 v1",
+  "type": "object",
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "devices": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/device"
+      },
+      "minItems": 1
+    },
+    "protocols": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/protocol"
+      },
+      "minItems": 0
+    }
+  },
+  "required": [
+    "format_version",
+    "devices",
+    "protocols"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "range": {
+      "type": "object",
+      "properties": {
+        "min": {
+          "type": "integer"
+        },
+        "max": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "additionalProperties": false
+    },
+    "field": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "symbol": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "name",
+        "symbol",
+        "type",
+        "offset"
+      ],
+      "additionalProperties": false
+    },
+    "type": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "kind": {
+          "enum": [
+            "raw",
+            "struct"
+          ]
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/field"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "size"
+      ],
+      "additionalProperties": false
+    },
+    "signal": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "key": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "LOCK",
+              "DISJOINT"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "storage": {
+          "enum": [
+            "managed",
+            "bound"
+          ]
+        },
+        "persistent": {
+          "type": "boolean"
+        },
+        "default": {},
+        "range": {
+          "$ref": "#/$defs/range"
+        },
+        "field_ranges": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/range"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "key",
+        "type",
+        "flags"
+      ],
+      "additionalProperties": false
+    },
+    "device": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "device_id": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/type"
+          },
+          "minItems": 0
+        },
+        "signals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/signal"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "name",
+        "device_id",
+        "types",
+        "signals"
+      ],
+      "additionalProperties": false
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "sig_key": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "param": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        }
+      },
+      "required": [
+        "device",
+        "sig_key"
+      ],
+      "additionalProperties": false
+    },
+    "map": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "area": {
+          "enum": [
+            "coils",
+            "discrete_inputs",
+            "holding_registers",
+            "input_registers"
+          ]
+        },
+        "address": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2000
+        },
+        "access": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "READ",
+              "WRITE"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "word_order": {
+          "enum": [
+            "high_first",
+            "low_first"
+          ]
+        },
+        "poll_time_ms": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            {
+              "const": "once"
+            }
+          ]
+        },
+        "break_before": {
+          "type": "boolean"
+        },
+        "subscribe": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "MARK_ONLY",
+              "UPDATED",
+              "WRITE_COMPLETE",
+              "REQUEST_READ",
+              "REQUEST_WRITE"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "publish": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "WRITE_COMPLETE"
+            ]
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "target",
+        "area",
+        "address",
+        "quantity",
+        "access",
+        "word_order"
+      ],
+      "additionalProperties": false
+    },
+    "range_callback": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "area": {
+          "enum": [
+            "coils",
+            "discrete_inputs",
+            "holding_registers",
+            "input_registers"
+          ]
+        },
+        "address": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "access": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "READ",
+              "WRITE"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "read": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "write": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "context": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        }
+      },
+      "required": [
+        "name",
+        "area",
+        "address",
+        "quantity",
+        "access"
+      ],
+      "additionalProperties": false
+    },
+    "protocol": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+        },
+        "role": {
+          "enum": [
+            "client",
+            "server"
+          ]
+        },
+        "maps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/map"
+          },
+          "minItems": 1
+        },
+        "ranges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/range_callback"
+          },
+          "minItems": 0
+        },
+        "type": {
+          "const": "modbus"
+        }
+      },
+      "required": [
+        "type",
+        "name",
+        "role",
+        "maps"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

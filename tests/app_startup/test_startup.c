@@ -50,7 +50,7 @@ aStatus_t appTestTaskInit(void)
 }
 void aOSTaskExit(void)
 {
-    assert(stage++ == 6U);
+    assert(stage++ == (APP_DEMO_ENABLE ? 6U : 5U));
     longjmp(done, 1);
 }
 void aOSRecordFault(aOSFaultCode_t code, aStatus_t status, const char *context)
@@ -61,11 +61,12 @@ void aOSRecordFault(aOSFaultCode_t code, aStatus_t status, const char *context)
 }
 int main(void)
 {
-    for (scenario = 0U; scenario < 4U; ++scenario) {
+    for (scenario = 0U; scenario < (APP_DEMO_ENABLE ? 4U : 3U); ++scenario) {
         stage = 0U;
         fault = NULL;
         if (setjmp(done) == 0) (void)firmware_main();
-        if (scenario == 0U) assert(stage == 7U && fault == NULL);
+        if (scenario == 0U)
+            assert(stage == (APP_DEMO_ENABLE ? 7U : 6U) && fault == NULL);
         if (scenario == 1U)
             assert(stage == 3U && strcmp(fault, "aOSCreateTask(appInit)") == 0);
         if (scenario == 2U)

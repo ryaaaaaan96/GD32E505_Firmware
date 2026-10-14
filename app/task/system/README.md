@@ -4,6 +4,9 @@
 本目录也管理通用数据总线和数据库实例及其调试命令，见下文[数据库调试](#数据库调试)。
 `command_flash.c` 保留手动擦写测试，默认不编译；需要复测时取消本目录 CMakeLists.txt 中该源码的注释。
 产品输出适配和存储配置统一由 `app/devices/system` 提供。
+演示构建启用 aBus 动态接口时，`bench bus` 使用独立测试表测量 CPU 周期；
+执行前后可用 `sys heap`、`sys stack shell` 检查资源，见
+[性能基准](../../../benchmarks/README.md)。
 日志相关内容按职责分布：
 
 - `app/devices/system/system_device.c` 的日志输出段：产品日志配置及输出适配。
@@ -21,6 +24,40 @@ main 的 appInitTask 在 aSystemInit 成功返回后调用 appTestTaskInit，统
 存储、数据总线和数据库不新增独立任务。
 存储设备初始化直接使用 ASHELL_PRINT，不依赖 aLog；启动信息先入队，
 全部服务就绪后由 Shell 任务输出。需要数据库的日志输出须在数据库就绪后挂接。
+
+## 系统与通信诊断
+
+```text
+sys heap
+sys stack
+sys stack modbus
+sys stack shell
+sys fault
+protocol stats
+sys fault clear
+```
+
+| 命令/字段 | 含义 |
+| --- | --- |
+| `sys heap` | OS 堆预留、当前空闲及自启动以来最低空闲字节数 |
+| `sys stack [task]` | 指定任务历史最小剩余栈字节数；省略名称查询当前 Shell 任务 |
+| `sys fault` | 当前 OS 故障码及保留的 CPU 快照；无有效快照时明确提示 |
+| `sys fault clear` | 清除这两类诊断记录，不修复引发故障的原因 |
+| `protocol stats` 的 `work` | 通信任务实际处理的作业/请求次数，包含失败尝试 |
+| `errors` / `timeouts` | 其他错误 / 超时次数，分开累计，不重复计数 |
+| `max_process_ms` | 单次 aCommProcess 最大耗时，包含阻塞收发和协议回调 |
+| `rx_queued` / `rx_dropped` | 已完成且待消费帧数 / 通道累计丢帧数 |
+
+计数是按字段独立采样的运行诊断，32 位计数自然回绕，不用于业务同步。
+丢帧涵盖字节接收错误、帧内超时、帧过长和队列满；不包含 `frame_check` 的
+协议过滤/校验拒绝，也不等同于 USART 的丢字节数。
+队列数不包含正在接收或已交给消费者的帧。通信模块关闭返回 `UNSUPPORTED`。
+诊断按需查询，不创建监控线程、不额外分配堆；栈查询会暂时挂起调度扫描栈。
+
+HardFault 时系统保存 RAM 快照后停止，Shell 也不能继续运行。需要 SRAM 保留的
+复位后再查看，或直接通过调试器查看 `g_aDrvFaultRecord`。BFAR/MMFAR 只有在
+CFSR 对应有效位设置时有意义；`frame_valid=0` 时没有可信的 PC/LR。
+OS 故障记录不跨复位保留，context 是借用指针，命令只显示地址，不解引用。
 
 ## 数据库调试
 
@@ -139,7 +176,7 @@ Flash 后端须在回调返回前复制数据，不能保存上游静态缓冲�
 
 - `system_init.c/h` 的数据总线段：私有 aBus handle、初始化、键解析及通用数据访问。
 - `command_data_bus.c`：注册 `sig` 命令，只依赖服务和 aBus 元信息。
-- `protocolInit(bus_handle)`：显式借用系统总线，直接通过 aModbus 原有接口创建协议。
+- `protocolInit(bus_handle)`：显式借用系统总线，装配 aComm 通道、调度及协议回调。
 
 产品点表来自 protocol/sig 的 IDU_test.inc 和 FAN_test.inc 清单。
 protocol_tables.c 展开为 static const 数组，通过 protocolBusConfigInit 提供配置；

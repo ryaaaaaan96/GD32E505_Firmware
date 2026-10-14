@@ -93,7 +93,8 @@ RS485 源文件按开关加入。设备层没有 TX Queue。
 没有 DMA/IRQ 时显式选择 DMA 后端返回 UNSUPPORTED，不退化为轮询。
 
 Shell 是例外：关闭后保留 aShell target 和空实现，允许已有打印调用继续编译；
-app 不创建 Shell 任务和 console 资源。启用时 Shell 也不创建任务，任务归 app。
+app 不创建 Shell 任务。控制台由 Shell 与日志共享，两者都关闭时才不创建。
+启用时 Shell 模块也不创建任务，任务归 app。
 
 ## target 与配置头边界
 
@@ -129,6 +130,39 @@ firmware-<配置>.json。debug.py 从 JSON 读取 ELF 和调试器件名，支�
 依赖成功/失败路径、各模块构建矩阵和外部产品验证的入口统一列在
 [验证指南](testing.md)。组合数量以脚本为准，构建验证不代表硬件验证。
 
+### 构建摘要
+
+默认 `cmake --build` 在固件及 HEX/BIN 生成后运行摘要目标，显示以下信息：
+
+- 固件名、版本、Debug/Release、演示任务开关、Git 提交及工作区是否存在改动。
+- MCU、配置主频、CPU/FPU/ABI、编译器版本与路径、链接脚本。
+- 功能库启用/关闭状态、OS tick 和已预留的 RTOS 堆容量。
+- GNU size 的 text/data/bss 分类，以及各 MEMORY 区域的占用、容量和余量。
+- ELF/HEX/BIN/MAP 路径、文件大小及 BIN 的 SHA256。
+
+报告同时写入 ELF 旁的 `<固件名>.build.txt`。无变更构建也重新生成摘要，
+不因此重编译或重链接。只构建某个固件 target 时，可随后显式调用摘要 target：
+
+```sh
+cmake --build build/Debug --target gd32e505vet7_debug_report
+```
+
+摘要使用现有 CMake 与 GNU binutils，不额外引入 Python 依赖。Git 可选；
+源码归档中没有仓库时仍可生成产物和报告。实现位于
+[firmware_report.cmake](../cmake/firmware_report.cmake)，配置由
+`generate_firmware_images()` 传入，不重复加载产品配置。
+
+内存区域来自链接 MAP，实际占用按 ELF 的 VMA 与可加载节 LMA 末端计算，
+包含区域内的对齐和地址空隙；不把 GNU size 的 `data` 分类直接当成 RAM，
+也不把 ELF 调试信息当成烧录空间。当前使用普通 GNU ld MEMORY 布局，
+若后续引入 overlay 或特殊地址别名，应重新核对这一统计口径。
+RAM 占用包含整个 RTOS 堆和链接脚本栈/堆预留，区域余量不是运行时空闲堆；
+最小剩余堆、任务栈水位、CPU 负载与实际时序仍须板上测量。
+
+模块状态表示构建能力，具体保留的代码受链接裁剪影响，也不表示实际 I/O 模式。
+Git 状态是报告生成时的源码状态，不是固件内置版本信息；精确识别本次 BIN
+使用 SHA256。报告不声称统计编译告警数或测试通过数。
+
 ## 外部产品接入
 
 `aclass_select(PRODUCT_DIR ...)` 指定产品根目录，默认当前源码目录。
@@ -159,6 +193,11 @@ databaseInit 初始化数据库模块并打开已有实例，首次格式化由 
 
 ### Modbus 应用开关
 
+`APP_DEMO_ENABLE` 仅控制 app/task/test 主动测试任务，默认 ON。
+`scripts/build.py --profile product` 读取 product_config.cmake 将其关闭，
+并使用独立构建目录；点表和正常协议服务仍保留。
+该开关与下面的协议装配开关分别控制不同内容。
+
 `APP_MODBUS_DEMO_ENABLE` 控制本产品示例；角色和站号在 `app/app_config.h`
 配置，`APP_MODBUS_CLIENT_ENABLE` 为 0 时运行从站、1 时运行主站，默认 1。
 `APP_MODBUS_CLIENT_TARGET_ID` 配置远端站号，
@@ -170,9 +209,10 @@ CMake 注册主从两份源码，protocol.c 按应用角色选择配置；未引
 库的 `AMODBUS_CLIENT_ENABLE` / `AMODBUS_SERVER_ENABLE` 控制协议能力，
 与应用实际运行角色分开。关闭协议库或串口依赖时，应用 Demo 一同裁剪；
 所选角色与库的 CLIENT/SERVER 能力不匹配时，编译阶段明确报错。
-引脚、站号、速率和寄存器映射仍由应用 C 代码配置，详见
-[产品协议](../app/protocol/README.md)。后续 CSV/JSON 生成输入位于
-[protocol/config](../app/protocol/config/README.md)，当前尚未接入代码生成。
+引脚、站号、速率仍由应用 C 代码配置，测点和寄存器映射由
+[protocol/config](../app/protocol/config/README.md) 中的 JSON 生成。
+build.py 在配置前调用 Python/Mako 生成器；CMake 的 app_sig_check 只执行
+--check，避免并行构建配置改写源码。生成快照与输入一起提交。
 
 ### Flash25Q / SFUD 构建
 

@@ -2,6 +2,8 @@
 """验证板级 Demo 的主从模式、静动态实例及真实 Modbus/aBus 链路。"""
 from pathlib import Path
 import itertools
+import json
+import sys
 import os
 import re
 import shutil
@@ -103,53 +105,30 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
     test_source.parent.mkdir(parents=True)
     shutil.copy(root / "tests/modbus_demo/test_demo.c", test_source)
     params = protocol / "sig/FAN_test.inc"
-    client_maps = protocol / "FAN_modbus_master.c"
-    original_client_maps = client_maps.read_text()
-    split_flag = " |\n                     ACOMM_MAP_FLAG_BREAK_BEFORE"
-    assert original_client_maps.count(split_flag) == 1
-    client_maps.write_text(original_client_maps.replace(
-        split_flag, ""))
-    mappings = protocol / "IDU_modbus_slave.c"
-    # 测试副本增加稀疏保持寄存器和输入寄存器映射，无需外围地址段。
-    sparse_maps = """    {
-        .area = AMODBUS_AREA_HOLDING_REGISTERS,
-        .address = 16U,
-        .quantity = 2U,
-        .comm.flags = ACOMM_MAP_FLAG_READ,
-        .comm.deviceID = IDU_SIG_DEVICE_ID,
-                   .comm.sigIndex = IDU_SIG_TEST_001, .comm.paramIndex = ACOMM_MAP_SIG_WHOLE,
-        .word_order = AMODBUS_WORD_HIGH_FIRST,
-    },
-    {
-        .area = AMODBUS_AREA_HOLDING_REGISTERS,
-        .address = 20U,
-        .quantity = 2U,
-        .comm.flags = ACOMM_MAP_FLAG_READ | ACOMM_MAP_FLAG_WRITE,
-        .comm.deviceID = FAN_SIG_DEVICE_ID,
-                   .comm.sigIndex = FAN_SIG_TEST_001, .comm.paramIndex = FAN_TEST_001_U32,
-        .word_order = AMODBUS_WORD_HIGH_FIRST,
-    },
-"""
-    input_maps = """
-    {
-        .area = AMODBUS_AREA_INPUT_REGISTERS,
-        .address = 0U,
-        .quantity = 2U,
-        .comm.flags = ACOMM_MAP_FLAG_READ,
-        .comm.deviceID = IDU_SIG_DEVICE_ID,
-                   .comm.sigIndex = IDU_SIG_TEST_001, .comm.paramIndex = ACOMM_MAP_SIG_WHOLE,
-        .word_order = AMODBUS_WORD_HIGH_FIRST,
-    },"""
-    original_maps = mappings.read_text()
-    group_marker = "    /* 本地测试控制值"
-    assert original_maps.count(group_marker) == 1
-    changed = original_maps.replace(group_marker, sparse_maps + group_marker)
-    changed, count = re.subn(
-        r"(static const aModbusServerMap_t maps\[\] = \{\n)(.*?)(^\};)",
-        lambda match: match[1] + match[2] + input_maps + "\n" + match[3],
-        changed, flags=re.M | re.S)
-    assert count == 1
-    mappings.write_text(changed)
+    # 有效配置通过 JSON 生成；后面的故意损坏仍验证库的运行时防线。
+    document = json.loads((protocol / "config/points.json").read_text())
+    client = next(p for p in document["protocols"] if p["role"] == "client")
+    server = next(p for p in document["protocols"] if p["role"] == "server")
+    for item in client["maps"]:
+        item["break_before"] = False
+    for area, address, device, param, access in (
+        ("holding_registers", 16, "IDU", None, ["READ"]),
+        ("holding_registers", 20, "FAN", "u32_value", ["READ", "WRITE"]),
+        ("input_registers", 0, "IDU", None, ["READ"]),
+    ):
+        target = {"device": device, "sig_key": 2001}
+        if param:
+            target["param"] = param
+        server["maps"].append({"target": target, "area": area,
+            "address": address, "quantity": 2, "access": access,
+            "word_order": "high_first"})
+    source = protocol / "config/points.json"
+    source.write_text(json.dumps(document))
+    subprocess.run([sys.executable, str(root / "scripts/generate_points.py"),
+                    "--input", str(source), "--output", str(protocol)],
+                   check=True)
+    client_maps = protocol / "generated/FAN_modbus_master.inc"
+    mappings = protocol / "generated/IDU_modbus_slave.inc"
     fixture_sources = [str(fixture / source) if source in (
         "tests/modbus_demo/test_demo.c", "app/protocol/FAN_modbus_master.c",
         "app/protocol/IDU_modbus_slave.c",
@@ -167,13 +146,13 @@ with tempfile.TemporaryDirectory(prefix="aclass-modbus-demo-") as tmp:
                        cwd=root, check=True)
         subprocess.run([executable], check=True, timeout=20)
     print("extended configuration: fields/maps/holes/permissions/polls passed")
-    # 整组映射把内存偏移作为协议偏移，字段描述调序必须被拒绝。
+    # 字段枚举已独立生成；故意交换数组槽位与描述，验证库拒绝错序布局。
     original_params = params.read_text()
     changed, count = re.subn(
-        r"(    ABUS_PARAM\(FAN_TEST_001_U32,[\s\S]*?\n    \))\n"
-        r"(    ABUS_PARAM\(FAN_TEST_001_S32,[\s\S]*?\n    \))",
-        r"\2\n\1", params.read_text())
-    assert count == 1
+        r"ABUS_PARAM\(FAN_TEST_001_(U32|S32),",
+        lambda m: "ABUS_PARAM(FAN_TEST_001_" +
+            ("S32" if m[1] == "U32" else "U32") + ",", params.read_text())
+    assert count == 2
     params.write_text(changed)
     for master in (0, 1):
         executable = str(Path(tmp) / f"invalid-layout-{master}")

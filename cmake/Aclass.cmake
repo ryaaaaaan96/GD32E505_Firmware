@@ -188,8 +188,56 @@ function(generate_firmware_images target)
         COMMAND ${CMAKE_OBJCOPY} -O binary
                 $<TARGET_FILE:${target}>
                 $<TARGET_FILE_DIR:${target}>/$<TARGET_FILE_BASE_NAME:${target}>.bin
-        COMMAND ${CMAKE_SIZE} $<TARGET_FILE:${target}>
-        COMMENT "Generating HEX/BIN and size report for ${target}"
+        COMMENT "Generating HEX/BIN for ${target}"
+        VERBATIM
+    )
+
+    # 报告独立于链接：默认构建和无源码变化的增量构建均可查看当前产物。
+    # 使用生成器表达式区分 Debug/Release，不增加 Python 构建依赖。
+    set(REPORT_ELF "$<TARGET_FILE:${target}>")
+    set(REPORT_BASE
+        "$<TARGET_FILE_DIR:${target}>/$<TARGET_FILE_BASE_NAME:${target}>")
+    set(REPORT_CONFIG "$<CONFIG>")
+    get_target_property(REPORT_DEMO ${target} APP_DEMO_ENABLE)
+    if(REPORT_DEMO STREQUAL "REPORT_DEMO-NOTFOUND")
+        set(REPORT_DEMO "n/a")
+    endif()
+    set(REPORT_ENABLED "")
+    set(REPORT_DISABLED "")
+    foreach(module aBus aComm aModbus aMemory aDataBase aLog aShell)
+        string(TOUPPER "${module}_ENABLE" option)
+        if(${option})
+            list(APPEND REPORT_ENABLED "${module}")
+        else()
+            list(APPEND REPORT_DISABLED "${module}")
+        endif()
+    endforeach()
+    set(REPORT_HEAP "n/a")
+    set(REPORT_TICK "n/a")
+    if(TARGET aOS)
+        get_target_property(REPORT_HEAP aOS AOS_HEAP_BYTES)
+        get_target_property(REPORT_TICK aOS AOS_TICK_RATE_HZ)
+    endif()
+    set(report_config "")
+    foreach(variable
+        REPORT_ELF REPORT_BASE REPORT_CONFIG REPORT_DEMO
+        REPORT_ENABLED REPORT_DISABLED
+        REPORT_HEAP REPORT_TICK FIRMWARE_NAME FIRMWARE_VERSION
+        MCU_DEVICE MCU_CPU MCU_FPU MCU_FLOAT_ABI MCU_CORE_CLOCK_HZ
+        ACLASS_PLATFORM ACLASS_OS CMAKE_C_COMPILER CMAKE_C_COMPILER_ID
+        CMAKE_C_COMPILER_VERSION CMAKE_SIZE CMAKE_OBJDUMP CMAKE_SOURCE_DIR
+        LINKER_SCRIPT)
+        string(APPEND report_config
+            "set(${variable} [==[${${variable}}]==])\n")
+    endforeach()
+    set(report_input
+        "${CMAKE_CURRENT_BINARY_DIR}/${target}-report-$<CONFIG>.cmake")
+    file(GENERATE OUTPUT "${report_input}" CONTENT "${report_config}")
+    add_custom_target(${target}_report ALL
+        COMMAND "${CMAKE_COMMAND}" "-DREPORT_INPUT=${report_input}"
+            -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/firmware_report.cmake"
+        DEPENDS ${target}
+        COMMENT "Firmware build summary"
         VERBATIM
     )
 endfunction()

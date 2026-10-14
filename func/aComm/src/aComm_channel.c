@@ -383,3 +383,20 @@ aStatus_t aCommChannelBindTransport(aCommChannel_t *handle,
     transport->finish = framed ? port_finish : NULL;
     return A_STATUS_OK;
 }
+
+aStatus_t aCommChannelGetStats(aCommChannel_t *handle,
+    aCommChannelStats_t *stats)
+{
+    if (handle == NULL || stats == NULL) return A_STATUS_INVALID_PARAM;
+    if (!handle->ready) return A_STATUS_NOT_READY;
+    if (handle->config.mode == ACOMM_CHANNEL_STREAM) {
+        *stats = (aCommChannelStats_t){0};
+        return A_STATUS_OK;
+    }
+    const aCommChannelIo_t *io = &handle->config.io;
+    io->enter(io->context);
+    stats->queued_frames = handle->count;
+    stats->dropped_frames = handle->dropped_frames;
+    io->exit(io->context);
+    return A_STATUS_OK;
+}

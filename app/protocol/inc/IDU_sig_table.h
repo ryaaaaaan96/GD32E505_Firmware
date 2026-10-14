@@ -1,59 +1,150 @@
+/* 自动生成：修改 config/points.json，运行 scripts/generate_points.py。 */
 #ifndef APP_IDU_SIG_TABLE_H
 #define APP_IDU_SIG_TABLE_H
 
 #include <stdint.h>
 #include "aLayout.h"
 
-/* IDU 本板设备号；与 FAN 表共用应用配置中的实例命名空间。 */
-enum {
-    IDU_SIG_DEVICE_ID = 1U
-};
+#define IDU_SIG_DEVICE_ID 1U
 
-/* 同一清单生成连续下标和固定 Key，新增测点只修改清单。 */
-#define ABUS_BOUND_SIG(...) ABUS_SIG(__VA_ARGS__)
-#define ABUS_PARAMS(group, ...)
+/* 顺序决定本次固件下标，Key 独立于顺序，发布后保持稳定。 */
 typedef enum {
-#define ABUS_SIG(name, key_value, ...) IDU_SIG_##name,
-#include "../sig/IDU_test.inc"
-#undef ABUS_SIG
+    IDU_SIG_TEST_001,
+    IDU_SIG_TEST_002,
+    IDU_SIG_TEST_003,
+    IDU_SIG_TEST_004,
+    IDU_SIG_TEST_005,
+    IDU_SIG_TEST_006,
+    IDU_SIG_TEST_007,
+    IDU_SIG_TEST_008,
+    IDU_SIG_TEST_009,
+    IDU_SIG_TEST_010,
+    IDU_SIG_TEST_011,
+    IDU_SIG_TEST_012,
+    IDU_SIG_TEST_013,
+    IDU_SIG_TEST_014,
+    IDU_SIG_TEST_015,
+    IDU_SIG_TEST_016,
+    IDU_SIG_TEST_017,
+    IDU_SIG_TEST_018,
+    IDU_SIG_TEST_019,
+    IDU_SIG_TEST_020,
+    IDU_SIG_TEST_021,
+    IDU_SIG_TEST_022,
+    IDU_SIG_TEST_023,
+    IDU_SIG_TEST_024,
+    IDU_SIG_TEST_025,
+    IDU_SIG_TEST_026,
+    IDU_SIG_TEST_027,
+    IDU_SIG_TEST_028,
+    IDU_SIG_TEST_029,
+    IDU_SIG_TEST_030,
+    IDU_SIG_TEST_031,
+    IDU_SIG_TEST_032,
+    IDU_SIG_TEST_033,
+    IDU_SIG_TEST_034,
+    IDU_SIG_TEST_035,
+    IDU_SIG_TEST_036,
+    IDU_SIG_TEST_037,
+    IDU_SIG_TEST_038,
+    IDU_SIG_TEST_039,
+    IDU_SIG_TEST_040,
+    IDU_SIG_TEST_041,
+    IDU_SIG_TEST_042,
+    IDU_SIG_TEST_043,
+    IDU_SIG_TEST_044,
+    IDU_SIG_TEST_045,
+    IDU_SIG_TEST_046,
+    IDU_SIG_TEST_047,
+    IDU_SIG_TEST_048,
+    IDU_SIG_TEST_049,
+    IDU_SIG_TEST_050,
     IDU_SIG_COUNT
 } IDUSigIndex_t;
 
-/* Key 独立于数组顺序，实际产品发布后应保持稳定。 */
 enum {
-#define ABUS_SIG(name, key_value, ...) IDU_SIG_##name##_KEY = (key_value),
-#include "../sig/IDU_test.inc"
-#undef ABUS_SIG
+    IDU_SIG_TEST_001_KEY = 2001U,
+    IDU_SIG_TEST_002_KEY = 2002U,
+    IDU_SIG_TEST_003_KEY = 2003U,
+    IDU_SIG_TEST_004_KEY = 2004U,
+    IDU_SIG_TEST_005_KEY = 2005U,
+    IDU_SIG_TEST_006_KEY = 2006U,
+    IDU_SIG_TEST_007_KEY = 2007U,
+    IDU_SIG_TEST_008_KEY = 2008U,
+    IDU_SIG_TEST_009_KEY = 2009U,
+    IDU_SIG_TEST_010_KEY = 2010U,
+    IDU_SIG_TEST_011_KEY = 2011U,
+    IDU_SIG_TEST_012_KEY = 2012U,
+    IDU_SIG_TEST_013_KEY = 2013U,
+    IDU_SIG_TEST_014_KEY = 2014U,
+    IDU_SIG_TEST_015_KEY = 2015U,
+    IDU_SIG_TEST_016_KEY = 2016U,
+    IDU_SIG_TEST_017_KEY = 2017U,
+    IDU_SIG_TEST_018_KEY = 2018U,
+    IDU_SIG_TEST_019_KEY = 2019U,
+    IDU_SIG_TEST_020_KEY = 2020U,
+    IDU_SIG_TEST_021_KEY = 2021U,
+    IDU_SIG_TEST_022_KEY = 2022U,
+    IDU_SIG_TEST_023_KEY = 2023U,
+    IDU_SIG_TEST_024_KEY = 2024U,
+    IDU_SIG_TEST_025_KEY = 2025U,
+    IDU_SIG_TEST_026_KEY = 2026U,
+    IDU_SIG_TEST_027_KEY = 2027U,
+    IDU_SIG_TEST_028_KEY = 2028U,
+    IDU_SIG_TEST_029_KEY = 2029U,
+    IDU_SIG_TEST_030_KEY = 2030U,
+    IDU_SIG_TEST_031_KEY = 2031U,
+    IDU_SIG_TEST_032_KEY = 2032U,
+    IDU_SIG_TEST_033_KEY = 2033U,
+    IDU_SIG_TEST_034_KEY = 2034U,
+    IDU_SIG_TEST_035_KEY = 2035U,
+    IDU_SIG_TEST_036_KEY = 2036U,
+    IDU_SIG_TEST_037_KEY = 2037U,
+    IDU_SIG_TEST_038_KEY = 2038U,
+    IDU_SIG_TEST_039_KEY = 2039U,
+    IDU_SIG_TEST_040_KEY = 2040U,
+    IDU_SIG_TEST_041_KEY = 2041U,
+    IDU_SIG_TEST_042_KEY = 2042U,
+    IDU_SIG_TEST_043_KEY = 2043U,
+    IDU_SIG_TEST_044_KEY = 2044U,
+    IDU_SIG_TEST_045_KEY = 2045U,
+    IDU_SIG_TEST_046_KEY = 2046U,
+    IDU_SIG_TEST_047_KEY = 2047U,
+    IDU_SIG_TEST_048_KEY = 2048U,
+    IDU_SIG_TEST_049_KEY = 2049U,
+    IDU_SIG_TEST_050_KEY = 2050U,
 };
-#undef ABUS_PARAMS
-
-/* 组合类型的字段名称与定义由同一清单生成。 */
-#define ABUS_SIG(name, key_value, ...)
-#define ABUS_PARAM(name, ...) name,
-#define ABUS_PARAMS(group, ...) enum { __VA_ARGS__ group##_PARAM_COUNT };
-#include "../sig/IDU_test.inc"
-#undef ABUS_PARAMS
-#undef ABUS_PARAM
-#undef ABUS_SIG
 
 typedef uint8_t IDUTestRaw_t[8];
+
 typedef uint8_t IDUTestBytes_t[4];
+
 typedef struct {
     uint32_t u32_value;
     int32_t s32_value;
     uint16_t u16_value;
     IDUTestBytes_t raw_value;
-    uint16_t reserved; /* 显式占据末尾字节，整组映射时必须为零。 */
+    uint16_t reserved;
 } IDUTest_t;
-
-/* 产品选择固定寄存器布局；每个字段占完整寄存器，无隐式填充。 */
 ALIB_ASSERT_TYPE_SIZE(IDUTest_t, 16U);
-ALIB_ASSERT_MEMBER_OFFSET(IDUTest_t, u32_value, 0U);
-ALIB_ASSERT_MEMBER_OFFSET(IDUTest_t, s32_value, 4U);
-ALIB_ASSERT_MEMBER_OFFSET(IDUTest_t, u16_value, 8U);
-ALIB_ASSERT_MEMBER_OFFSET(IDUTest_t, raw_value, 10U);
-ALIB_ASSERT_MEMBER_OFFSET(IDUTest_t, reserved, 14U);
+ALIB_ASSERT_MEMBER_OFFSET(IDUTest_t,
+    u32_value, 0U);
+ALIB_ASSERT_MEMBER_OFFSET(IDUTest_t,
+    s32_value, 4U);
+ALIB_ASSERT_MEMBER_OFFSET(IDUTest_t,
+    u16_value, 8U);
+ALIB_ASSERT_MEMBER_OFFSET(IDUTest_t,
+    raw_value, 10U);
+ALIB_ASSERT_MEMBER_OFFSET(IDUTest_t,
+    reserved, 14U);
 
-#undef ABUS_BOUND_SIG
+enum {
+    IDU_TEST_007_U32,
+    IDU_TEST_007_S32,
+    IDU_TEST_007_U16,
+    IDU_TEST_007_RAW,
+    IDU_TEST_007_RESERVED,
+    IDU_TEST_007_PARAM_COUNT
+};
 
 #endif

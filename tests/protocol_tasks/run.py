@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import tempfile
 import shutil
+import json
+import sys
 
 root = Path(__file__).resolve().parents[2]
 flags = [
@@ -33,20 +35,18 @@ with tempfile.TemporaryDirectory(prefix="aclass-protocol-tasks-") as folder:
     # 只修改临时副本中的清单，验证新增测点不要求修改头文件或装配代码。
     fixture = Path(folder) / "protocol"
     shutil.copytree(root / "app/protocol/inc", fixture / "inc")
-    shutil.copytree(root / "app/protocol/sig", fixture / "sig")
-    shutil.copytree(root / "app/protocol/persistence", fixture / "persistence")
     for name in ("protocol.c", "protocol_tables.c"):
         shutil.copy(root / "app/protocol" / name, fixture / name)
-    definition = fixture / "sig/IDU_test.inc"
-    definition.write_text('''ABUS_SIG(SPARE, 900U, uint16_t,
-    .type = ALIB_DATA_U16,
-
-    .default_data = &(const uint16_t){7U}
-)
-''' + definition.read_text())
-    selection = fixture / "persistence/sig_persist.inc"
-    selection.write_text('PERSIST_SIG(IDU_SIG_DEVICE_ID, IDU_SIG_SPARE_KEY)\n'
-                         + selection.read_text())
+    document = json.loads((root / "app/protocol/config/points.json").read_text())
+    document["devices"][0]["signals"].insert(0, {
+        "name": "SPARE", "key": 900, "type": "u16", "flags": [],
+        "default": 7, "persistent": True
+    })
+    source = fixture / "points.json"
+    source.write_text(json.dumps(document))
+    subprocess.run([sys.executable, str(root / "scripts/generate_points.py"),
+                    "--input", str(source), "--output", str(fixture)],
+                   check=True)
     for dynamic in (0, 1):
         subprocess.run(flags[:1] + ["-I" + str(fixture / "inc")]
                        + flags[1:] + [

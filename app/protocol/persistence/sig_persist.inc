@@ -1,4 +1,4 @@
-/* 按 deviceID、sigKey 递增。仅这些参数占用 KV 偏移索引的 RAM。 */
+/* 自动生成：按 deviceID、sigKey 排序，只为选定项建立持久化索引。 */
 PERSIST_SIG(IDU_SIG_DEVICE_ID, IDU_SIG_TEST_001_KEY)
 PERSIST_SIG(IDU_SIG_DEVICE_ID, IDU_SIG_TEST_002_KEY)
 PERSIST_SIG(IDU_SIG_DEVICE_ID, IDU_SIG_TEST_003_KEY)

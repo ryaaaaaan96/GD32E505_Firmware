@@ -95,6 +95,11 @@ static void stream_test(void)
         .flush = flush_bytes
     };
     aCommChannel_t *handle = create(&config);
+    aCommChannelStats_t stats = {7U, 9U};
+    assert(aCommChannelGetStats(handle, &stats) == A_STATUS_OK);
+    assert(stats.queued_frames == 0U && stats.dropped_frames == 0U);
+    assert(aCommChannelGetStats(NULL, &stats) == A_STATUS_INVALID_PARAM);
+    assert(aCommChannelGetStats(handle, NULL) == A_STATUS_INVALID_PARAM);
     assert((handle->storage == NULL) ==
         (config.mode == ACOMM_CHANNEL_STREAM));
     assert(aCommChannelBindTransport(handle, &transport) == A_STATUS_OK);
@@ -177,6 +182,10 @@ static void framing_test(void)
     assert(transport.prepare_frame(transport.context,
         A_TIMEOUT_MS(5U)) == A_STATUS_OK);
     assert(waits != 0U && locked == 0U);
+    aCommChannelStats_t stats;
+    assert(aCommChannelGetStats(handle, &stats) == A_STATUS_OK);
+    assert(stats.queued_frames == 0U && stats.dropped_frames >= 2U);
+    assert(locked == 0U);
     destroy(handle);
 }
 

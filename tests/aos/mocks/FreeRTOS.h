@@ -7,6 +7,10 @@ typedef unsigned UBaseType_t;
 typedef uint32_t TickType_t;
 typedef uint32_t StackType_t;
 #define configMINIMAL_STACK_SIZE 128
+#define configTOTAL_HEAP_SIZE 40960U
+#define configMAX_TASK_NAME_LEN 16
+#define INCLUDE_xTaskGetHandle 1
+#define INCLUDE_uxTaskGetStackHighWaterMark 1
 typedef void *TaskHandle_t;
 typedef void *SemaphoreHandle_t;
 typedef void *TimerHandle_t;
@@ -39,6 +43,12 @@ BaseType_t xTimerPendFunctionCall(void (*)(void *, uint32_t), void *, uint32_t, 
 TaskHandle_t xTaskGetCurrentTaskHandle(void);
 BaseType_t xTaskCreate(void (*function)(void *), const char *, uint16_t, void *, UBaseType_t, TaskHandle_t *);
 void vTaskDelete(TaskHandle_t);
+void vTaskSuspendAll(void);
+BaseType_t xTaskResumeAll(void);
+TaskHandle_t xTaskGetHandle(const char *);
+UBaseType_t uxTaskGetStackHighWaterMark(TaskHandle_t);
+size_t xPortGetFreeHeapSize(void);
+size_t xPortGetMinimumEverFreeHeapSize(void);
 void vTaskStartScheduler(void);
 void vTaskDelay(TickType_t);
 TickType_t xTaskGetTickCount(void);

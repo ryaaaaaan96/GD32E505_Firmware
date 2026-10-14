@@ -1,6 +1,14 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
+/* CMake 为真实固件指定；独立编译应用演示时保留原有测试行为。 */
+#ifndef APP_DEMO_ENABLE
+#define APP_DEMO_ENABLE 1
+#endif
+#if APP_DEMO_ENABLE != 0 && APP_DEMO_ENABLE != 1
+#error "APP_DEMO_ENABLE must be 0 or 1"
+#endif
+
 /* IDU 与 FAN 点表共用的 aBus 实例号，挂载和 RAM 绑定必须一致。 */
 #define PROTOCOL_BUS_INSTANCE_ID 1U
 
@@ -12,7 +20,7 @@
 
 /* 应用调试角色：0 为 Server（从站），1 为 Client（主站）。
  * USART2 同时只运行一种角色，不另设可与之冲突的 Server 开关。
- * 主站同时启用 test 任务的定时写入 Demo，见 app/protocol/README.md。
+ * 主站在 APP_DEMO_ENABLE=1 时启用 test 任务的定时写入演示。
  * 正常调试直接修改本文件；自动化测试可通过编译宏覆盖默认值。
  * 模块能力与 Demo 总开关仍由 config/aclass_config.cmake 控制。 */
 #ifndef APP_MODBUS_CLIENT_ENABLE

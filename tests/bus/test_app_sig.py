@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real SIG command, registry and task with host OS stubs."""
 from pathlib import Path
+from itertools import product
 import tempfile, subprocess
 root=Path(__file__).resolve().parents[2]
 import os
@@ -39,6 +40,7 @@ aStatus_t aOSMutexUnlock(aOSMutex_t m) {
 }
 #include "test_task.h"
 #include <setjmp.h>
+#if APP_DEMO_ENABLE
 static aOSTaskFunction_t task;
 static jmp_buf done;
 static unsigned delays;
@@ -48,6 +50,7 @@ aStatus_t aOSCreateTask(const aOSTaskConfig_t *c, aOSTaskHandle_t *h) {
 void aOSDelayMs(uint32_t ms) {
  assert(ms==1000); if (++delays==2) longjmp(done,1);
 }
+#endif
 int test_command(int argc, char **argv);
 int main(void) {
  uint32_t value;
@@ -60,7 +63,9 @@ int main(void) {
  get.deviceID=IDU_SIG_DEVICE_ID; get.sigIndex=IDU_SIG_TEST_001; get.dst=&value; get.size=sizeof(value);
  assert(dataBusGet(&get)==A_STATUS_NOT_READY);
  assert(busInit()==A_STATUS_OK);
+#if APP_DEMO_ENABLE
  assert(appTestTaskInit()==A_STATUS_OK);
+#endif
  assert(protocolInit(bus_handle)==A_STATUS_OK);
  assert(protocolInit(bus_handle)==A_STATUS_BUSY);
  {
@@ -76,13 +81,15 @@ int main(void) {
  }
  assert(dataBusGet(&get)==A_STATUS_OK && value==0);
  assert(test_command(5,write)==0);
+#if APP_DEMO_ENABLE
  if(setjmp(done)==0) task(NULL);
- assert(dataBusGet(&get)==A_STATUS_OK && value==124);
+#endif
+ assert(dataBusGet(&get)==A_STATUS_OK && value==123U+APP_DEMO_ENABLE);
  assert(test_command(5,bad)==-1);
  bad[4]="-1"; assert(test_command(5,bad)==-1);
  bad[4]="1x"; assert(test_command(5,bad)==-1);
  bad[3]="999"; bad[4]="1"; assert(test_command(5,bad)==-1);
- assert(dataBusGet(&get)==A_STATUS_OK && value==124);
+ assert(dataBusGet(&get)==A_STATUS_OK && value==123U+APP_DEMO_ENABLE);
  get.size=1; assert(dataBusGet(&get)==A_STATUS_INVALID_PARAM);
  get.size=sizeof(value); get.sigIndex=999;
  assert(dataBusGet(&get)==A_STATUS_NOT_FOUND);
@@ -90,9 +97,12 @@ int main(void) {
  aBusSetIndexRequestStructInit(&set);
  set.deviceID=IDU_SIG_DEVICE_ID; set.sigIndex=IDU_SIG_TEST_001; set.src=&value; set.size=sizeof(value);
  value=UINT32_MAX; assert(dataBusSet(&set)==A_STATUS_OK);
+#if APP_DEMO_ENABLE
  delays=0; if(setjmp(done)==0) task(NULL);
+#endif
  get.deviceID=IDU_SIG_DEVICE_ID; get.sigIndex=IDU_SIG_TEST_001;
- assert(dataBusGet(&get)==A_STATUS_OK && value==0);
+ assert(dataBusGet(&get)==A_STATUS_OK && value==
+     (APP_DEMO_ENABLE ? 0U : UINT32_MAX));
  assert(test_command(4,read)==0);
  read[2]="2"; read[3]="2001"; assert(test_command(4,read)==0);
  {
@@ -117,9 +127,25 @@ int main(void) {
  return 0;
 }
 ''')
-    for dynamic in (0,1):
-        for mode in (0,1,2):
-            cmd=['cc','-ffunction-sections','-fdata-sections','-Wl,--gc-sections','-Iapp/devices/system','-Idevice/aDev_LED','-Iplatform/aDrv/include','-std=c11','-Wall','-Wextra','-Werror','-pthread','-DABUS_ENABLE=1','-DAPP_MODBUS_ENABLE=0','-Iapp',f'-DABUS_DYNAMIC_ENABLE={dynamic}','-DABUS_STATIC_ENABLE=1',f'-DABUS_LOCK_MODE={mode}',f'-I{tmp}','-Iapp/protocol/inc','-Iapp/task/test','-Iapp/task/system','-Ifunc/aBus/include','-Iplatform/aOS/public','-Iplatform/aLib/include',str(p/'test.c'),'app/protocol/protocol.c','app/task/system/command_data_bus.c','app/protocol/protocol_tables.c','app/task/test/test_task.c','func/aBus/src/aBus.c','func/aBus/src/aBus_event.c','-Wl,-T,func/aBus/port/gcc/aBus_sections_host.ld','-o',str(p/'test')]
-            subprocess.run(cmd,check=True)
-            subprocess.run([str(p/'test')],check=True,stdout=subprocess.DEVNULL)
-            print(f'PASS dynamic={dynamic} lock={mode}')
+    for dynamic, mode, demo in product((0, 1), (0, 1, 2), (0, 1)):
+        cmd = ['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-pthread',
+               '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+               '-DABUS_ENABLE=1', '-DAPP_MODBUS_ENABLE=0',
+               f'-DAPP_DEMO_ENABLE={demo}', f'-DABUS_DYNAMIC_ENABLE={dynamic}',
+               '-DABUS_STATIC_ENABLE=1', f'-DABUS_LOCK_MODE={mode}']
+        cmd += ['-I' + directory for directory in (
+            tmp, 'app', 'app/devices/system', 'device/aDev_LED',
+            'platform/aDrv/include', 'app/protocol/inc', 'app/task/test',
+            'app/task/system', 'func/aBus/include', 'platform/aOS/public',
+            'platform/aLib/include')]
+        cmd += [str(p / 'test.c'), 'app/protocol/protocol.c',
+                'app/task/system/command_data_bus.c',
+                'app/protocol/protocol_tables.c', 'func/aBus/src/aBus.c',
+                'func/aBus/src/aBus_event.c',
+                '-Wl,-T,func/aBus/port/gcc/aBus_sections_host.ld',
+                '-o', str(p / 'test')]
+        if demo:
+            cmd += ['app/task/test/test_task.c']
+        subprocess.run(cmd, check=True)
+        subprocess.run([str(p / 'test')], check=True, stdout=subprocess.DEVNULL)
+        print(f'PASS dynamic={dynamic} lock={mode} demo={demo}')

@@ -1,7 +1,10 @@
 #include "aDrv.h"
 #include "aOS.h"
+#include "app_config.h"
 #include "system_init.h"
+#if APP_DEMO_ENABLE
 #include "test_task.h"
+#endif
 
 static void appFatal(aOSFaultCode_t code, aStatus_t status,
                      const char *context)
@@ -21,11 +24,13 @@ static void appInitTask(void *argument)
         appFatal(AOS_FAULT_APP_INIT, status, "aSystemInit");
     }
 
-    /* 基础服务和协议已就绪，统一启动应用测试任务。 */
+#if APP_DEMO_ENABLE
+    /* 基础服务和协议已就绪；主动测试仅参与演示构建。 */
     status = appTestTaskInit();
     if (status != A_STATUS_OK) {
         appFatal(AOS_FAULT_APP_INIT, status, "appTestTaskInit");
     }
+#endif
 
     /* Shell/status 仍在各自模块内完成任务初始化。
      * 本任务仅执行一次，不复用为工作队列；完成后自删除，由 OS 回收栈和任务控制块。 */

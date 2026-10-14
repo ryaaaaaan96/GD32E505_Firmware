@@ -32,7 +32,11 @@ set(GD32_VENDOR_SOURCES
 set(ADRV_SOURCES
     src/aDrv.c
     src/aDrv_basic.c
+    src/aDrv_fault.c
 )
+# 异常快照禁止编译器生成 FPU 指令，避免触发延迟浮点压栈。
+set_source_files_properties(src/aDrv_fault.c PROPERTIES
+    COMPILE_OPTIONS "-mgeneral-regs-only")
 set(GD32_RCU_DRIVER_REQUIRED OFF)
 
 if(TOOLCHAIN_NAME STREQUAL "GCC")

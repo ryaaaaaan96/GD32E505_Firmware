@@ -99,13 +99,35 @@ nr_micro_shell 的基线及本地修正单独记录在
 ~/Tools/toolchain/mcu_arm_toolchain/arm-none-eabi-15.3
 ```
 
-构建入口：
+首次使用需要安装点表生成依赖（Python 3.10+）：
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r scripts/requirements.txt
+```
+
+构建入口（使用已激活的虚拟环境）：
 
 ```sh
 python3 scripts/build.py
 python3 scripts/build.py release
+python3 scripts/build.py release --profile product
 python3 scripts/build.py clean
 ```
+
+`build.py` 先校验 JSON 并通过 Mako 生成点表，再执行构建。输入结构、输出及
+手写代码边界见 [点表生成](app/protocol/config/README.md)。直接使用 CMake
+时仅检查生成快照是否同步，变更后先运行 `python scripts/generate_points.py`。
+
+主机性能测量运行 `python scripts/benchmark.py`，输出 JSON/CSV；演示固件
+提供 `bench bus` 测 CPU 周期。范围与复现方法见 [性能基准](benchmarks/README.md)。
+
+默认 `demo` 使用 `config/aclass_config.cmake`，产物在 `build/Debug` 或
+`build/Release`。`product` 使用 `config/product_config.cmake`，产物在
+`build/product/Release`（Debug 同理）；它关闭 `APP_DEMO_ENABLE`，不链接测试任务，
+停止每秒自增及定时写入演示，保留点表、通信和系统服务。当前点表仍是 TEST 示例，
+此配置用于隔离演示行为，业务点表和硬件验收仍需按实际产品完成。
 
 脚本直接执行，无需 source，适用于 bash、zsh 和 fish。当前工程已使用 GCC 15.3 无警告完成 ELF、
 HEX 和 BIN 构建。GD32E50X_CL 的 GCC startup、newlib syscall/sysmem 以及统一超时
@@ -119,7 +141,8 @@ set(ASHELL_ENABLE OFF)
 ```
 
 重新配置并构建后，`aShell` target 和公共 API 继续存在，但实现切换为不创建任务、
-不申请内存的 stub；aSystem 同时不再初始化 Shell USART/DMA 或声明收发缓冲区。
+不申请内存的 stub；应用不再创建 Shell 任务。若日志仍启用，控制台串口及其
+缓冲区继续保留；Shell 与日志都关闭时才不创建控制台。
 
 ## WSL 宿主机与远程调试
 
@@ -163,19 +186,25 @@ GDB 路径及生成的命令。远程主机的防火墙应仅向可信网络开�
 ## 设备初始化与跨文件访问
 
 设备配置位于 app/devices，业务模块在 aDrv/aOS 就绪后按实例调用 Init(&handle)。
-appSystemConsoleInit 内部创建 USART、绑定 aStream 并初始化 Shell，返回状态；
-appSystemStatusLedInit 返回 LED 借用句柄。设备资源由 app/devices 私有持有。
+appSystemConsoleInit 创建 USART 和发送锁，提供共享 aStream；Shell 和日志由
+system_init.c 分别初始化。appSystemStatusLedInit 返回 LED 借用句柄。
+设备资源由 app/devices 私有持有。
 详见 [应用设备映射与分层](docs/architecture.md)。
 
 ## 构建与任务边界
 
-业务任务由 app/task 创建；func/aShell 仅提供 Init/Process/DeInit，不创建线程。
+系统和测试任务由 app/task 创建，通信任务由 app/protocol 装配创建；
+func/aShell 仅提供 Init/Process/DeInit，不创建线程。
 aOS worker 是平台服务，配置在 config/aclass_config.cmake；回调禁止阻塞。
 system 设备入口为 appSystemStatusLedInit / appSystemConsoleInit。
 
 CMake 自动输出 build/Debug/firmware-Debug.json（Release 对应另一配置），
 scripts/debug.py 从中读取 ELF 和调试芯片名。改固件名无需再修改脚本；
 --elf 与 --device 可显式覆盖。更换旧构建目录后需重新配置生成元数据。
+默认构建结束后还输出版本、源码状态、工具链、功能模块、Flash/RAM 占用、
+FreeRTOS 堆预留、产物路径及 BIN SHA256，并保存同名 `.build.txt` 报告。
+没有源码变化的增量构建也会更新报告，不强制重新编译或链接。
+统计口径及单独查看方式见 [CMake 构建摘要](docs/cmake_design.md#构建摘要)。
 PLATFORM Embedded / OS FreeRTOS 是当前唯一实现的后端组合，不表示已经支持 Linux。
 
 任务栈以字节配置（aOSTaskConfig_t.stack_bytes / AOS_WORKER_STACK_BYTES）；任务入口
@@ -184,6 +213,24 @@ FreeRTOS 返回 UNSUPPORTED，完整实现留给 Linux 后端。
 Shell 每轮最多读取 64 字节，无输入或错误时退避。
 OS 分配失败记录诊断后返回，应用决定 fatal 策略。当前 FreeRTOS 时基固定为
 32 位 tick / 1000 Hz。统一构建入口为 cmake/Aclass.cmake，产品 app 单独创建。
+
+## 回归与运行诊断
+
+Linux 主机统一运行入口如下，详细依赖与覆盖范围见[验证指南](docs/testing.md)。
+
+```sh
+python3 scripts/test.py --suite host
+python3 scripts/test.py --suite firmware
+python3 scripts/test.py --suite matrix
+```
+
+结果和每组日志保存在 `build/tests/<suite>/`。GitHub Actions 使用相同入口，
+仓库推送和 PR 均执行检查；本地主机测试不替代上板验收。
+
+Shell 的 `sys heap` 查询堆余量，`sys stack modbus` 查询任务历史最小剩余栈，
+`protocol stats` 查询通信次数、错误和丢帧；`sys fault` 查询 OS 和保留的 CPU
+故障快照。HardFault 只记录 RAM 并停机，跨复位保留依赖板卡 SRAM 与复位行为。
+命令和字段说明见[系统诊断](app/task/system/README.md#系统与通信诊断)。
 
 ## 编辑器配置
 
@@ -198,7 +245,7 @@ ARM GCC 的系统头文件路径。修改编辑器配置后执行 `clangd: Resta
 统一入口为 **[docs/README.md](docs/README.md)**，包含当前设计、模块说明、
 应用演示、验证指南和评审记录。建议先读架构，再读公共接口规范和构建配置。
 
-已确认的当前平台设计与本轮实现已完成，处理记录见
+已有平台评审项的处理记录见
 [平台评审归档](docs/reviews/2026-10-11_platform_review.md)。
 [TODO](todo.md) 跟踪后续平台适配、暂缓能力与板上验证。
 

@@ -87,7 +87,7 @@ includes = ["platform/aLib/include", "platform/aOS/public",
             "app/protocol/inc"]
 headers = ("aDataLayout.h", "aComm_endpoint.h",
            "aBus_endpoint.h", "aModbus_endpoint.h", "aLayout.h", "aCrc.h", "aAtomic.h", "aOS.h", "aDrv.h", "aDev_usart.h", "aDev_flash25q.h",
-           "aDrv_dma.h", "aDrv_dma_memory.h",
+           "aDrv_dma.h", "aDrv_dma_memory.h", "aDrv_fault.h",
            "aDev_led.h", "aDev_led_instance.h",
            "aBus.h", "aBus_event.h", "aModbus_client.h",
            "aModbus_server.h", "aMemory.h", "aDataBase.h", "aShell.h", "aLog.h",

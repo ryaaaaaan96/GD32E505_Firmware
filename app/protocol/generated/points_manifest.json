@@ -1,0 +1,28 @@
+{
+  "format_version": 1,
+  "input_sha256": "6438819d22b13ae5a6541eee8454a8e7a64352d8ed29bfbd276a1443c918e263",
+  "files": [
+    "generated/FAN_modbus_master.inc",
+    "generated/IDU_modbus_slave.inc",
+    "generated/sig_tables.inc",
+    "inc/FAN_sig_table.h",
+    "inc/IDU_sig_table.h",
+    "inc/protocol_generated.h",
+    "persistence/sig_persist.inc",
+    "sig/FAN_test.inc",
+    "sig/IDU_test.inc"
+  ],
+  "devices": [
+    {
+      "name": "IDU",
+      "device_id": 1,
+      "sig_count": 50
+    },
+    {
+      "name": "FAN",
+      "device_id": 2,
+      "sig_count": 50
+    }
+  ],
+  "persistent_count": 12
+}

@@ -51,7 +51,8 @@
 | 查看应用目录、任务和初始化 | [app](../app/README.md) |
 | SIG 与 Shell 读写 | [通用 SIG 命令](../app/README.md#通用-sig-命令) |
 | RS485 主从切换与点表关系 | [产品协议](../app/protocol/README.md) |
-| 后续 CSV/JSON 点表与协议配置 | [配置目录](../app/protocol/config/README.md) |
+| JSON/Mako 点表与协议配置生成 | [配置目录](../app/protocol/config/README.md) |
+| 主机与 MCU 性能基准 | [基准说明](../benchmarks/README.md) |
 | Flash 探测和手动擦写 | [Flash 测试](../app/task/system/README.md#flash-手动测试) |
 | KV 参数与 TSDB 记录 | [数据库调试](../app/task/system/README.md#数据库调试) |
 | 日志等级、输出与测试命令 | [系统任务与日志调试](../app/task/system/README.md) |

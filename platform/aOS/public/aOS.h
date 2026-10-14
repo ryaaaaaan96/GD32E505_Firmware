@@ -202,6 +202,23 @@ void *aOSAlloc(size_t size);
  */
 void aOSFree(void *memory);
 
+/** OS 堆快照，单位为字节；total 是预留容量，包含分配器元数据。 */
+typedef struct {
+    size_t total;
+    size_t free;
+    size_t minimum_free; /**< 启动以来最小空闲量，不会因本次查询而清零。 */
+} aOSHeapInfo_t;
+
+/** 仅调度器启动后的任务上下文；不分配内存，不支持的后端返回 UNSUPPORTED。 */
+aStatus_t aOSHeapGetInfo(aOSHeapInfo_t *info);
+
+/** 按任务名查询历史最小剩余栈字节；name 为 NULL 时查询当前任务。
+ * 任务名应唯一。FreeRTOS 根据栈填充值估算，不能代替最坏路径验证；
+ * 已删除但尚未回收的任务也可能被查到。仅任务上下文，未知名返回 NOT_FOUND。
+ * 查询时暂挂调度，保持任务存储有效；不关闭中断，不分配内存。
+ */
+aStatus_t aOSTaskStackGetFree(const char *name, size_t *bytes);
+
 /**
  * @brief 启动调度器，不返回。
  * @note 启动阶段完成任务与设备初始化后调用；当前后端调度器返回则停留在循环。

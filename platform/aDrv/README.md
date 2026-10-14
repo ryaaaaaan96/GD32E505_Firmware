@@ -99,3 +99,26 @@ ARM/IAR startup 保持官方原文件。GCC 构建根据 MCU profile 的
 `MCU_STARTUP_VARIANT` 选择 `Source/GCC/startup_<variant>.S`；GD32E505 当前选择
 `gd32e50x_cl`。startup 负责 `.data/.bss` 初始化、`SystemInit()`、newlib 构造函数
 初始化和进入 `main()`。
+
+## CPU 故障快照
+
+`aDrv_fault.h` 提供 `aDrvFaultGetInfo` / `aDrvFaultClear`。GD32 GCC 实现通过
+强 `HardFault_Handler` 替换启动文件的弱入口；`aDrvInit` 引用初始化函数，
+避免静态库与段回收让处理函数未参与链接。不修改厂商启动文件。
+
+异常入口先保留原 MSP/PSP 和 EXC_RETURN，切换到独立的 256 字节应急栈。
+仅在异常返回值、栈范围和栈错误标志检查通过时读取 R0..xPSR；否则只保留
+SCB 故障状态及原栈地址。实现限定当前无 TrustZone 的 Cortex-M33，核心帧
+位于基础/浮点扩展帧的低地址，不读取浮点寄存器。该源文件禁止生成浮点指令。
+帧布局依据 [Armv8-M Exception Model User Guide](https://support.arm.com/documentation/107706/0100/Exceptions-and-interrupts-overview/Stack-frames?lang=en)。
+
+记录带版本魔数和完整性校验，存入 `.noinit.fault`；链接脚本将其放在 `.bss`
+清零范围之外，并计入 RAM 占用。仅在 SRAM 保留的复位条件下有机会跨复位读取，
+不保证掉电、重新下载或调试器初始化 RAM 后保留。校验失败返回 `NOT_FOUND`。
+记录机制参考 [CMSIS Fault Storage](https://arm-software.github.io/CMSIS-View/latest/group__Fault__Storage.html)，
+当前为本项目的最小实现，不是完整 CMSIS Fault 组件。
+
+异常中不分配内存、不持普通锁、不调用日志或数据库、不自动复位，保存后停机。
+重新启动后可用 `sys fault` 查询、`sys fault clear` 清除；故障仍存在时直接在
+调试器查看 `g_aDrvFaultRecord`。栈/内存严重破坏时快照也可能失败，不能代替板级
+故障注入和安全恢复策略。升级改变记录布局时同步更新版本魔数。

@@ -1010,6 +1010,9 @@ static void reset_poll(void)
 
 static void task_tests(void)
 {
+    protocolStats_t before, after;
+    assert(protocolGetStats(NULL) == A_STATUS_INVALID_PARAM);
+    assert(protocolGetStats(&before) == A_STATUS_OK);
     process_count = 0U;
     delay_count = 0U;
     task_test = A_TRUE;
@@ -1020,6 +1023,10 @@ static void task_tests(void)
         created_task.function(created_task.argument);
     }
     assert(process_count == 7U);
+    assert(protocolGetStats(&after) == A_STATUS_OK);
+    assert(after.work_count - before.work_count == 7U);
+    assert(after.timeout_count - before.timeout_count == 2U);
+    assert(after.error_count == before.error_count);
 #if APP_MODBUS_CLIENT_ENABLE
     uint32_t elapsed = 0U;
     const aCommJobConfig_t *schedule = &rs485_link.comm->table_jobs[0].config;

@@ -1,42 +1,119 @@
+/* 自动生成：修改 config/points.json，运行 scripts/generate_points.py。 */
 #ifndef APP_FAN_SIG_TABLE_H
 #define APP_FAN_SIG_TABLE_H
 
 #include <stdint.h>
 #include "aLayout.h"
 
-/* FAN 表是风扇控制板在 IDU 内的本地数据副本。
- * 此设备号属于 aBus 命名空间，与远端 Modbus 站号分别配置。
- */
-enum {
-    FAN_SIG_DEVICE_ID = 2U
-};
+#define FAN_SIG_DEVICE_ID 2U
 
-/* 同一清单生成连续下标和固定 Key，描述中的类型在此阶段不展开。 */
-#define ABUS_BOUND_SIG(...) ABUS_SIG(__VA_ARGS__)
-#define ABUS_PARAMS(group, ...)
+/* 顺序决定本次固件下标，Key 独立于顺序，发布后保持稳定。 */
 typedef enum {
-#define ABUS_SIG(name, key_value, ...) FAN_SIG_##name,
-#include "../sig/FAN_test.inc"
-#undef ABUS_SIG
+    FAN_SIG_TEST_001,
+    FAN_SIG_TEST_002,
+    FAN_SIG_TEST_003,
+    FAN_SIG_TEST_004,
+    FAN_SIG_TEST_005,
+    FAN_SIG_TEST_006,
+    FAN_SIG_TEST_007,
+    FAN_SIG_TEST_008,
+    FAN_SIG_TEST_009,
+    FAN_SIG_TEST_010,
+    FAN_SIG_TEST_011,
+    FAN_SIG_TEST_012,
+    FAN_SIG_TEST_013,
+    FAN_SIG_TEST_014,
+    FAN_SIG_TEST_015,
+    FAN_SIG_TEST_016,
+    FAN_SIG_TEST_017,
+    FAN_SIG_TEST_018,
+    FAN_SIG_TEST_019,
+    FAN_SIG_TEST_020,
+    FAN_SIG_TEST_021,
+    FAN_SIG_TEST_022,
+    FAN_SIG_TEST_023,
+    FAN_SIG_TEST_024,
+    FAN_SIG_TEST_025,
+    FAN_SIG_TEST_026,
+    FAN_SIG_TEST_027,
+    FAN_SIG_TEST_028,
+    FAN_SIG_TEST_029,
+    FAN_SIG_TEST_030,
+    FAN_SIG_TEST_031,
+    FAN_SIG_TEST_032,
+    FAN_SIG_TEST_033,
+    FAN_SIG_TEST_034,
+    FAN_SIG_TEST_035,
+    FAN_SIG_TEST_036,
+    FAN_SIG_TEST_037,
+    FAN_SIG_TEST_038,
+    FAN_SIG_TEST_039,
+    FAN_SIG_TEST_040,
+    FAN_SIG_TEST_041,
+    FAN_SIG_TEST_042,
+    FAN_SIG_TEST_043,
+    FAN_SIG_TEST_044,
+    FAN_SIG_TEST_045,
+    FAN_SIG_TEST_046,
+    FAN_SIG_TEST_047,
+    FAN_SIG_TEST_048,
+    FAN_SIG_TEST_049,
+    FAN_SIG_TEST_050,
     FAN_SIG_COUNT
 } FANSigIndex_t;
 
-/* Key 独立于数组顺序，实际产品发布后应保持稳定。 */
 enum {
-#define ABUS_SIG(name, key_value, ...) FAN_SIG_##name##_KEY = (key_value),
-#include "../sig/FAN_test.inc"
-#undef ABUS_SIG
+    FAN_SIG_TEST_001_KEY = 2001U,
+    FAN_SIG_TEST_002_KEY = 2002U,
+    FAN_SIG_TEST_003_KEY = 2003U,
+    FAN_SIG_TEST_004_KEY = 2004U,
+    FAN_SIG_TEST_005_KEY = 2005U,
+    FAN_SIG_TEST_006_KEY = 2006U,
+    FAN_SIG_TEST_007_KEY = 2007U,
+    FAN_SIG_TEST_008_KEY = 2008U,
+    FAN_SIG_TEST_009_KEY = 2009U,
+    FAN_SIG_TEST_010_KEY = 2010U,
+    FAN_SIG_TEST_011_KEY = 2011U,
+    FAN_SIG_TEST_012_KEY = 2012U,
+    FAN_SIG_TEST_013_KEY = 2013U,
+    FAN_SIG_TEST_014_KEY = 2014U,
+    FAN_SIG_TEST_015_KEY = 2015U,
+    FAN_SIG_TEST_016_KEY = 2016U,
+    FAN_SIG_TEST_017_KEY = 2017U,
+    FAN_SIG_TEST_018_KEY = 2018U,
+    FAN_SIG_TEST_019_KEY = 2019U,
+    FAN_SIG_TEST_020_KEY = 2020U,
+    FAN_SIG_TEST_021_KEY = 2021U,
+    FAN_SIG_TEST_022_KEY = 2022U,
+    FAN_SIG_TEST_023_KEY = 2023U,
+    FAN_SIG_TEST_024_KEY = 2024U,
+    FAN_SIG_TEST_025_KEY = 2025U,
+    FAN_SIG_TEST_026_KEY = 2026U,
+    FAN_SIG_TEST_027_KEY = 2027U,
+    FAN_SIG_TEST_028_KEY = 2028U,
+    FAN_SIG_TEST_029_KEY = 2029U,
+    FAN_SIG_TEST_030_KEY = 2030U,
+    FAN_SIG_TEST_031_KEY = 2031U,
+    FAN_SIG_TEST_032_KEY = 2032U,
+    FAN_SIG_TEST_033_KEY = 2033U,
+    FAN_SIG_TEST_034_KEY = 2034U,
+    FAN_SIG_TEST_035_KEY = 2035U,
+    FAN_SIG_TEST_036_KEY = 2036U,
+    FAN_SIG_TEST_037_KEY = 2037U,
+    FAN_SIG_TEST_038_KEY = 2038U,
+    FAN_SIG_TEST_039_KEY = 2039U,
+    FAN_SIG_TEST_040_KEY = 2040U,
+    FAN_SIG_TEST_041_KEY = 2041U,
+    FAN_SIG_TEST_042_KEY = 2042U,
+    FAN_SIG_TEST_043_KEY = 2043U,
+    FAN_SIG_TEST_044_KEY = 2044U,
+    FAN_SIG_TEST_045_KEY = 2045U,
+    FAN_SIG_TEST_046_KEY = 2046U,
+    FAN_SIG_TEST_047_KEY = 2047U,
+    FAN_SIG_TEST_048_KEY = 2048U,
+    FAN_SIG_TEST_049_KEY = 2049U,
+    FAN_SIG_TEST_050_KEY = 2050U,
 };
-#undef ABUS_PARAMS
-
-/* 字段名称与描述同源；整组映射要求描述按内存偏移连续排列。 */
-#define ABUS_SIG(name, key_value, ...)
-#define ABUS_PARAM(name, ...) name,
-#define ABUS_PARAMS(group, ...) enum { __VA_ARGS__ group##_PARAM_COUNT };
-#include "../sig/FAN_test.inc"
-#undef ABUS_PARAMS
-#undef ABUS_PARAM
-#undef ABUS_SIG
 
 typedef uint8_t FANTestRaw_t[8];
 
@@ -44,11 +121,21 @@ typedef struct {
     uint32_t u32_value;
     int32_t s32_value;
 } FANTest_t;
-
 ALIB_ASSERT_TYPE_SIZE(FANTest_t, 8U);
-ALIB_ASSERT_MEMBER_OFFSET(FANTest_t, u32_value, 0U);
-ALIB_ASSERT_MEMBER_OFFSET(FANTest_t, s32_value, 4U);
+ALIB_ASSERT_MEMBER_OFFSET(FANTest_t,
+    u32_value, 0U);
+ALIB_ASSERT_MEMBER_OFFSET(FANTest_t,
+    s32_value, 4U);
 
-#undef ABUS_BOUND_SIG
+enum {
+    FAN_TEST_001_U32,
+    FAN_TEST_001_S32,
+    FAN_TEST_001_PARAM_COUNT
+};
+enum {
+    FAN_TEST_007_U32,
+    FAN_TEST_007_S32,
+    FAN_TEST_007_PARAM_COUNT
+};
 
 #endif

@@ -112,6 +112,8 @@ set(FREERTOS_INCLUDE_xTaskGetSchedulerState
     1)
 set(FREERTOS_INCLUDE_xTaskGetCurrentTaskHandle
     1)
+set(FREERTOS_INCLUDE_xTaskGetHandle
+    1)
 set(FREERTOS_INCLUDE_uxTaskGetStackHighWaterMark
     1)
 set(FREERTOS_INCLUDE_xTaskGetIdleTaskHandle

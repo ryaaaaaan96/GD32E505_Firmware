@@ -81,6 +81,11 @@ SECTIONS
         /* 保留在启动清零范围内；GD32 SRAM 无需配置非缓存属性。 */
         . = ALIGN(4); *(.dma_buffer) . = ALIGN(4); _ebss = .;
     } > RAM :NONE
+    /* 故障快照独立于 _sbss.._ebss，软件复位后可查询。 */
+    .noinit (NOLOAD) : ALIGN(8)
+    {
+        KEEP(*(.noinit.fault))
+    } > RAM :NONE
     .heap_stack (NOLOAD) :
     {
         . = ALIGN(8); PROVIDE(end = .); PROVIDE(_end = .);
@@ -88,6 +93,6 @@ SECTIONS
         PROVIDE(_heap_end = .); . += _Min_Stack_Size; . = ALIGN(8);
     } > RAM :NONE
     /DISCARD/ : { *(.note*) *(.comment*) }
-    ASSERT(_ebss + _Min_Heap_Size + _Min_Stack_Size <= _estack,
+    ASSERT(ADDR(.heap_stack) + SIZEOF(.heap_stack) <= _estack,
            "RAM overflow: heap and stack collide")
 }

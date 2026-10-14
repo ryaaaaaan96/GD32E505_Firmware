@@ -7,11 +7,12 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 with tempfile.TemporaryDirectory(prefix="aclass-startup-") as directory:
     executable = str(Path(directory) / "test_startup")
-    for bus in (0, 1):
+    for bus, demo in ((0, 0), (0, 1), (1, 0), (1, 1)):
         subprocess.run([
             "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
             f"-DABUS_ENABLE={bus}", "-Ifunc/aBus/include",
-            "-Iapp/task/test", "-Iplatform/aDrv/include",
+            f"-DAPP_DEMO_ENABLE={demo}",
+            "-Iapp", "-Iapp/task/test", "-Iplatform/aDrv/include",
             "-Iplatform/aOS/public", "-Iplatform/aLib/include",
             "-Iapp/task/system", "tests/app_startup/test_startup.c",
             "-o", executable,
@@ -60,3 +61,21 @@ with tempfile.TemporaryDirectory(prefix="aclass-system-") as directory:
             subprocess.run([executable, "shell_init"], check=True)
             subprocess.run([executable, "shell_init", "cleanup_failure"],
                            check=True)
+
+with tempfile.TemporaryDirectory(prefix="aclass-diagnostics-") as directory:
+    path = Path(directory)
+    (path / "aShell.h").write_text('''
+int test_reply(const char *format, ...);
+#define ASHELL_REPLY(...) test_reply(__VA_ARGS__)
+#define ASHELL_CMD_EXPORT(n, f, h) \\
+    int test_command(int argc, char **argv) { return f(argc, argv); }
+''')
+    executable = str(path / "command")
+    subprocess.run([
+        "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+        "-fsanitize=undefined", "-fno-sanitize-recover=all",
+        "-I" + directory, "-Iplatform/aOS/public", "-Iplatform/aDrv/include",
+        "-Iplatform/aLib/include", "app/task/system/command_system.c",
+        "tests/app_startup/test_diagnostics_command.c", "-o", executable,
+    ], cwd=root, check=True)
+    subprocess.run([executable], check=True)

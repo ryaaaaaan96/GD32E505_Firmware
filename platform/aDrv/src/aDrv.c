@@ -2,8 +2,11 @@
 
 #include "gd32e50x.h"
 
+void aDrvFaultInit(void);
+
 aStatus_t aDrvInit(void)
 {
+    aDrvFaultInit();
     /* Use all four priority bits for preemption. Set this before any
      * nvic_irq_enable() call: its default grouping reserves subpriority
      * bits, which violates the FreeRTOS ISR API priority contract. */

@@ -230,6 +230,51 @@ void aOSFree(void *memory)
     }
 }
 
+aStatus_t aOSHeapGetInfo(aOSHeapInfo_t *info)
+{
+    if (info == NULL || xPortIsInsideInterrupt()) return A_STATUS_INVALID_PARAM;
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED)
+        return A_STATUS_NOT_READY;
+#if AOS_FREERTOS_HEAP_IMPLEMENTATION == 4
+    /* 调度挂起保持两个计数来自同一时刻，ISR 本就不得分配 OS 堆。 */
+    vTaskSuspendAll();
+    info->total = configTOTAL_HEAP_SIZE;
+    info->free = xPortGetFreeHeapSize();
+    info->minimum_free = xPortGetMinimumEverFreeHeapSize();
+    (void)xTaskResumeAll();
+    return A_STATUS_OK;
+#else
+    return A_STATUS_UNSUPPORTED;
+#endif
+}
+
+aStatus_t aOSTaskStackGetFree(const char *name, size_t *bytes)
+{
+    if (bytes == NULL || xPortIsInsideInterrupt()) return A_STATUS_INVALID_PARAM;
+    if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED)
+        return A_STATUS_NOT_READY;
+#if INCLUDE_xTaskGetHandle && INCLUDE_uxTaskGetStackHighWaterMark
+    TaskHandle_t task;
+    if (name != NULL) {
+        size_t length = 0U;
+        while (length < configMAX_TASK_NAME_LEN && name[length] != '\0')
+            length++;
+        if (length == 0U || length == configMAX_TASK_NAME_LEN)
+            return A_STATUS_INVALID_PARAM;
+    }
+    /* 查找与读取共用调度保护，防止任务在两步之间删除并回收。 */
+    vTaskSuspendAll();
+    task = name == NULL ? xTaskGetCurrentTaskHandle() : xTaskGetHandle(name);
+    if (task != NULL)
+        *bytes = (size_t)uxTaskGetStackHighWaterMark(task) * sizeof(StackType_t);
+    (void)xTaskResumeAll();
+    return task == NULL ? A_STATUS_NOT_FOUND : A_STATUS_OK;
+#else
+    (void)name;
+    return A_STATUS_UNSUPPORTED;
+#endif
+}
+
 void aOSRecordFault(aOSFaultCode_t code, aStatus_t status,
                     const char *context)
 {

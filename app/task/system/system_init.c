@@ -297,12 +297,16 @@ static aDataBaseTsHandle_t ts_instance;
 /* 数据库索引属于存储服务；点表只提供选择清单及其编译期数量。
  * SIG 偏移按持久化项计数，扇区缓存按实际参数分区容量计数。
  */
+#if PROTOCOL_PERSIST_SIG_COUNT > 0
 static uint32_t persistent_offsets[PROTOCOL_PERSIST_SIG_COUNT];
+#endif
 static struct kvdb_sec_info persistent_sectors[
     AMEMORY_PART_PARAM_SIZE / AMEMORY_FLASH_BLOCK_SIZE];
 static aDataBaseKvIndexStorage_t persistent_index = {
+#if PROTOCOL_PERSIST_SIG_COUNT > 0
     .sig_offsets = persistent_offsets,
-    .sig_capacity = sizeof(persistent_offsets) / sizeof(persistent_offsets[0]),
+#endif
+    .sig_capacity = PROTOCOL_PERSIST_SIG_COUNT,
     .sectors = persistent_sectors,
     .sector_capacity =
         sizeof(persistent_sectors) / sizeof(persistent_sectors[0])

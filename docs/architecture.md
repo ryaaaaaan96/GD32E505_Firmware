@@ -154,17 +154,19 @@ Modbus 自己解释角色和地址类型；公共 flags 合并读写权限与断
 
 当前板级[产品协议](../app/protocol/README.md)使用 USART2 和 PA15 手动 DE，
 当前配置为 RTU 主站，目标站号 1，可通过应用宏切换主从。应用协议配置位于
-app/protocol 根目录，测点清单位于 sig/IDU_test.inc 和 sig/FAN_test.inc，
-由 X-Macro 生成索引、固定 Key 常量和只读描述，点表无需跨文件 extern。
-STRUCT 字段同样生成名称和描述；主从配置文件直接定义从站离散映射、
-地址段与主站采集数组。字段映射引用字段枚举；整组映射用 WHOLE 引用 SIG，
+app/protocol 根目录；config/points.json 经 Python 校验、Mako 渲染后生成
+SIG/字段定义、类型、连续索引、固定 Key、持久化清单及主从 C 映射数组。
+生成的 sig/*.inc 保留 X-Macro 展开只读定义与静态绑定。
+主从 .c 保留站号、超时和实际地址回调。字段映射引用字段枚举；
+整组映射用 WHOLE 引用 SIG，
 要求参数按内存偏移连续覆盖全部结构体，字段长度为偶数，地址为起点加 offset/2。
 整组布局由应用显式维护，修改字段偏移会改变协议地址；编解码与布局校验由
 Modbus 端点承担，Modbus 映射负责地址路由，通过 aComm 绑定访问数据端点。
 默认路径按 SIG 取快照/更新，自定义部分写按完整字段回调。
 从站回调段 ranges 与离散映射 maps 在配置中平级，未命中回调段才查映射。
 两表分别有序且完整地址范围互不重叠；回调失败直接返回，不触发兜底访问。
-SIG 的多用途定义保留 X-Macro，协议数组使用普通 C 初始化，不再单独维护映射清单。
+SIG 的多用途定义保留 X-Macro，协议数组使用普通 C 初始化；二者来自同一 JSON，
+运行时不解析配置文件。构建期检查与库的运行期校验相互独立。
 端口配置和初始化位于 app/devices/rs485。system 显式初始化数据总线、恢复选定持久化参数，再调用 protocolInit(bus_handle)，
 点表由 protocol_tables.c 提供，system 挂载 IDU/FAN 两张表；
 protocol.c 按链路配置任务资源，初始化协议并创建任务；主从文件提供

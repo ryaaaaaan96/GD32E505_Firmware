@@ -108,4 +108,13 @@ void aCommChannelReceiveAt(aCommChannel_t *handle, uint8_t byte,
 aStatus_t aCommChannelBindTransport(aCommChannel_t *handle,
     aCommTransport_t *transport);
 
+typedef struct {
+    size_t queued_frames;
+    uint32_t dropped_frames; /**< 队列满、帧错误等导致的丢帧；自然回绕。 */
+} aCommChannelStats_t;
+
+/** 任务上下文快照，不清零计数；STREAM 返回零，生命周期由调用者保护。 */
+aStatus_t aCommChannelGetStats(aCommChannel_t *handle,
+    aCommChannelStats_t *stats);
+
 #endif

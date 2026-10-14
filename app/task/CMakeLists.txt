@@ -1,2 +1,4 @@
 add_subdirectory(system)
-add_subdirectory(test)
+if(APP_DEMO_ENABLE)
+    add_subdirectory(test)
+endif()

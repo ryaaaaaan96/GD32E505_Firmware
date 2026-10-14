@@ -7,6 +7,17 @@ add_executable(
 
 target_include_directories(${APP_TARGET} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
+if(NOT DEFINED APP_DEMO_ENABLE)
+    set(APP_DEMO_ENABLE ON)
+endif()
+if(NOT "${APP_DEMO_ENABLE}" MATCHES "^(ON|OFF|0|1)$")
+    message(FATAL_ERROR "APP_DEMO_ENABLE must be ON or OFF")
+endif()
+target_compile_definitions(${APP_TARGET} PRIVATE
+    APP_DEMO_ENABLE=$<BOOL:${APP_DEMO_ENABLE}>)
+set_property(TARGET ${APP_TARGET} PROPERTY APP_DEMO_ENABLE
+    "${APP_DEMO_ENABLE}")
+
 if(ADEV_USART_ENABLE)
     target_link_libraries(${APP_TARGET} PRIVATE aDevUsart)
 endif()

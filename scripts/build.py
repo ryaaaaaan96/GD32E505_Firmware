@@ -46,21 +46,24 @@ def toolchain_root() -> Path | None:
     if not root.exists() and configured is None:
         return None
     root = root.resolve()
-    for name in ("gcc", "objcopy", "size"):
+    for name in ("gcc", "objcopy", "objdump", "size"):
         executable = root / "bin" / f"arm-none-eabi-{name}"
         if not executable.is_file() or not os.access(executable, os.X_OK):
             raise RuntimeError(f"invalid ARM_GCC_ROOT, missing: {executable}")
     return root
 
 
-def build(build_type: str, jobs: int | None) -> None:
+def build(build_type: str, jobs: int | None, profile: str) -> None:
     require_program("cmake")
     require_program("ninja")
+    run([sys.executable, str(PROJECT_ROOT / "scripts/generate_points.py")])
     gcc_root = toolchain_root()
     if gcc_root is None:
         require_program("arm-none-eabi-gcc")
 
-    build_dir = BUILD_ROOT / build_type
+    build_dir = (BUILD_ROOT if profile == "demo" else
+                 BUILD_ROOT / profile) / build_type
+    config = "aclass_config.cmake" if profile == "demo" else "product_config.cmake"
     configure = [
         "cmake",
         "-S",
@@ -70,6 +73,8 @@ def build(build_type: str, jobs: int | None) -> None:
         "-G",
         "Ninja",
         f"-DCMAKE_BUILD_TYPE={build_type}",
+        f"-DACLASS_CONFIG_FILE={PROJECT_ROOT / 'config' / config}",
+        f"-DPython3_EXECUTABLE={sys.executable}",
     ]
     if gcc_root is not None:
         configure.append(f"-DARM_GCC_ROOT={gcc_root}")
@@ -107,6 +112,8 @@ def parse_args() -> argparse.Namespace:
         choices=("build", "release", "clean", "rebuild"),
     )
     parser.add_argument("-j", "--jobs", type=int, help="parallel build jobs")
+    parser.add_argument("--profile", choices=("demo", "product"),
+                        default="demo", help="demo 启用测试，product 移除测试任务")
     return parser.parse_args()
 
 
@@ -118,12 +125,12 @@ def main() -> int:
         if args.command == "clean":
             clean()
         elif args.command == "release":
-            build("Release", args.jobs)
+            build("Release", args.jobs, args.profile)
         elif args.command == "rebuild":
             clean()
-            build("Debug", args.jobs)
+            build("Debug", args.jobs, args.profile)
         else:
-            build("Debug", args.jobs)
+            build("Debug", args.jobs, args.profile)
     except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

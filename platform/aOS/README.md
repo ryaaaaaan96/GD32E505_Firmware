@@ -124,6 +124,21 @@ aStatus_t status = aOSCreateTask(&config, &service_handle);
 argument 指向的对象须在任务使用期间有效。输出句柄可为 NULL，创建失败时清空输出。
 任务可能在创建调用返回前开始运行；默认栈仅提供后端基础容量，业务按实际使用配置。
 
+## 运行期资源诊断
+
+`aOSHeapGetInfo` 返回堆预留总量、当前空闲量、历史最低空闲量，单位均为字节。
+当前支持 heap_4；其他堆实现返回 `UNSUPPORTED`，预留总量包含分配器开销。
+`aOSTaskStackGetFree(name, &bytes)` 返回指定任务历史最小剩余栈，`name=NULL`
+查询当前任务。任务名称必须唯一，名称不存在返回 `NOT_FOUND`；任务已退出但
+TCB 尚未回收时仍可能被查询到，不能用此接口判断任务生命周期。
+
+两者仅供调度器启动后的任务上下文使用，不分配内存。查询堆时短暂挂起调度，
+查询栈时在同一次调度保护中查找任务和扫描栈；不会关闭中断，但不适合高频调用。
+栈余量基于 FreeRTOS 填充值估算，应覆盖最大业务负载后观察，不能据此证明栈永不溢出。
+关闭 `FREERTOS_INCLUDE_xTaskGetHandle` 或
+`FREERTOS_INCLUDE_uxTaskGetStackHighWaterMark` 后，栈查询返回 `UNSUPPORTED`。
+应用的 `sys heap` / `sys stack [task]` 命令按需调用这些接口，不新增监控任务。
+
 ## 任务退出等待
 
 预留 `aOSTaskJoin(&handle, timeout)` 接口，完整实现留给 Linux 后端。

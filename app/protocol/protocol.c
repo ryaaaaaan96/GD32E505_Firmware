@@ -4,7 +4,9 @@
 #if APP_MODBUS_ENABLE
 #include "aModbus_mapping.h"
 #include "aBus_endpoint.h"
+#include "aAtomic.h"
 #include "rs485_device.h"
+#include "protocol_generated.h"
 #if !ACOMM_ENABLE
 #error "Protocol demo requires ACOMM_ENABLE"
 #endif
@@ -47,9 +49,9 @@ typedef struct {
 /* 静态资源上限只在应用编排处维护，产品映射文件保持只读。 */
 #if !ACOMM_DYNAMIC_ENABLE || !AMODBUS_DYNAMIC_ENABLE
 #if APP_MODBUS_CLIENT_ENABLE
-#define PROTOCOL_MAP_CAPACITY 50U
+#define PROTOCOL_MAP_CAPACITY FAN_MODBUS_MASTER_MAP_COUNT
 #else
-#define PROTOCOL_MAP_CAPACITY 100U
+#define PROTOCOL_MAP_CAPACITY IDU_MODBUS_SLAVE_MAP_COUNT
 #endif
 #endif
 
@@ -61,6 +63,7 @@ typedef struct {
     aCommChannel_t *channel;
     aModbusRtuFilter_t filter;
     aCommHandle_t *comm;
+    aAtomicUint_t work_count, error_count, timeout_count, max_process_ms;
 #if APP_MODBUS_CLIENT_ENABLE
     aStatus_t previous_status;
 
@@ -171,7 +174,20 @@ static void modbusTask(void *argument)
     protocolLink_t *link = argument;
     for (;;) {
         aCommProcessResult_t result;
+        const uint32_t started = aOSGetUptimeMs();
         aStatus_t status = aCommProcess(link->comm, &result);
+        const uint32_t elapsed = aOSGetUptimeMs() - started;
+        /* 单写者更新峰值；Shell 只读取，不加锁、不分配内存。 */
+        if (elapsed > aAtomicLoad(&link->max_process_ms))
+            aAtomicStore(&link->max_process_ms, elapsed);
+        const aStatus_t execution = status == A_STATUS_OK &&
+            result.type != ACOMM_WORK_NONE ? result.execution.status : status;
+        if (status == A_STATUS_OK && result.type != ACOMM_WORK_NONE)
+            aAtomicFetchAdd(&link->work_count, 1U);
+        if (execution == A_STATUS_TIMEOUT)
+            aAtomicFetchAdd(&link->timeout_count, 1U);
+        else if (execution != A_STATUS_OK)
+            aAtomicFetchAdd(&link->error_count, 1U);
         if (status != A_STATUS_OK) {
             aOSDelayMs(link->config->product->error_delay_ms);
             continue;
@@ -422,6 +438,28 @@ aStatus_t protocolModbusSubmit(const protocolModbusRequest_t *request)
 #endif
 }
 #endif
+
+aStatus_t protocolGetStats(protocolStats_t *stats)
+{
+    if (stats == NULL) return A_STATUS_INVALID_PARAM;
+#if APP_MODBUS_ENABLE
+    if (rs485_link.comm == NULL) return A_STATUS_NOT_READY;
+    aCommChannelStats_t channel;
+    aStatus_t status = aCommChannelGetStats(rs485_link.channel, &channel);
+    if (status != A_STATUS_OK) return status;
+    *stats = (protocolStats_t){
+        .work_count = aAtomicLoad(&rs485_link.work_count),
+        .error_count = aAtomicLoad(&rs485_link.error_count),
+        .timeout_count = aAtomicLoad(&rs485_link.timeout_count),
+        .max_process_ms = aAtomicLoad(&rs485_link.max_process_ms),
+        .dropped_frames = channel.dropped_frames,
+        .queued_frames = channel.queued_frames
+    };
+    return A_STATUS_OK;
+#else
+    return A_STATUS_UNSUPPORTED;
+#endif
+}
 
 #if ABUS_EVENT_ENABLE && APP_MODBUS_ENABLE
 aStatus_t protocolRequest(const aBusRequestConfig_t *config,

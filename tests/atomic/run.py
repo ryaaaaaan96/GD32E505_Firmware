@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 
@@ -60,10 +61,20 @@ unsigned native_add(atomic_uint *p, unsigned v) {
         assert instructions("wrapped_" + operation) == instructions("native_" + operation)
     print("aAtomic GCC optimized instructions match native C11")
 
-    for define, error in (("__STDC_NO_ATOMICS__=1", "does not support C11 atomics"),
-                          ("__clang__=1", "only GCC is implemented")):
-        result = subprocess.run(flags + ["-D" + define, "-fsyntax-only", "-x", "c", "-"],
+    for extra, error in ((["-D__STDC_NO_ATOMICS__=1"], "does not support C11 atomics"),
+                         (["-std=c99"], "requires C11 or later")):
+        result = subprocess.run(flags + extra + ["-fsyntax-only", "-x", "c", "-"],
                                 input='#include "aAtomic.h"\n', text=True,
                                 capture_output=True, cwd=root)
         assert result.returncode != 0 and error in result.stderr, result.stderr
     print("aAtomic unsupported compiler/atomic capability rejected")
+    # Clang 已有独立后端，使用真正的编译器验证，不伪造 __clang__。
+    if shutil.which("clang"):
+        subprocess.run(["clang", *flags[1:], "-O2", "-pthread",
+                        "-fsanitize=undefined", "-fno-sanitize-recover=all",
+                        "tests/atomic/test_atomic.c", "-o", exe],
+                       cwd=root, check=True)
+        subprocess.run([exe], check=True, timeout=20)
+        print("aAtomic Clang backend passed")
+    else:
+        print("SKIP Clang backend: clang is not installed")

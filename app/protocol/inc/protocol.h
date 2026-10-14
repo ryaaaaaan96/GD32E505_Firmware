@@ -22,13 +22,8 @@ typedef struct {
 aStatus_t protocolBusConfigInit(dataBusConfig_t *config);
 #if APP_DATABASE_ENABLE
 #include "aDataBase.h"
-/* 仅从清单推导数量，不展开设备标识；供 system 精确分配静态索引 RAM。 */
-enum {
-    PROTOCOL_PERSIST_SIG_COUNT = 0
-#define PERSIST_SIG(device, key) + 1
-#include "../persistence/sig_persist.inc"
-#undef PERSIST_SIG
-};
+/* 容量与点表由同一 JSON 生成，供 system 分配静态索引 RAM。 */
+#include "protocol_generated.h"
 
 /* 只填充 tables/table_count、persist_sigs/persist_count，可重复查询。
  * 引用具有静态生命周期；内存区域、索引 RAM 及数据库实例由 system 管理。
@@ -51,6 +46,18 @@ aStatus_t protocolInit(aBusHandle_t *bus);
 
 /* 请求提前采集一轮；重复请求合并，从站模式返回 UNSUPPORTED。 */
 aStatus_t protocolRefresh(void);
+
+typedef struct {
+    uint32_t work_count;
+    uint32_t error_count;
+    uint32_t timeout_count;
+    uint32_t max_process_ms; /**< 单次 Process 时长，含等待；不是整轮周期。 */
+    uint32_t dropped_frames;
+    size_t queued_frames;
+} protocolStats_t;
+
+/* 各计数单独采样，可能跨一次事务；仅任务上下文，计数自然回绕。 */
+aStatus_t protocolGetStats(protocolStats_t *stats);
 
 #if APP_MODBUS_ENABLE
 #include "aModbus_client.h"

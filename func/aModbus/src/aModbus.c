@@ -507,4 +507,3 @@ aStatus_t aModbusAccessCheck(aModbusArea_t area, uint16_t address,
     return quantity <= maximum && size >= required ? A_STATUS_OK :
            A_STATUS_INVALID_PARAM;
 }
-

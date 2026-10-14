@@ -7,7 +7,7 @@ set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
     ARM_GCC_ROOT MCU_CPU MCU_FPU MCU_FLOAT_ABI)
 if(ARM_GCC_ROOT)
     set(_ARM_GCC_BIN "${ARM_GCC_ROOT}/bin")
-    foreach(_tool gcc objcopy size)
+    foreach(_tool gcc objcopy objdump size)
         if(NOT EXISTS "${_ARM_GCC_BIN}/arm-none-eabi-${_tool}")
             message(FATAL_ERROR
                 "ARM_GCC_ROOT is invalid: missing "
@@ -17,11 +17,13 @@ if(ARM_GCC_ROOT)
     set(CMAKE_C_COMPILER "${_ARM_GCC_BIN}/arm-none-eabi-gcc")
     set(CMAKE_ASM_COMPILER "${_ARM_GCC_BIN}/arm-none-eabi-gcc")
     set(CMAKE_OBJCOPY "${_ARM_GCC_BIN}/arm-none-eabi-objcopy")
+    set(CMAKE_OBJDUMP "${_ARM_GCC_BIN}/arm-none-eabi-objdump")
     set(CMAKE_SIZE "${_ARM_GCC_BIN}/arm-none-eabi-size")
 else()
     find_program(CMAKE_C_COMPILER arm-none-eabi-gcc REQUIRED)
     find_program(CMAKE_ASM_COMPILER arm-none-eabi-gcc REQUIRED)
     find_program(CMAKE_OBJCOPY arm-none-eabi-objcopy REQUIRED)
+    find_program(CMAKE_OBJDUMP arm-none-eabi-objdump REQUIRED)
     find_program(CMAKE_SIZE arm-none-eabi-size REQUIRED)
 endif()
 

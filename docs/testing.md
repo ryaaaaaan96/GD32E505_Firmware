@@ -7,6 +7,34 @@
 
 ## 基础检查
 
+推荐使用统一入口，需要 Linux、Python 3.10+、CMake、Ninja、GCC/G++。
+固件和矩阵还需要 ARM GCC/newlib，可通过 `ARM_GCC_ROOT` 指定工具链根目录；
+原子测试在安装 Clang 后同时测试其后端，未安装时会明确报告跳过。
+
+首次运行先创建并激活 .venv，执行
+`python -m pip install -r scripts/requirements.txt`；点表检查依赖 Mako/jsonschema。
+
+```sh
+python3 scripts/test.py --suite host
+python3 scripts/test.py --suite firmware
+python3 scripts/test.py --suite matrix
+python3 scripts/test.py --suite all --list
+python3 scripts/test.py --suite host --only aos/run fault/run
+```
+
+`host` 执行模块和应用主机回归；`firmware` 构建 Debug、Release、product Release；
+`matrix` 执行功能组合和外部产品构建检查。失败返回非零状态，继续收集其他测试的
+结果；每组默认超时 1800 秒，可用 `--timeout` 调整。日志和 JSON 结果位于
+`build/tests/<suite>/`，每次覆盖本次结果；使用 `--only` 时报告只包含所选测试。
+超时或中断会结束当前测试的子进程组，不遗留后台编译进程。
+
+[CI 配置](../.github/workflows/ci.yml) 在 push/PR 时使用这三个入口。
+CI 使用 Ubuntu 发行版 ARM GCC，本地当前使用 GCC 15.3；二者不保证产物逐字节一致，
+发布时应记录实际工具链版本和 `.build.txt`，并保存对应 ELF/MAP 供故障定位。
+Python 缓存不参与源码交付；统一入口禁止生成字节码缓存。
+
+单独执行基础检查：
+
 ```sh
 git diff --check
 python3 tests/architecture/run.py
@@ -23,10 +51,14 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 
 | 范围 | 命令 |
 | --- | --- |
+| JSON 校验、确定性生成、增点/重排/静动态 C 运行 | `python tests/points/run.py` |
+| 生成快照同步 | `python scripts/generate_points.py --check` |
+| 性能工作负载冒烟检查，不设耗时门槛 | `python scripts/benchmark.py --quick` |
 | 可选布局断言、SIG 参数长度与整数范围检查（需要 C/C++ 编译器） | `python3 tests/layout/run.py` |
 | aLib CRC32（C11/C++11、标准向量及 zlib 对照） | `python3 tests/crc/run.py` |
-| aLib GCC 原子封装（并发、内存序及生成代码对照） | `python3 tests/atomic/run.py` |
-| OS 任务创建/退出/Join、通知、定时器与工作队列 | `python3 tests/aos/run.py` |
+| aLib GCC/Clang 原子封装（并发、内存序及 GCC 生成代码对照） | `python3 tests/atomic/run.py` |
+| OS 任务创建/退出/Join、诊断、通知、定时器与工作队列 | `python3 tests/aos/run.py` |
+| CPU 故障快照校验、基础/FPU 异常帧边界 | `python3 tests/fault/run.py` |
 | LED/GPIO 状态、静态/动态生命周期与接口裁剪 | `python3 tests/led/run.py` |
 | SPI 配置预检查与软件片选 | `python3 tests/spi/run.py` |
 | DMA 地址/对齐检查、IRQ/查询交错与 USART DMA 适配 | `python3 tests/dma/run.py` |
@@ -47,6 +79,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | 调试脚本 | `python3 tests/scripts/test_debug.py` |
 
 `tests/aos/run.py` 验证任务创建直传入口与参数、显式退出和删除语义。
+诊断测试覆盖堆/栈返回单位、任务名称、ISR/启动上下文拒绝及读取期间的调度保护。
 Join 检查仅覆盖 FreeRTOS 预留接口：各类超时参数均返回 UNSUPPORTED，
 句柄保持不变；完整等待行为留待 Linux 后端实现后验证。
 
@@ -86,11 +119,13 @@ SANITIZE=1 python3 tests/modbus_demo/run.py
 通信回归覆盖观察通知接收结果、共享请求池耗尽及同步完成重入，STREAM 无帧
 存储和 GAP 静态帧存储，以及注册映射分组索引、连续切片和整组快照一致性。
 日志回归增加未链接 Shell 时的真实控制台输出；启动回归包含 Shell 初始化
-失败的资源清理。构建矩阵覆盖主从、静动态和功能裁剪组合。
+失败的资源清理及 `sys` 诊断命令；SIG 应用测试同时覆盖 demo/product、静态/动态
+和三种锁模式，product 不链接测试任务仍可完整访问绑定测点。
+构建矩阵覆盖主从、静动态和功能裁剪组合。
 
 当前 FreeRTOS 堆配置为 40 KiB。预算必须覆盖 appInit 尚未退出时的任务栈、
 TCB、队列、互斥量、通信计划、数据池及堆管理开销，不能只统计稳态句柄大小。
-板端仍需记录启动与运行期最小剩余堆，以及任务栈高水位；链接器 RAM 占用包含
+板端通过 `sys heap`、`sys stack <任务名>` 记录堆和历史栈余量；链接器 RAM 占用包含
 整个堆的预留空间，不代表实测分配峰值。本次不依据静态估算缩减任务栈。
 
 ## 固件与构建矩阵
@@ -100,6 +135,7 @@ TCB、队列、互斥量、通信计划、数据池及堆管理开销，不能�
 ```sh
 python3 scripts/build.py
 python3 scripts/build.py release
+python3 scripts/build.py release --profile product
 ```
 
 | 配置范围 | 命令 |
@@ -113,6 +149,10 @@ python3 scripts/build.py release
 
 矩阵在独立构建目录检查组合、最终链接或符号裁剪，组合数以脚本为准。
 ELF 的静态 RAM 统计包含预留区，不等同于运行时堆使用量或任务栈峰值。
+外部产品测试还检查含空格的构建路径、摘要内存统计与 ld 输出一致，
+以及无变更构建仍输出摘要且不重新链接；还检查强 HardFault 向量和 `.noinit`
+位于 `.bss` 清零范围外、没有 LOAD 属性。产物旁的 `.build.txt` 保存配置、
+Flash/RAM 区域占用及 BIN SHA256，便于记录不同版本的构建结果。
 
 ## 上板验证
 
@@ -123,6 +163,12 @@ ELF 的静态 RAM 统计包含预留区，不等同于运行时堆使用量或�
 | SPI Flash | JEDEC 信息、跨页编程、擦除范围、CS 时序和超时恢复 |
 | 数据库 | 目标介质上的恢复时间、GC、实际掉电与写入失败 |
 | Shell / 日志 | 交互延迟、后台输出并发及队列满时行为 |
+| 诊断 / 故障 | 满负载堆与栈余量、通信统计、HardFault PC/LR 及复位后快照 |
+
+故障验证在测试固件中主动触发可控非法指令，附加调试器核对 PC/LR/CFSR；
+再在不掉电、不重新下载的复位后运行 `sys fault`。还需覆盖使用 FPU 的任务、
+MSP/PSP 两种异常来源及栈不可用时仅记录故障状态寄存器的路径。
+主机测试和 ELF 布局检查不保证硬件 SRAM 的复位保留行为。
 
 板上操作步骤见[应用联调入口](README.md#应用与联调)。Flash 测试默认不编译，
 需先在 app/task/system/CMakeLists.txt 中取消 command_flash.c 对应行的注释，
@@ -136,7 +182,10 @@ ELF 的静态 RAM 统计包含预留区，不等同于运行时堆使用量或�
 
 ## TEST 点表与协议挂载回归
 
-- `python3 tests/bus/test_sig_check.py`：构建期 Key 检查。
+- `python scripts/generate_points.py --check`：JSON、生成模板与已提交快照同步。
+- `python tests/points/run.py`：格式和语义拒绝、确定性输出、重排 Key 引用、
+  新增设备、字段映射、单次轮询、空持久化以及生成 C 的静态/动态运行。
+- `python3 tests/bus/test_sig_check.py`：独立旧式 `.inc` Key 检查器回归。
 - `python3 tests/bus/run.py`：锁模式、分配模式、NDEBUG、定义检查，
   包含整组编辑失败不提交和 DISJOINT 范围检查。
 - `python3 tests/modbus/run.py`：协议编解码、同 SIG 快照/提交、连续采集合并，
