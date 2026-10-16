@@ -142,6 +142,8 @@ def validate(document):
         unique([s["key"] for s in device["signals"]], prefix + ".keys")
         for index, sig in enumerate(device["signals"]):
             where = prefix + "." + sig["name"]
+            require("data_version" not in sig or sig.get("persistent", False),
+                    where, "data_version 仅用于持久化 SIG")
             definition = definitions.get(sig["type"])
             require(definition, where, "未知类型")
             sig["definition"] = definition

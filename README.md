@@ -4,6 +4,9 @@
 system、startup、完整标准外设库和驱动实现全部由 `aDrv` 管理；上层不包含 GD32
 厂商头文件。
 
+项目亮点、演示链路和后续实板验证见
+[项目展示与后续补强](docs/project_showcase.md)。
+
 ## 当前调试板
 
 当前 app 面向 GD32E505VET7 最小调试板：

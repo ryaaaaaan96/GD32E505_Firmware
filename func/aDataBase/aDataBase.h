@@ -22,6 +22,9 @@ typedef int64_t aDataBaseTime_t;
 typedef struct {
     uint16_t deviceID;
     uint16_t sigKey;
+    /** 业务语义版本；单位/含义变化时修改，零兼容未引入版本的布局标记。
+     * 仅初始化时参与兼容性检查，不增加记录偏移 RAM；关闭前不得修改。 */
+    uint32_t data_version;
 } aDataBaseSigKey_t;
 
 /** @brief Flash 映射表中表示该 SIG 不参与持久化。 */
@@ -176,12 +179,14 @@ aStatus_t aDataBaseKvDelete(
     aDataBaseKvHandle_t *handle, const aDataBaseKvDeleteRequest_t *request);
 /** 仅保存/读取请求中的字节快照，不自动同步 aBus RAM，不校验业务范围。
  * 磁盘标识为分区内的 deviceID + sigKey，保留键前缀 "@sig:"。
- * 初始化时计算布局标记，独立保存于 "@sig:DDDD:KKKK:layout"（uint32_t）。
+ * 初始化时计算布局及业务版本标记，独立保存于
+ * "@sig:DDDD:KKKK:layout"（uint32_t）。
  * 标记缺失或不同时先删除对应旧快照，再保存新标记；失败则初始化失败。
  * 标记不在实例内缓存，正常 Set/Get 不计算、不读取、不写入布局标记。
  * 未保存返回 NOT_FOUND；旧值长度不符返回 DATA_MISMATCH，不修改输出。
  * 请求长度不符返回 INVALID_PARAM；Get 不删除记录，由恢复流程决定作废。
- * 原始布局保持不变；语义变化、未描述字段变化及旧值迁移由应用管理。
+ * 原始布局保持不变；语义/未描述字段变化由应用修改 data_version 使旧值作废。
+ * 版本变化只作废对应快照，不迁移旧值；需要迁移时由应用在打开前另行处理。
  * SIG 定义在实例使用期间必须不变；不自动格式化或写入默认业务值。
  * 查找设备 O(表数)；配置 sig_slots 后表内 O(1)，否则二分持久化清单。
  * 正常查询不扫描 Flash 记录；记录 CRC 仍需读取当前记录的数据。

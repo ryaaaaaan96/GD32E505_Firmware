@@ -11,6 +11,30 @@ static int compare(const void *left, const void *right)
     return (a > b) - (a < b);
 }
 
+/* 下标编码进内容，4 字节及以上可以区分所有测试测点。 */
+static void pattern(uint8_t *data, size_t size, size_t index, uint8_t salt)
+{
+    for (size_t i = 0U; i < size; i++) {
+        data[i] = (uint8_t)(index >> ((i % 4U) * 8U)) ^
+                  (uint8_t)(salt + 29U * i);
+    }
+}
+
+static aStatus_t read_check(aBusHandle_t *bus, size_t index,
+    const uint8_t *expected, size_t size)
+{
+    uint8_t actual[128];
+    aBusGetIndexRequest_t request = {
+        .deviceID = 65534U, .sigIndex = index, .dst = actual, .size = size,
+        .timeout = A_TIMEOUT_NO_WAIT
+    };
+    /* 空读不能碰巧通过；读回缓冲与写入缓冲独立。 */
+    for (size_t i = 0U; i < size; i++) actual[i] = (uint8_t)~expected[i];
+    aStatus_t status = aBusGetByIndex(bus, &request);
+    if (status != A_STATUS_OK) return status;
+    return memcmp(actual, expected, size) == 0 ? A_STATUS_OK : A_STATUS_ERROR;
+}
+
 static aStatus_t measure(const benchBusConfig_t *config, aBusHandle_t *bus,
     const aBusSig_t *definitions, unsigned operation, uint32_t *samples)
 {
@@ -40,6 +64,48 @@ static aStatus_t measure(const benchBusConfig_t *config, aBusHandle_t *bus,
         .bytes = config->bytes, .samples = config->samples,
         .batch = config->batch
     };
+    uint8_t expected[128];
+    aStatus_t status;
+
+    /* 每项计时前逐点验证：空写、错下标、错 Key 和短复制均应失败。 */
+    for (size_t i = 0U; i < config->points; i++) {
+        pattern(data, config->bytes, i, 0x17U);
+        set.sigIndex = i;
+        status = aBusSetByIndex(bus, &set);
+        if (status != A_STATUS_OK) return status;
+    }
+    for (size_t i = 0U; i < config->points; i++) {
+        pattern(expected, config->bytes, i,
+                (operation & 1U) ? 0xA6U : 0x17U);
+        for (size_t b = 0U; b < config->bytes; b++)
+            data[b] = (operation & 1U) ? expected[b] : (uint8_t)~expected[b];
+        get.sigIndex = set.sigIndex = i;
+        get_key.sigKey = set_key.sigKey = definitions[i].sigKey;
+        switch (operation) {
+        case 0U: status = aBusGetByIndex(bus, &get); break;
+        case 1U: status = aBusSetByIndex(bus, &set); break;
+        case 2U: status = aBusGetByKey(bus, &get_key); break;
+        default: status = aBusSetByKey(bus, &set_key); break;
+        }
+        if (status != A_STATUS_OK) return status;
+        if (memcmp(data, expected, config->bytes) != 0) return A_STATUS_ERROR;
+        status = read_check(bus, i, expected, config->bytes);
+        if (status != A_STATUS_OK) return status;
+        /* 写入不得提前覆盖下一个测点。 */
+        if ((operation & 1U) && i + 1U < config->points) {
+            pattern(expected, config->bytes, i + 1U, 0x17U);
+            status = read_check(bus, i + 1U, expected, config->bytes);
+            if (status != A_STATUS_OK) return status;
+        }
+    }
+    /* 再检查已写区域，避免后写项破坏前面已经通过检查的值。 */
+    if (operation & 1U) {
+        for (size_t i = 0U; i < config->points; i++) {
+            pattern(expected, config->bytes, i, 0xA6U);
+            status = read_check(bus, i, expected, config->bytes);
+            if (status != A_STATUS_OK) return status;
+        }
+    }
 
     for (uint32_t i = 0U; i < config->samples; i++) {
         uint32_t start = config->clock();
@@ -47,13 +113,19 @@ static aStatus_t measure(const benchBusConfig_t *config, aBusHandle_t *bus,
     }
     qsort(samples, config->samples, sizeof(*samples), compare);
     result.clock_pair = samples[config->samples / 2U];
-    memset(data, 0x5A, config->bytes);
     size_t index = 0U;
     /* 前四批预热不计入统计；计时包含请求定位、状态检查及循环开销。 */
     for (uint32_t s = 0U; s < config->samples + 4U; s++) {
+        size_t first = index;
+        /* 写批次每次更换数据；读取缓冲先置为预期末次读值的反码。 */
+        size_t last = (first + config->batch - 1U) % config->points;
+        pattern(expected, config->bytes,
+                (operation & 1U) ? s : last,
+                (operation & 1U) ? 0xC3U : 0x17U);
+        for (size_t b = 0U; b < config->bytes; b++)
+            data[b] = (operation & 1U) ? expected[b] : (uint8_t)~expected[b];
         uint32_t start = config->clock();
         for (uint32_t n = 0U; n < config->batch; n++) {
-            aStatus_t status;
             get.sigIndex = index;
             set.sigIndex = index;
             get_key.sigKey = definitions[index].sigKey;
@@ -70,10 +142,15 @@ static aStatus_t measure(const benchBusConfig_t *config, aBusHandle_t *bus,
         }
         uint32_t elapsed = config->clock() - start;
         if (s >= 4U) samples[s - 4U] = elapsed / config->batch;
-    }
-    /* 验证实际复制内容；不可用空回调或未消费的返回值冒充读写。 */
-    for (size_t i = 0U; i < config->bytes; i++) {
-        if (data[i] != 0x5AU) return A_STATUS_ERROR;
+        /* 校验在计时区间外，但会影响缓存状态；跨版本基准须区分工作负载。 */
+        if (memcmp(data, expected, config->bytes) != 0) return A_STATUS_ERROR;
+        if (operation & 1U) {
+            for (uint32_t n = 0U; n < config->batch; n++) {
+                status = read_check(bus, (first + n) % config->points,
+                                    expected, config->bytes);
+                if (status != A_STATUS_OK) return status;
+            }
+        }
     }
     qsort(samples, config->samples, sizeof(*samples), compare);
     result.minimum = samples[0];

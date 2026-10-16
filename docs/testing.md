@@ -13,6 +13,8 @@
 
 首次运行先创建并激活 .venv，执行
 `python -m pip install -r scripts/requirements.txt`；点表检查依赖 Mako/jsonschema。
+统一入口也支持直接用 `.venv/bin/python scripts/test.py`；子进程 PATH 优先使用
+该解释器目录，避免 CMake 又找到缺少依赖的系统 Python。
 
 ```sh
 python3 scripts/test.py --suite host
@@ -32,6 +34,11 @@ python3 scripts/test.py --suite host --only aos/run fault/run
 CI 使用 Ubuntu 发行版 ARM GCC，本地当前使用 GCC 15.3；二者不保证产物逐字节一致，
 发布时应记录实际工具链版本和 `.build.txt`，并保存对应 ELF/MAP 供故障定位。
 Python 缓存不参与源码交付；统一入口禁止生成字节码缓存。
+
+每个 CI 作业结束后保留 30 天产物：测试日志/JSON、主机基准 JSON/CSV、
+ELF/MAP/BIN/HEX、构建摘要、CMake 配置及生成输入。产物名带 suite 和提交 SHA；
+失败时也保留已生成的文件。实际远端上传结果须在 Actions 中确认。
+上传参数使用 [upload-artifact 官方接口](https://github.com/actions/upload-artifact)。
 
 单独执行基础检查：
 
@@ -54,6 +61,7 @@ aBus 运行库配置的隔离；不逐行审计全部第三方源码。
 | JSON 校验、确定性生成、增点/重排/静动态 C 运行 | `python tests/points/run.py` |
 | 生成快照同步 | `python scripts/generate_points.py --check` |
 | 性能工作负载冒烟检查，不设耗时门槛 | `python scripts/benchmark.py --quick` |
+| 性能基准故障注入及历史报告比较条件 | `python tests/benchmarks/run.py` |
 | 可选布局断言、SIG 参数长度与整数范围检查（需要 C/C++ 编译器） | `python3 tests/layout/run.py` |
 | aLib CRC32（C11/C++11、标准向量及 zlib 对照） | `python3 tests/crc/run.py` |
 | aLib GCC/Clang 原子封装（并发、内存序及 GCC 生成代码对照） | `python3 tests/atomic/run.py` |

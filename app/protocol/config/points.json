@@ -62,7 +62,8 @@
             "LOCK"
           ],
           "storage": "bound",
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_002",
@@ -76,7 +77,8 @@
             "min": 0,
             "max": 200
           },
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_003",
@@ -90,7 +92,8 @@
             "min": 0,
             "max": 50000
           },
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_004",
@@ -104,7 +107,8 @@
             "min": 0,
             "max": 10000
           },
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_005",
@@ -118,7 +122,8 @@
             "min": -1000,
             "max": 1000
           },
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_006",
@@ -137,7 +142,8 @@
             7,
             8
           ],
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_007",
@@ -177,7 +183,8 @@
               "max": 0
             }
           },
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_008",
@@ -191,7 +198,8 @@
             "min": 0,
             "max": 10000
           },
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_009",
@@ -205,7 +213,8 @@
             "min": 0,
             "max": 10000
           },
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_010",
@@ -804,7 +813,8 @@
             "min": 0,
             "max": 1
           },
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_003",
@@ -818,7 +828,8 @@
             "min": 0,
             "max": 6000
           },
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_004",
@@ -832,7 +843,8 @@
             "min": 0,
             "max": 3
           },
-          "persistent": true
+          "persistent": true,
+          "data_version": 0
         },
         {
           "name": "TEST_005",

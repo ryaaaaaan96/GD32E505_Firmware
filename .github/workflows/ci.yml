@@ -48,3 +48,24 @@ jobs:
                       print(result['name'])
                       print(Path(result['log']).read_text()[-16000:])
           PY
+      - name: Retain reports and firmware
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.suite }}-${{ github.sha }}
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            build/tests/${{ matrix.suite }}/
+            build/benchmarks/smoke/*.json
+            build/benchmarks/smoke/*.jsonl
+            build/benchmarks/smoke/*.csv
+            build/**/*.elf
+            build/**/*.map
+            build/**/*.bin
+            build/**/*.hex
+            build/**/*.build.txt
+            build/**/CMakeCache.txt
+            build/**/compile_commands.json
+            app/protocol/config/points.json
+            app/protocol/generated/points_manifest.json

@@ -17,6 +17,45 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def environment():
+    cpu = platform.processor()
+    info = Path("/proc/cpuinfo")
+    if info.is_file():
+        cpu = next((line.split(":", 1)[1].strip()
+                    for line in info.read_text().splitlines()
+                    if line.startswith("model name")), cpu)
+    return {"host": platform.node(), "cpu": cpu,
+            "logical_cpus": os.cpu_count()}
+
+
+def compare_results(report, previous):
+    """条件不一致时保留测量结果，但不生成可能误导的性能比值。"""
+    fields = ("format_version", "workload_version", "platform", "machine",
+              "environment", "compiler", "compiler_command", "build_flags",
+              "points_sha256", "quick", "clock", "statistic", "scope")
+    mismatches = [name for name in fields if name not in previous or
+                  report.get(name) != previous[name]]
+    def key(row):
+        return tuple(row[name] for name in
+                     ("lock_mode", "operation", "points", "bytes",
+                      "samples", "batch"))
+    current = {key(row): row for row in report["results"]
+               if row["kind"] == "bus"}
+    old = {key(row): row for row in previous["results"]
+           if row["kind"] == "bus"}
+    if current.keys() != old.keys():
+        mismatches.append("cases/samples/batch")
+    if mismatches:
+        return {"status": "incompatible", "mismatches": mismatches,
+                "ratios": []}
+    ratios = [{**dict(zip(("lock_mode", "operation", "points", "bytes",
+                           "samples", "batch"), case)),
+               "median_ratio": round(row["median_ns"] /
+                                     old[case]["median_ns"], 3)}
+              for case, row in current.items() if old[case]["median_ns"] > 0]
+    return {"status": "matched", "mismatches": [], "ratios": ratios}
+
+
 def capture(command):
     return subprocess.check_output(command, cwd=ROOT, text=True,
                                    timeout=120).strip()
@@ -78,10 +117,12 @@ def main():
             rows.append({"lock_mode": lock, **json.loads(line)})
         print(f"lock={lock}: bus + generated Modbus plan passed", flush=True)
     report = {
-        "format_version": 1,
+        "format_version": 2, "workload_version": 2,
         "measured_at_utc": datetime.now(timezone.utc).isoformat(),
         "platform": platform.platform(), "machine": platform.machine(),
+        "environment": environment(),
         "compiler": capture(compiler + ["--version"]).splitlines()[0],
+        "compiler_command": compiler, "build_flags": flags,
         "binaries_sha256": binaries,
         "revision": capture(["git", "rev-parse", "HEAD"]),
         "dirty": bool(capture(["git", "status", "--porcelain"])),
@@ -95,18 +136,12 @@ def main():
     }
     if args.baseline:
         old = json.loads(args.baseline.read_text())
-        def key(row):
-            return (row["lock_mode"], row.get("operation"), row.get("points"),
-                    row.get("bytes"))
-        previous = {key(r): r for r in old["results"] if r["kind"] == "bus"}
-        report["comparison"] = [{"lock_mode": r["lock_mode"],
-            "operation": r["operation"], "points": r["points"],
-            "bytes": r["bytes"], "median_ratio": round(
-                r["median_ns"] / previous[key(r)]["median_ns"], 3)}
-            for r in rows if r["kind"] == "bus" and key(r) in previous
-            and previous[key(r)]["median_ns"] > 0]
+        report["comparison"] = compare_results(report, old)
+        if report["comparison"]["status"] != "matched":
+            print("Skip baseline ratios: " +
+                  ", ".join(report["comparison"]["mismatches"]), flush=True)
         report["comparison_note"] = (
-            "仅同一机器、编译配置及相近负载可比较；比例不是性能门槛")
+            "元数据一致仍须控制后台负载；批次均值比例不是实时性门槛")
     (output / "results.json").write_text(json.dumps(report, indent=2) + "\n")
     fields = list(dict.fromkeys(field for row in rows for field in row))
     with (output / "results.csv").open("w", newline="") as stream:

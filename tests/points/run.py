@@ -28,6 +28,12 @@ class PointsTest(unittest.TestCase):
                 .update(default=201)),
             ("bad range", lambda d: d["devices"][0]["signals"][1].update(
                 range={"min": 100, "max": 0})),
+            ("version overflow", lambda d: d["devices"][0]["signals"][0]
+                .update(data_version=4294967296)),
+            ("negative version", lambda d: d["devices"][0]["signals"][0]
+                .update(data_version=-1)),
+            ("unused version", lambda d: d["devices"][0]["signals"][0]
+                .update(persistent=False, data_version=1)),
             ("unknown property", lambda d: d.update(comment="typo")),
             ("unknown type", lambda d: d["devices"][0]["signals"][0].update(
                 type="float")),
@@ -75,6 +81,20 @@ class PointsTest(unittest.TestCase):
         server["maps"][1]["address"] = server["maps"][0]["address"]
         with self.assertRaises(ValueError):
             model.validate(document)
+
+    def test_persistent_versions(self):
+        document = copy.deepcopy(BASE)
+        signals = document["devices"][0]["signals"]
+        signals[0]["data_version"] = 4294967295
+        signals[0], signals[1] = signals[1], signals[0]
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "points.json"
+            source.write_text(json.dumps(document))
+            files = render(source)
+            self.assertIn("IDU_SIG_TEST_001_KEY, 4294967295U)",
+                          files["persistence/sig_persist.inc"])
+            self.assertIn("IDU_SIG_TEST_002_KEY, 0U)",
+                          files["persistence/sig_persist.inc"])
 
     def test_loader_rejects_ambiguous_json(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -126,6 +146,7 @@ class PointsTest(unittest.TestCase):
             for sig in device["signals"]:
                 sig["storage"] = "managed"
                 sig["persistent"] = False
+                sig.pop("data_version", None)
         document["devices"].append({"name": "AUX", "device_id": 3,
             "types": [], "signals": [{"name": "COUNT_VALUE", "key": 9,
             "type": "s32", "flags": [], "default": -2147483648}]})

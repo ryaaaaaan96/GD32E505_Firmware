@@ -83,6 +83,14 @@ build.py 在 CMake 配置前生成；直接 cmake --build 只检查，变更后�
 | range | 标量可选上下限，不需要时省略 |
 | field_ranges | STRUCT 按成员名提供可选的 {min,max} |
 | persistent | 默认 false；true 进入持久化选择清单 |
+| data_version | 仅用于持久化项，0..4294967295，默认 0；业务含义改变时修改 |
+
+`data_version` 生成到持久化清单，不进入 aBus RAM 状态。零版本兼容原有布局标记，
+本次升级不使已有有效记录失效。同一 device_id / key 的版本变化时，数据库打开
+流程先作废旧快照，再保存新标记；未保存新值前，应用保留 aBus 默认值。
+修改单位、比例、同类型字段的业务含义或 RAW 内部格式时须修改版本，即使 size 不变。
+版本用于相等比较，回退版本也会作废旧值；需要保留旧值时须另行设计迁移。
+JSON `format_version` 描述生成输入格式，不能替代每项数据的业务版本。
 
 STRUCT 类型示例（写在设备的 types 数组）：
 

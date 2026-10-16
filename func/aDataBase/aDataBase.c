@@ -125,7 +125,8 @@ static aStatus_t partition_check(
 
 /* 仅初始化时计算；散列数值描述，不包含指针、填充、默认值或范围。
  * 使用本机 uint32_t 字节序，字节序变化也应作废原始 RAM 快照。 */
-static uint32_t sig_mark_calculate(uint16_t device, const aBusSig_t *sig)
+static uint32_t sig_mark_calculate(uint16_t device, const aBusSig_t *sig,
+    uint32_t data_version)
 {
     const uint32_t description[] = {
         0x53494701U, device, sig->sigKey, (uint32_t)sig->type,
@@ -141,14 +142,19 @@ static uint32_t sig_mark_calculate(uint16_t device, const aBusSig_t *sig)
         };
         mark = aCrc32(mark, field, sizeof(field));
     }
-    return mark;
+    /* 零版本保留旧算法，升级本模块本身不会使现有快照失效。 */
+    return data_version == 0U ? mark :
+        aCrc32(mark, &data_version, sizeof(data_version));
 }
 
 static aStatus_t sig_mark_sync(aDataBaseKvHandle_t *handle,
                                uint16_t device, const aBusSig_t *sig)
 {
     char key[sizeof(handle->active_key) + sizeof(":layout") - 1U];
-    uint32_t saved, mark = sig_mark_calculate(device, sig);
+    /* IndexSelect 已确定有效槽位，清单与记录偏移数组使用同一下标。 */
+    size_t slot = (size_t)(handle->active_slot - handle->index.sig_offsets);
+    uint32_t saved, mark = sig_mark_calculate(device, sig,
+        handle->persist_sigs[slot].data_version);
     struct fdb_kv kv;
     struct fdb_blob blob;
     aStatus_t status;

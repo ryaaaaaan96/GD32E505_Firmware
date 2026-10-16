@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "input_sha256": "6438819d22b13ae5a6541eee8454a8e7a64352d8ed29bfbd276a1443c918e263",
+  "input_sha256": "efa58ae0d84fad15e68a94b6b54738617ddddcc215fe0b51b0866a477af9f8c1",
   "files": [
     "generated/FAN_modbus_master.inc",
     "generated/IDU_modbus_slave.inc",

@@ -2,6 +2,7 @@
 #define main index_fixture_main
 #include "test_index.c"
 #undef main
+#include "aCrc.h"
 
 static const char data_key[] = "@sig:0001:000A";
 static const char mark_key[] = "@sig:0001:000A:layout";
@@ -111,6 +112,15 @@ int main(void)
     assert(open_db(&config) == A_STATUS_OK);
     snapshot_check(A_STATUS_NOT_FOUND);
     raw_get(mark_key, &mark, sizeof(mark));
+    /* 零版本必须与旧固件算法逐字节兼容，不能仅比较两次新算法。 */
+    const uint32_t legacy[] = {
+        0x53494701U, 1U, 10U, ALIB_DATA_STRUCT, sizeof(old_data), 2U
+    };
+    const uint32_t legacy_fields[] = {0U, ALIB_DATA_U16, 2U,
+                                     4U, ALIB_DATA_U32, 4U};
+    uint32_t legacy_mark = aCrc32(0U, legacy, sizeof(legacy));
+    legacy_mark = aCrc32(legacy_mark, legacy_fields, sizeof(legacy_fields));
+    assert(mark == legacy_mark);
     assert(put(2U, 0U, 123U) == A_STATUS_OK);
     snapshot_save();
     /* 数据仍是原始字节，包括未登记字节；没有记录头或逐字段编码。 */
@@ -134,6 +144,21 @@ int main(void)
     snapshot_check(A_STATUS_OK);
     close_db();
     fields[1].range = NULL;
+
+    /* 布局不变，仅单位/含义版本变化：只作废本项，重开不重复写标记。 */
+    const uint32_t versions[] = {1U, UINT32_MAX, 2U, 0U};
+    for (size_t i = 0U; i < sizeof(versions) / sizeof(versions[0]); i++) {
+        persist[0].data_version = versions[i];
+        assert(open_db(&config) == A_STATUS_OK);
+        snapshot_check(A_STATUS_NOT_FOUND);
+        unaffected_check();
+        snapshot_save();
+        close_db();
+        before = writes;
+        assert(open_db(&config) == A_STATUS_OK && writes == before);
+        snapshot_check(A_STATUS_OK);
+        close_db();
+    }
 
     /* 同长度类型、偏移、字段顺序/数量及整体长度变化，仅删除对应 SIG。 */
     for (unsigned change = 0U; change < 5U; ++change) {
@@ -197,33 +222,37 @@ int main(void)
     close_db();
 
     /* 对初始化的每次写入分别注入故障，重开后不得接受不兼容旧值。 */
-    memcpy(checkpoint, memory, sizeof(memory));
-    fields[0].type = ALIB_DATA_U32;
-    before = writes;
-    assert(open_db(&config) == A_STATUS_OK);
-    write_steps = writes - before;
-    assert(write_steps > 1U);
-    snapshot_check(A_STATUS_NOT_FOUND);
-    close_db();
-    for (unsigned step = 1U; step <= write_steps; ++step) {
-        memcpy(memory, checkpoint, sizeof(memory));
-        fail_write_at = writes + step;
-        assert(open_db(&config) == A_STATUS_TIMEOUT && kv == NULL);
-        assert(database_allocations == allocations);
-        fail_write_at = 0U;
-        assert(open_db(&config) == A_STATUS_OK);
-        snapshot_check(A_STATUS_NOT_FOUND);
-        unaffected_check();
-        snapshot_save();
-        close_db();
+    for (unsigned change = 0U; change < 2U; change++) {
+        memcpy(checkpoint, memory, sizeof(memory));
+        if (change == 0U) fields[0].type = ALIB_DATA_U32;
+        else persist[0].data_version = 1U;
         before = writes;
-        assert(open_db(&config) == A_STATUS_OK && writes == before);
-        snapshot_check(A_STATUS_OK);
+        assert(open_db(&config) == A_STATUS_OK);
+        write_steps = writes - before;
+        assert(write_steps > 1U);
+        snapshot_check(A_STATUS_NOT_FOUND);
         close_db();
+        for (unsigned step = 1U; step <= write_steps; ++step) {
+            memcpy(memory, checkpoint, sizeof(memory));
+            fail_write_at = writes + step;
+            assert(open_db(&config) == A_STATUS_TIMEOUT && kv == NULL);
+            assert(database_allocations == allocations);
+            fail_write_at = 0U;
+            assert(open_db(&config) == A_STATUS_OK);
+            snapshot_check(A_STATUS_NOT_FOUND);
+            unaffected_check();
+            snapshot_save();
+            close_db();
+            before = writes;
+            assert(open_db(&config) == A_STATUS_OK && writes == before);
+            snapshot_check(A_STATUS_OK);
+            close_db();
+        }
     }
     assert(aDataBaseDeInit() == A_STATUS_OK);
     assert(aMemoryDeInit() == A_STATUS_OK);
     assert(database_allocations == 0U);
-    puts("SIG layout markers: init-only checks, raw snapshots, isolation and write faults passed");
+    puts("SIG layout/version: legacy compatibility, isolation "
+         "and write faults passed");
     return 0;
 }

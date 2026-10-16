@@ -22,6 +22,7 @@
 | [USART、RS485 与中断](usart_design.md) | 收发路径、ISR 回调、DE 控制和应用适配 |
 | [Flash25Q / SPI 存储链路](spi_flash_design.md) | SFUD、总线与锁、超时，以及未实现的 QSPI 路径 |
 | [验证指南](testing.md) | 主机测试、构建矩阵与上板验证的边界 |
+| [项目展示与后续补强](project_showcase.md) | 简历亮点、演示步骤、实板证据和 TTL 采集/转发规划 |
 
 ## 总线与协议设计
 

@@ -272,7 +272,9 @@ void aDataBaseKvConfigStructInit(aDataBaseKvConfig_t *config)
 }
 void protocolPersistenceConfigInit(aDataBaseKvConfig_t *config)
 {
-    static const aDataBaseSigKey_t items[] = {{1U, 42U}};
+    static const aDataBaseSigKey_t items[] = {
+        {.deviceID = 1U, .sigKey = 42U}
+    };
     assert(stage == 8U || stage == 10U);
     config->persist_sigs = items;
     config->persist_count = 1U;

@@ -14,6 +14,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 HOST = [
     "points/run.py",
+    "benchmarks/run.py",
     "architecture/run.py", "layout/run.py", "crc/run.py", "atomic/run.py",
     "aos/run.py", "fault/run.py", "led/run.py", "spi/run.py", "dma/run.py",
     "usart/run.py",
@@ -98,6 +99,9 @@ def main() -> int:
     report = output / "results.json"
     report.unlink(missing_ok=True)
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    # 直接用 .venv/bin/python 启动时，CMake 的解释器发现也使用同一环境。
+    env["PATH"] = (str(Path(sys.executable).parent) + os.pathsep +
+                   env.get("PATH", ""))
     results = []
     for name, command in selected.items():
         log = output / (name.replace("/", "_") + ".log")

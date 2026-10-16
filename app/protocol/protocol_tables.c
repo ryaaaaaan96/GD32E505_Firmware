@@ -72,7 +72,8 @@ aStatus_t protocolBusConfigInit(dataBusConfig_t *config)
 #if APP_DATABASE_ENABLE
 
 #if PROTOCOL_PERSIST_SIG_COUNT > 0
-#define PERSIST_SIG(device, key) {(device), (key)},
+#define PERSIST_SIG(device, key, version) \
+    {.deviceID = (device), .sigKey = (key), .data_version = (version)},
 static const aDataBaseSigKey_t persistent_sigs[] = {
 #include "persistence/sig_persist.inc"
 };

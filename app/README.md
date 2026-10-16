@@ -181,8 +181,8 @@ sig set 1 2006 1122334455667788  # RAW[8]
 sig get 1 2007               # 组合类型的所有字段
 sig set 1 2007 0 200         # STRUCT.U32
 sig set 1 2007 1 -10         # STRUCT.S32
-sig set 1 2007 2 3           # STRUCT.U8
-sig set 1 2007 3 112233      # STRUCT.RAW[3]
+sig set 1 2007 2 3           # STRUCT.U16
+sig set 1 2007 3 11223344    # STRUCT.RAW[4]
 
 db init                      # 空白介质首次显式初始化
 sig save                     # 保存全部选定项
